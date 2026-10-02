@@ -3,7 +3,9 @@ name: TestFlight
 on:
   workflow_dispatch:
   push:
-    tags: ["v*"]
+    # 修改發佈紀錄檔即觸發；推送 v* 標籤也會觸發（標籤不套用路徑篩選）
+    paths:
+      - ".github/release/testflight.txt"
 
 concurrency:
   group: testflight

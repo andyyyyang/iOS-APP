@@ -1,0 +1,3 @@
+# 修改這個檔案並推送，就會觸發 TestFlight 上傳（.github/workflows/testflight.yml）。
+# 每次發佈新增一行：版本、日期、這次要測試的重點。
+1.0 (2026-10-02) 第一個測試版：智慧掃描（自動判斷情境＋Apple Intelligence 產生 JSON）、情境樣板、伺服器同步、弧形工具選單

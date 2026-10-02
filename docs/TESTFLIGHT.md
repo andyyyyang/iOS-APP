@@ -50,7 +50,7 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions** → *
 
 ## 6. 上傳
 
-- GitHub → **Actions** → **TestFlight** → **Run workflow**；或推送 `v1.0.0` 這類標籤。
+- GitHub → **Actions** → **TestFlight** → **Run workflow**；或在 `.github/release/testflight.txt` 新增一行發佈說明並推送；或推送 `v1.0.0` 這類標籤。
 - 成功後約 5–30 分鐘，App Store Connect 處理完成，就能在 TestFlight 頁面加入自己為內部測試人員，並在 iPhone 的 TestFlight App 安裝。
 
 ## 常見問題
