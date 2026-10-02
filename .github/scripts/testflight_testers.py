@@ -104,39 +104,55 @@ def internal_group(app_id: str) -> str:
     return group["id"]
 
 
+def group_tester_count(group_id: str) -> int:
+    return len(call("GET", f"/betaGroups/{group_id}/betaTesters?limit=200")["data"])
+
+
+def assign(app_id: str, group_id: str, email: str, first: str, last: str) -> str:
+    """把測試人員加入群組，回傳 betaTester id。先建立（已存在時 Apple 會沿用），失敗再改用關聯。"""
+    try:
+        return call("POST", "/betaTesters", json={
+            "data": {
+                "type": "betaTesters",
+                "attributes": {"email": email, "firstName": first, "lastName": last},
+                "relationships": {"betaGroups": {"data": [{"type": "betaGroups", "id": group_id}]}},
+            }
+        })["data"]["id"]
+    except RuntimeError as create_error:
+        print(f"建立測試人員失敗，改用既有紀錄：{create_error}")
+        query = requests.utils.quote(email)
+        existing = call("GET", f"/betaTesters?filter[email]={query}&filter[apps]={app_id}&limit=1")["data"] \
+            or call("GET", f"/betaTesters?filter[email]={query}&limit=1")["data"]
+        if not existing:
+            raise
+        tester_id = existing[0]["id"]
+        call("POST", f"/betaGroups/{group_id}/relationships/betaTesters", json={
+            "data": [{"type": "betaTesters", "id": tester_id}]
+        })
+        return tester_id
+
+
 def add_testers(app_id: str, group_id: str) -> None:
-    users = call("GET", "/users?limit=50&fields[users]=username,firstName,lastName,roles")["data"]
+    try:
+        users = call("GET", "/users?limit=50&fields[users]=username,firstName,lastName,roles")["data"]
+    except RuntimeError as error:
+        sys.exit(f"::error::無法讀取 App Store Connect 使用者（API 金鑰需要「管理」權限）：{error}")
     targets = [
         user for user in users
         if {"ACCOUNT_HOLDER", "ADMIN"} & set(user["attributes"].get("roles") or [])
     ]
-    added = invited = 0
+    assigned = invited = 0
+    failures: list[str] = []
     for user in targets:
         attributes = user["attributes"]
         email = attributes["username"]
         print(f"::add-mask::{email}")
-        existing = call("GET", f"/betaTesters?filter[email]={requests.utils.quote(email)}&limit=1")["data"]
-        if existing:
-            tester_id = existing[0]["id"]
-            try:
-                call("POST", f"/betaGroups/{group_id}/relationships/betaTesters", json={
-                    "data": [{"type": "betaTesters", "id": tester_id}]
-                })
-            except RuntimeError as error:
-                print(f"已在群組中或無法加入：{error}")
-        else:
-            tester_id = call("POST", "/betaTesters", json={
-                "data": {
-                    "type": "betaTesters",
-                    "attributes": {
-                        "email": email,
-                        "firstName": attributes.get("firstName") or "",
-                        "lastName": attributes.get("lastName") or "",
-                    },
-                    "relationships": {"betaGroups": {"data": [{"type": "betaGroups", "id": group_id}]}},
-                }
-            })["data"]["id"]
-        added += 1
+        try:
+            tester_id = assign(app_id, group_id, email, attributes.get("firstName") or "", attributes.get("lastName") or "")
+            assigned += 1
+        except RuntimeError as error:
+            failures.append(str(error))
+            continue
         try:
             call("POST", "/betaTesterInvitations", json={
                 "data": {
@@ -149,9 +165,16 @@ def add_testers(app_id: str, group_id: str) -> None:
             })
             invited += 1
         except RuntimeError as error:
-            # 已經接受過邀請的測試人員不需要再寄
-            print(f"未重新寄送邀請：{error}")
-    summary(f"- 已加入 {added} 位測試人員（帳號持有人與管理員），寄出 {invited} 封 TestFlight 邀請")
+            # 已經接受過邀請，或加入群組時 Apple 已自動寄出
+            print(f"未另外寄送邀請：{error}")
+
+    members = group_tester_count(group_id)
+    summary(f"- 帳號持有人／管理員 {len(targets)} 位：成功加入 {assigned} 位，另外寄出 {invited} 封邀請")
+    summary(f"- 「內部測試」群組目前有 **{members}** 位測試人員")
+    for failure in failures:
+        summary(f"  - 加入失敗：{failure}")
+    if members == 0:
+        sys.exit("::error::內部測試群組沒有任何測試人員，請依步驟摘要中的錯誤處理，或在 App Store Connect 的 TestFlight 頁面手動加入自己")
 
 
 def main() -> None:
