@@ -1,6 +1,10 @@
 name: Server smoke test
 
 on:
+  push:
+    paths:
+      - "server/**"
+      - ".github/workflows/smoke.yml"
   workflow_dispatch:
     inputs:
       base_url:
@@ -14,9 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      BASE_URL: ${{ inputs.base_url }}
+      BASE_URL: ${{ inputs.base_url || 'https://localocr-server-production.up.railway.app' }}
       API_KEY: ${{ secrets.LOCALOCR_API_KEY }}
     steps:
+      - name: Wait for deployment
+        if: github.event_name == 'push'
+        run: |
+          # Railway 與本工作同時由 push 觸發，先等新版本上線
+          sleep 150
+          for i in $(seq 1 30); do
+            curl -fsS "$BASE_URL/health" && exit 0
+            sleep 10
+          done
+          exit 1
+
       - name: Public checks
         run: |
           set -euo pipefail
