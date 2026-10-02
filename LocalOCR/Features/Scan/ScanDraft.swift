@@ -23,19 +23,29 @@ final class ScanDraft {
     /// 紀錄使用的來源：以第一頁的來源為主。
     var primarySource: ScanSource { pages.first?.source ?? .photoLibrary }
 
+    /// 上一次加入的工作：連續拍照時壓縮完成的先後可能不同，仍依加入順序排列。
+    private var lastAddition: Task<Void, Never>?
+
     /// 加入頁面；轉正、壓縮與縮圖在背景進行，大量頁面也不會卡住畫面。
     func add(_ images: [UIImage], source: ScanSource) async {
+        guard !images.isEmpty else { return }
         pendingCount += images.count
-        defer { pendingCount -= images.count }
-        let prepared = await Task.detached(priority: .userInitiated) {
-            images.compactMap { image -> Page? in
-                let normalized = ImagePreprocessor.normalized(image, maxPixelLength: 4096)
-                guard let data = normalized.jpegData(compressionQuality: 0.85) else { return nil }
-                let thumbnail = ImagePreprocessor.normalized(normalized, maxPixelLength: 240)
-                return Page(imageData: data, thumbnail: thumbnail, source: source)
-            }
-        }.value
-        pages.append(contentsOf: prepared)
+        let previous = lastAddition
+        let addition = Task {
+            let prepared = await Task.detached(priority: .userInitiated) {
+                images.compactMap { image -> Page? in
+                    let normalized = ImagePreprocessor.normalized(image, maxPixelLength: 4096)
+                    guard let data = normalized.jpegData(compressionQuality: 0.85) else { return nil }
+                    let thumbnail = ImagePreprocessor.normalized(normalized, maxPixelLength: 240)
+                    return Page(imageData: data, thumbnail: thumbnail, source: source)
+                }
+            }.value
+            await previous?.value
+            pages.append(contentsOf: prepared)
+            pendingCount -= images.count
+        }
+        lastAddition = addition
+        await addition.value
     }
 
     func remove(_ id: Page.ID) {

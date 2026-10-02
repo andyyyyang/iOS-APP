@@ -64,7 +64,7 @@ struct ToolMenuView: View {
 
         var isAvailable: Bool {
             switch self {
-            case .camera: return CameraPicker.isAvailable
+            case .camera: return CameraController.isAvailable
             case .document: return DocumentScannerView.isSupported
             default: return true
             }

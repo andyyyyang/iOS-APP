@@ -33,7 +33,7 @@ enum PageSource: String, Identifiable, CaseIterable {
     var isAvailable: Bool {
         switch self {
         case .documentScanner: return DocumentScannerView.isSupported
-        case .camera: return CameraPicker.isAvailable
+        case .camera: return CameraController.isAvailable
         case .photoLibrary, .pasteboard: return true
         }
     }
@@ -86,9 +86,10 @@ private struct PageSourcesModifier: ViewModifier {
                 if !images.isEmpty { onPick(images, .documentScanner) }
             }
         default:
-            CameraPicker { image in
+            // 可以連續拍多頁，按「完成」一次加入
+            MultiShotCameraView { images in
                 capture = nil
-                if let image { onPick([image], .camera) }
+                if !images.isEmpty { onPick(images, .camera) }
             }
         }
     }

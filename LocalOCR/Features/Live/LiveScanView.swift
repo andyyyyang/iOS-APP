@@ -1,14 +1,9 @@
-import AVFoundation
 import SwiftUI
-import VisionKit
 
 /// 相機分頁：按快門一頁一頁拍，全部拍完再一起分析（與「掃描」分頁共用同一份文件）。
 struct LiveScanView: View {
     @Environment(ScanDraft.self) private var draft
-    @AppStorage(OCRSettings.Key.languages) private var languagesRaw = OCRSettings.encode(OCRSettings.defaultLanguages)
-    @State private var isVisible = false
-    @State private var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
-    @State private var bridge = LiveScannerBridge()
+    @State private var camera = CameraController()
     @State private var toast: String?
     @State private var shutterTrigger = 0
     @State private var captureModel = ScanViewModel()
@@ -17,15 +12,9 @@ struct LiveScanView: View {
 
     var body: some View {
         NavigationStack {
-            content
+            CameraAccessView { cameraScreen }
                 .navigationTitle("連續拍照")
                 .navigationBarTitleDisplayMode(.inline)
-                // 推入結果頁或切換分頁時移除相機，釋放資源
-                .onAppear {
-                    isVisible = true
-                    cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
-                }
-                .onDisappear { isVisible = false }
                 .navigationDestination(item: $captureModel.session) { session in
                     ResultView(session: session)
                 }
@@ -34,49 +23,20 @@ struct LiveScanView: View {
         .sensoryFeedback(.impact, trigger: shutterTrigger)
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if !DataScannerViewController.isSupported {
-            ContentUnavailableView(
-                "此裝置無法使用連續拍照",
-                systemImage: "camera",
-                description: Text("需要實體 iPhone，模擬器無法使用。你仍可在「掃描」分頁從相簿加入頁面。")
-            )
-        } else {
-            switch cameraStatus {
-            case .authorized:
-                if DataScannerViewController.isAvailable {
-                    camera
-                } else {
-                    ContentUnavailableView(
-                        "目前無法使用相機",
-                        systemImage: "video.slash",
-                        description: Text("相機可能被其他 App 使用中，或受到螢幕使用時間限制。")
-                    )
-                }
-            case .notDetermined:
-                ProgressView("正在請求相機權限…")
-                    .task { await requestCameraAccess() }
-            default:
-                deniedView
-            }
-        }
-    }
-
-    private var camera: some View {
+    private var cameraScreen: some View {
         ZStack(alignment: .bottom) {
-            if isVisible {
-                DataScannerRepresentable(languages: scannerLanguages, bridge: bridge)
-                    .ignoresSafeArea(edges: .horizontal)
-            }
+            CameraPreview(camera: camera)
+                .ignoresSafeArea(edges: .horizontal)
             if showsFlash {
                 Color.white
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
-                    .transition(.opacity)
             }
             controls
         }
+        // 推入結果頁或切換分頁時停止相機，回來時再啟動
+        .onAppear { camera.start() }
+        .onDisappear { camera.stop() }
         .overlay {
             if captureModel.isProcessing {
                 VStack(spacing: 12) {
@@ -147,40 +107,8 @@ struct LiveScanView: View {
     }
 
     private var shutterButton: some View {
-        Button {
+        ShutterButton(isBusy: isCapturing, ringColor: .primary) {
             Task { await capturePage() }
-        } label: {
-            ZStack {
-                Circle()
-                    .strokeBorder(Color.primary.opacity(0.8), lineWidth: 4)
-                    .frame(width: 74, height: 74)
-                Circle()
-                    .fill(.white)
-                    .frame(width: 60, height: 60)
-                    .shadow(color: .black.opacity(0.15), radius: 2)
-                if isCapturing {
-                    ProgressView()
-                        .tint(.black)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(isCapturing)
-        .accessibilityLabel(draft.pages.isEmpty ? "拍下這一頁" : "再拍一頁")
-    }
-
-    private var deniedView: some View {
-        ContentUnavailableView {
-            Label("需要相機權限", systemImage: "camera")
-        } description: {
-            Text("請到「設定」允許本 App 使用相機。照片與辨識全程在裝置上處理。")
-        } actions: {
-            Button("前往設定") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            }
-            .buttonStyle(.borderedProminent)
         }
     }
 
@@ -192,28 +120,26 @@ struct LiveScanView: View {
         return "已拍 \(draft.pages.count) 頁，可以繼續拍下一頁。長按縮圖可調整順序。"
     }
 
-    private var scannerLanguages: [String] {
-        let supported = Set(DataScannerViewController.supportedTextRecognitionLanguages)
-        return OCRSettings.decode(languagesRaw).filter { supported.contains($0) }
-    }
-
-    /// 拍一張高解析度照片，加入正在收集的文件。
+    /// 拍一張高解析度照片，加入正在收集的文件；拍完立刻可以再拍，壓縮在背景進行。
     @MainActor
     private func capturePage() async {
         isCapturing = true
-        defer { isCapturing = false }
+        let image: UIImage
         do {
-            let image = try await bridge.capturePhoto()
-            shutterTrigger += 1
-            showsFlash = true
-            Task {
-                try? await Task.sleep(for: .milliseconds(80))
-                withAnimation(.easeOut(duration: 0.25)) { showsFlash = false }
-            }
-            await draft.add([image], source: .liveScanner)
+            image = try await camera.capturePhoto()
         } catch {
+            isCapturing = false
             toast = "無法拍照：\(error.localizedDescription)"
+            return
         }
+        isCapturing = false
+        shutterTrigger += 1
+        showsFlash = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(80))
+            withAnimation(.easeOut(duration: 0.25)) { showsFlash = false }
+        }
+        await draft.add([image], source: .liveScanner)
     }
 
     /// 完整流程：逐頁 OCR → 判斷情境 → Apple Intelligence 產生 JSON。
@@ -228,11 +154,5 @@ struct LiveScanView: View {
                 toast = message
             }
         }
-    }
-
-    @MainActor
-    private func requestCameraAccess() async {
-        _ = await AVCaptureDevice.requestAccess(for: .video)
-        cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
     }
 }

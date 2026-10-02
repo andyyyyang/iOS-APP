@@ -111,7 +111,7 @@ struct ScanView: View {
     private func subtitle(for source: PageSource) -> String {
         switch source {
         case .documentScanner: return "自動裁切，連續掃多頁"
-        case .camera: return "拍一頁加一頁"
+        case .camera: return "連續拍多頁"
         case .photoLibrary: return "可多選，一次最多 50 頁"
         case .pasteboard: return "從剪貼簿"
         }
