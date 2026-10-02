@@ -91,7 +91,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/localocr_test npm test
 
 ### 部署到 Railway
 
-`railway.json` 已設定：建置 `npm ci && npm run build`、啟動 `npm start`、健康檢查 `/health`。
+Railway 服務設定：Root Directory `/server`、建置 `npm ci && npm run build`、啟動 `npm start`、健康檢查 `/health`（Railway 已不建議使用 `railway.json`，設定直接放在服務上）。
 在 Railway 建立服務時將 Root Directory 設為 `server`，加入 Postgres 服務並設定 `DATABASE_URL`（引用 Postgres 的變數）、`API_KEYS`，需要時再設定 `JEV_API_KEY`。
 
 ## 新增情境（樣板）
