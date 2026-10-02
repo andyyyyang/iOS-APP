@@ -3,20 +3,25 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(TemplateLibrary.self) private var library
+    @State private var selectedTab: AppTab = .scan
 
     var body: some View {
-        TabView {
-            ScanView()
+        TabView(selection: $selectedTab) {
+            ScanView(selectedTab: $selectedTab)
                 .tabItem { Label("掃描", systemImage: "doc.text.viewfinder") }
+                .tag(AppTab.scan)
 
             LiveScanView()
                 .tabItem { Label("即時", systemImage: "camera.viewfinder") }
+                .tag(AppTab.live)
 
             HistoryView()
                 .tabItem { Label("紀錄", systemImage: "clock.arrow.circlepath") }
+                .tag(AppTab.history)
 
             SettingsView()
                 .tabItem { Label("設定", systemImage: "gearshape") }
+                .tag(AppTab.settings)
         }
         .task { await refreshServerTemplates() }
     }

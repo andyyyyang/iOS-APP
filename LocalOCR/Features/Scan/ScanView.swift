@@ -10,12 +10,19 @@ struct ScanView: View {
         var id: String { rawValue }
     }
 
+    @Binding var selectedTab: AppTab
+
     @Environment(TemplateLibrary.self) private var library
     @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
     @State private var model = ScanViewModel()
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var capture: Capture?
     @State private var aiStatus = OnDeviceAIStatus.current
+    @State private var showsTools = false
+    @State private var pendingTool: ToolMenuView.Tool?
+    @State private var showsPhotoPicker = false
+    @State private var showsTemplates = false
+    @State private var showsServer = false
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -32,7 +39,27 @@ struct ScanView: View {
                 .padding()
             }
             .screenBackground()
+            .overlay(alignment: .bottomTrailing) { toolsButton }
             .toolbar(.hidden, for: .navigationBar)
+            .fullScreenCover(isPresented: $showsTools, onDismiss: runPendingTool) {
+                ToolMenuView { tool in
+                    pendingTool = tool
+                    showsTools = false
+                }
+            }
+            .photosPicker(
+                isPresented: $showsPhotoPicker,
+                selection: $photoItems,
+                maxSelectionCount: 10,
+                selectionBehavior: .ordered,
+                matching: .images
+            )
+            .sheet(isPresented: $showsTemplates) {
+                NavigationStack { TemplateListView() }
+            }
+            .sheet(isPresented: $showsServer) {
+                NavigationStack { ServerSettingsView() }
+            }
             .navigationDestination(item: $model.session) { session in
                 ResultView(session: session)
             }
@@ -169,6 +196,38 @@ struct ScanView: View {
         }
     }
 
+    private var toolsButton: some View {
+        Button {
+            showsTools = true
+        } label: {
+            Image(systemName: "circle.grid.cross")
+                .font(.title2.weight(.medium))
+                .foregroundStyle(.tint)
+                .frame(width: 60, height: 60)
+                .background(Theme.cardBackground, in: Circle())
+                .shadow(color: .black.opacity(0.08), radius: 12, y: 4)
+        }
+        .padding(20)
+        .accessibilityLabel("工具選單")
+        .disabled(model.isProcessing)
+    }
+
+    private func runPendingTool() {
+        guard let tool = pendingTool else { return }
+        pendingTool = nil
+        switch tool {
+        case .photos: showsPhotoPicker = true
+        case .camera: capture = .camera
+        case .document: capture = .documentScanner
+        case .paste: pasteImage()
+        case .live: selectedTab = .live
+        case .history: selectedTab = .history
+        case .templates: showsTemplates = true
+        case .server: showsServer = true
+        case .settings: selectedTab = .settings
+        }
+    }
+
     // MARK: - Helpers
 
     @MainActor
@@ -258,7 +317,7 @@ struct TemplateRecordsView: View {
 }
 
 #Preview {
-    ScanView()
+    ScanView(selectedTab: .constant(.scan))
         .environment(TemplateLibrary.shared)
         .modelContainer(for: ScanRecord.self, inMemory: true)
 }
