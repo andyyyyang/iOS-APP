@@ -13,10 +13,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changes:
+    name: Decide whether to upload
+    runs-on: ubuntu-latest
+    outputs:
+      upload: ${{ steps.check.outputs.upload }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: check
+        # 手動執行、推送標籤或發佈紀錄檔有變更時才上傳；只修改測試人員清單時只寄邀請
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" = "tag" ] \
+             || [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+            upload=true
+          elif git diff --name-only "$before" "${{ github.sha }}" | grep -qx ".github/release/testflight.txt"; then
+            upload=true
+          else
+            upload=false
+          fi
+          echo "upload=$upload"
+          echo "upload=$upload" >> "$GITHUB_OUTPUT"
+
   upload:
     name: Archive & upload to TestFlight
-    # 只修改測試人員清單時不重新上傳
-    if: github.event_name != 'push' || contains(join(github.event.commits.*.modified, ','), '.github/release/testflight.txt') || contains(join(github.event.commits.*.added, ','), '.github/release/testflight.txt')
+    needs: changes
+    if: needs.changes.outputs.upload == 'true'
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -122,8 +146,8 @@ jobs:
 
   distribute:
     name: Invite internal testers
-    needs: upload
-    if: always() && (needs.upload.result == 'success' || needs.upload.result == 'skipped')
+    needs: [changes, upload]
+    if: always() && needs.changes.result == 'success' && (needs.upload.result == 'success' || needs.upload.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
