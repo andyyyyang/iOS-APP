@@ -1,0 +1,9 @@
+{
+	"id": "localocr-sync",
+	"name": "LocalOCR Sync",
+	"version": "1.0.0",
+	"minAppVersion": "1.5.0",
+	"description": "Sync scans from your LocalOCR server into your vault as Markdown notes with structured JSON data and OCR text.",
+	"author": "andyyyyang",
+	"isDesktopOnly": false
+}

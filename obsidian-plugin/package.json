@@ -1,0 +1,32 @@
+{
+  "name": "localocr-sync",
+  "version": "1.0.0",
+  "description": "Sync scans from a LocalOCR server into your Obsidian vault as Markdown notes.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "ocr",
+    "localocr"
+  ],
+  "author": "andyyyyang",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.13.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  }
+}

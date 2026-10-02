@@ -1,0 +1,39 @@
+name: Obsidian Plugin CI
+
+on:
+  push:
+    paths:
+      - "obsidian-plugin/**"
+      - ".github/workflows/obsidian-plugin.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test & build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: obsidian-plugin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: obsidian-plugin/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Check committed main.js is up to date
+        run: git diff --exit-code -- main.js || (echo "::error::main.js 與原始碼不一致，請執行 npm run build 後提交" && exit 1)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localocr-sync-plugin
+          path: |
+            obsidian-plugin/main.js
+            obsidian-plugin/manifest.json
