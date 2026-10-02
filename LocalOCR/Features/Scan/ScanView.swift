@@ -1,4 +1,5 @@
 import PhotosUI
+import SwiftData
 import SwiftUI
 
 struct ScanView: View {
@@ -9,11 +10,12 @@ struct ScanView: View {
         var id: String { rawValue }
     }
 
+    @Environment(TemplateLibrary.self) private var library
+    @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
     @State private var model = ScanViewModel()
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var capture: Capture?
-    @AppStorage(OCRSettings.Key.languages) private var languagesRaw = OCRSettings.encode(OCRSettings.defaultLanguages)
-    @AppStorage(OCRSettings.Key.recognitionLevel) private var levelRaw = RecognitionLevel.accurate.rawValue
+    @State private var aiStatus = OnDeviceAIStatus.current
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -21,17 +23,24 @@ struct ScanView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    header
+                    BannerRow(systemImage: "sparkles", title: bannerTitle, subtitle: bannerSubtitle)
+                    ShelfHeader(title: "智慧掃描", detail: "\(records.count) 份紀錄")
                     sourceGrid
                     status
+                    scenarioSection
                 }
                 .padding()
             }
-            .navigationTitle("文字辨識")
+            .screenBackground()
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $model.session) { session in
                 ResultView(session: session)
             }
+            .navigationDestination(for: ScanTemplate.self) { template in
+                TemplateRecordsView(template: template)
+            }
         }
+        .onAppear { aiStatus = OnDeviceAIStatus.current }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPhotos(items) }
@@ -44,21 +53,17 @@ struct ScanView: View {
 
     // MARK: - Sections
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("裝置端辨識", systemImage: "lock.shield.fill")
-                .font(.headline)
-                .foregroundStyle(.tint)
-            Text("使用 Apple Vision 框架直接在裝置上辨識文字，不需要網路，圖片也不會上傳。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text("目前設定：\(levelName)模式 · \(languageSummary)")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    private var bannerTitle: String {
+        let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
+        let count = records.filter { $0.createdAt >= weekAgo }.count
+        return count > 0 ? "本週已辨識 \(count) 份文件" : "拍一張照片，自動整理成 JSON"
+    }
+
+    private var bannerSubtitle: String {
+        switch aiStatus {
+        case .available: return "Apple Intelligence 在裝置上判斷情境與擷取資料"
+        case .unavailable(let reason): return "文字辨識在裝置上完成 · \(reason)"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var sourceGrid: some View {
@@ -69,7 +74,7 @@ struct ScanView: View {
                 selectionBehavior: .ordered,
                 matching: .images
             ) {
-                SourceCard(title: "從相簿選取", subtitle: "一次最多 10 張", systemImage: ScanSource.photoLibrary.systemImage)
+                SourceCard(title: "相簿", subtitle: "一次最多 10 張", systemImage: ScanSource.photoLibrary.systemImage)
             }
 
             Button {
@@ -117,15 +122,33 @@ struct ScanView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .card()
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                .card()
         }
+    }
+
+    private var scenarioSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CardHeader(title: "情境", systemImage: "square.stack.3d.up", trailing: "\(library.all.count) 種")
+                .padding(.bottom, 4)
+            ForEach(library.all) { template in
+                NavigationLink(value: template) {
+                    ShelfRow(title: template.name, detail: "\(count(for: template)) 份")
+                }
+                .buttonStyle(.plain)
+                if template.id != library.all.last?.id {
+                    Divider()
+                }
+            }
+        }
+        .card()
+    }
+
+    private func count(for template: ScanTemplate) -> Int {
+        records.filter { $0.templateID == template.id }.count
     }
 
     @ViewBuilder
@@ -147,16 +170,6 @@ struct ScanView: View {
     }
 
     // MARK: - Helpers
-
-    private var levelName: String {
-        (RecognitionLevel(rawValue: levelRaw) ?? .accurate).displayName
-    }
-
-    private var languageSummary: String {
-        let languages = OCRSettings.decode(languagesRaw)
-        guard !languages.isEmpty else { return "系統預設語言" }
-        return languages.map(OCRSettings.displayName(for:)).joined(separator: "、")
-    }
 
     @MainActor
     private func loadPhotos(_ items: [PhotosPickerItem]) async {
@@ -192,7 +205,7 @@ private struct SourceCard: View {
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             Image(systemName: systemImage)
                 .font(.title2)
                 .foregroundStyle(.tint)
@@ -205,15 +218,47 @@ private struct SourceCard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 90, alignment: .topLeading)
-        .padding()
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+        .card()
+        .contentShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .opacity(isEnabled ? 1 : 0.45)
+    }
+}
+
+/// 某個情境的所有紀錄。
+struct TemplateRecordsView: View {
+    let template: ScanTemplate
+
+    @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
+
+    private var filtered: [ScanRecord] {
+        records.filter { $0.templateID == template.id }
+    }
+
+    var body: some View {
+        Group {
+            if filtered.isEmpty {
+                ContentUnavailableView(
+                    "還沒有「\(template.name)」",
+                    systemImage: "tray",
+                    description: Text("掃描後被判斷為這個情境的文件會出現在這裡。")
+                )
+            } else {
+                List(filtered) { record in
+                    NavigationLink {
+                        HistoryDetailView(record: record)
+                    } label: {
+                        HistoryRow(record: record)
+                    }
+                }
+            }
+        }
+        .navigationTitle(template.name)
     }
 }
 
 #Preview {
     ScanView()
+        .environment(TemplateLibrary.shared)
         .modelContainer(for: ScanRecord.self, inMemory: true)
 }

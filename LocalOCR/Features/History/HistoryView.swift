@@ -10,17 +10,19 @@ struct HistoryView: View {
     private var filteredRecords: [ScanRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return records }
-        return records.filter { $0.text.localizedCaseInsensitiveContains(query) }
+        return records.filter {
+            $0.text.localizedCaseInsensitiveContains(query) || ($0.jsonText?.localizedCaseInsensitiveContains(query) ?? false)
+        }
     }
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("辨識紀錄")
+                .navigationTitle("紀錄")
                 .navigationDestination(for: ScanRecord.self) { record in
                     HistoryDetailView(record: record)
                 }
-                .searchable(text: $searchText, prompt: "搜尋文字內容")
+                .searchable(text: $searchText, prompt: "搜尋文字或 JSON")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("全部刪除", role: .destructive) {
@@ -41,7 +43,7 @@ struct HistoryView: View {
             ContentUnavailableView(
                 "尚無紀錄",
                 systemImage: "clock",
-                description: Text("辨識完成的文字會自動儲存在這裡，可於設定中關閉。")
+                description: Text("辨識完成的文字與 JSON 會自動儲存在這裡，可於設定中關閉。")
             )
         } else if filteredRecords.isEmpty {
             ContentUnavailableView.search(text: searchText)
@@ -54,6 +56,7 @@ struct HistoryView: View {
                 }
                 .onDelete(perform: delete)
             }
+            .listStyle(.insetGrouped)
         }
     }
 
@@ -73,14 +76,16 @@ struct HistoryView: View {
     }
 }
 
-private struct HistoryRow: View {
+struct HistoryRow: View {
     let record: ScanRecord
+
+    @Environment(TemplateLibrary.self) private var library
 
     var body: some View {
         HStack(spacing: 12) {
             thumbnail
                 .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(record.title)
@@ -89,11 +94,20 @@ private struct HistoryRow: View {
                 Text(record.text)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
                 HStack(spacing: 6) {
-                    Label(record.sourceDisplayName, systemImage: record.sourceSystemImage)
-                    Text("·")
+                    if let name = library.template(id: record.templateID)?.name {
+                        Text(name)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .foregroundStyle(.tint)
+                    }
                     Text(record.createdAt, format: .dateTime.month().day().hour().minute())
+                    if record.syncedAt != nil {
+                        Image(systemName: "checkmark.icloud")
+                            .accessibilityLabel("已上傳")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -113,12 +127,13 @@ private struct HistoryRow: View {
                 .font(.title2)
                 .foregroundStyle(.tint)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.secondarySystemBackground))
+                .background(Theme.screenBackground)
         }
     }
 }
 
 #Preview {
     HistoryView()
+        .environment(TemplateLibrary.shared)
         .modelContainer(for: ScanRecord.self, inMemory: true)
 }

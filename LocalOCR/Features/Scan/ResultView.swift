@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ResultView: View {
     private enum Mode: String, CaseIterable, Identifiable {
+        case json = "JSON"
         case image = "圖片"
         case text = "文字"
         case lines = "逐行"
@@ -13,11 +14,16 @@ struct ResultView: View {
     let session: ScanSession
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(TemplateLibrary.self) private var library
     @AppStorage(OCRSettings.Key.autoSaveHistory) private var autoSave = true
-    @State private var mode: Mode = .image
+    @AppStorage(ServerSettings.Key.autoUpload) private var autoUpload = true
+    @AppStorage(ServerSettings.Key.useJev) private var useJev = true
+    @State private var mode: Mode = .json
     @State private var editedText = ""
     @State private var showsBoxes = true
     @State private var savedRecord: ScanRecord?
+    @State private var smart = SmartScanModel()
+    @State private var uploadState: UploadState = .notConfigured
     @State private var toast: String?
     @State private var feedbackTrigger = 0
     @State private var didLoad = false
@@ -33,11 +39,21 @@ struct ResultView: View {
             .padding()
 
             switch mode {
+            case .json:
+                SmartResultPanel(
+                    model: smart,
+                    templates: library.all,
+                    uploadState: uploadState,
+                    onRerun: { template in Task { await runSmartScan(forcedTemplate: template) } },
+                    onCopy: { copy($0, message: "已複製 JSON") },
+                    onUpload: { Task { await upload() } }
+                )
             case .image: imagePages
             case .text: textEditor
             case .lines: lineList
             }
         }
+        .screenBackground()
         .navigationTitle("辨識結果")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
@@ -76,7 +92,16 @@ struct ResultView: View {
                 .font(.body)
                 .scrollContentBackground(.hidden)
                 .padding(8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                .background(Theme.cardBackground, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+            Button {
+                mode = .json
+                Task { await runSmartScan(forcedTemplate: nil) }
+            } label: {
+                Label("以目前文字重新產生 JSON", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(smart.isRunning || editedText.isEmpty)
         }
         .padding([.horizontal, .bottom])
     }
@@ -154,8 +179,44 @@ struct ResultView: View {
         guard !didLoad else { return }
         didLoad = true
         editedText = session.fullText
+        uploadState = ServerSettings.isConfigured ? .idle : .notConfigured
         if autoSave, !session.allLines.isEmpty {
             save()
+        }
+        if session.allLines.isEmpty {
+            mode = .image
+        } else {
+            Task { await runSmartScan(forcedTemplate: nil) }
+        }
+    }
+
+    private func runSmartScan(forcedTemplate: ScanTemplate?) async {
+        guard let outcome = await smart.run(
+            text: editedText,
+            templates: library.all,
+            forcedTemplate: forcedTemplate,
+            useJev: useJev
+        ) else { return }
+
+        guard let savedRecord else { return }
+        savedRecord.apply(outcome)
+        savedRecord.text = editedText
+        try? modelContext.save()
+        if autoUpload, ServerSettings.isConfigured {
+            await upload()
+        }
+    }
+
+    private func upload() async {
+        if savedRecord == nil { save() }
+        guard let savedRecord else { return }
+        uploadState = .uploading
+        do {
+            try await ScanUploader.upload(savedRecord)
+            try? modelContext.save()
+            uploadState = .uploaded(Date())
+        } catch {
+            uploadState = .failed(error.localizedDescription)
         }
     }
 
@@ -168,8 +229,10 @@ struct ResultView: View {
     private func save() {
         if let savedRecord {
             savedRecord.text = editedText
+            if let outcome = smart.outcome { savedRecord.apply(outcome) }
         } else {
             let record = ScanRecord.make(from: session, text: editedText)
+            if let outcome = smart.outcome { record.apply(outcome) }
             modelContext.insert(record)
             savedRecord = record
         }

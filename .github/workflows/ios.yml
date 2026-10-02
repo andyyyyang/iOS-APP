@@ -2,6 +2,11 @@ name: iOS CI
 
 on:
   push:
+    paths:
+      - "LocalOCR/**"
+      - "LocalOCRTests/**"
+      - "LocalOCR.xcodeproj/**"
+      - ".github/workflows/ios.yml"
   workflow_dispatch:
 
 concurrency:
@@ -10,9 +15,17 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build & Test
-    runs-on: macos-15
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Xcode 26 (iOS 26 SDK)
+            runner: macos-26
+          - name: Xcode 27 (iOS 27 SDK)
+            runner: xcode-27
     steps:
       - uses: actions/checkout@v5
 
@@ -52,7 +65,7 @@ jobs:
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             > test.log 2>&1 || status=$?
-          grep -E "error:|warning:|Test Case .* (passed|failed)|Executed [0-9]+ test|\*\* TEST" test.log || true
+          grep -E "error:|warning:|Test Case .* (passed|failed|skipped)|Executed [0-9]+ test|\*\* TEST" test.log || true
           exit $status
 
       - name: Release build (device, unsigned)
@@ -72,7 +85,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: xcode-logs
+          name: xcode-logs-${{ matrix.runner }}
           path: |
             test.log
             build.log
