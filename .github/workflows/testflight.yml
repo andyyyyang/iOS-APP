@@ -6,6 +6,7 @@ on:
     # 修改發佈紀錄檔即觸發；推送 v* 標籤也會觸發（標籤不套用路徑篩選）
     paths:
       - ".github/release/testflight.txt"
+      - ".github/release/testers.txt"
 
 concurrency:
   group: testflight
@@ -14,6 +15,8 @@ concurrency:
 jobs:
   upload:
     name: Archive & upload to TestFlight
+    # 只修改測試人員清單時不重新上傳
+    if: github.event_name != 'push' || contains(join(github.event.commits.*.modified, ','), '.github/release/testflight.txt') || contains(join(github.event.commits.*.added, ','), '.github/release/testflight.txt')
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -116,3 +119,22 @@ jobs:
             archive.log
             export.log
           if-no-files-found: ignore
+
+  distribute:
+    name: Invite internal testers
+    needs: upload
+    if: always() && (needs.upload.result == 'success' || needs.upload.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      ASC_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APPSTORE_CONNECT_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet "pyjwt[crypto]" requests
+      - name: Add testers and send TestFlight invitations
+        run: python .github/scripts/testflight_testers.py
