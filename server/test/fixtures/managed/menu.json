@@ -1,0 +1,6 @@
+{
+  "id": "menu",
+  "name": "菜單（測試）",
+  "description": "測試用的受管理樣板：餐廳菜單",
+  "sample": { "shop": "範例小館", "dishes": [{ "name": "牛肉麵", "price": 180 }] }
+}

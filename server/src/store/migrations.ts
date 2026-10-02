@@ -55,10 +55,19 @@ export const MIGRATIONS: Migration[] = [
       INSERT INTO write_clock (id, ts) VALUES (1, 'epoch') ON CONFLICT (id) DO NOTHING;
     `,
   },
+  {
+    version: 2,
+    name: "template_rules",
+    sql: `
+      -- Raw JSON array text (key order preserved); NULL means no rules.
+      ALTER TABLE templates ADD COLUMN IF NOT EXISTS rules TEXT;
+    `,
+  },
 ];
 
-// Arbitrary constant key so concurrently starting instances run migrations one at a time.
+// Arbitrary constant advisory-lock keys so concurrently starting instances take turns.
 const MIGRATION_LOCK_KEY = 4_206_942_001;
+export const STARTUP_LOCK_KEY = 4_206_942_002;
 
 export async function runMigrations(
   pool: pg.Pool,

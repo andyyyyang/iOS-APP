@@ -9,8 +9,16 @@ import { PostgresStore } from "../src/store/postgres.js";
 import type { Store } from "../src/store/types.js";
 
 /** Set TEST_DATABASE_URL to run the whole suite against a real (disposable!) Postgres database. */
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const openStores: Store[] = [];
+
+/** Closes the store after the current test. */
+export function trackStore<T extends Store>(store: T): T {
+  openStores.push(store);
+  return store;
+}
+
+export const silentLogger = { info() {}, error() {} };
 
 afterEach(async () => {
   await Promise.all(openStores.splice(0).map((store) => store.close()));
@@ -22,14 +30,11 @@ async function createTestStore(): Promise<Store> {
   await client.connect();
   await client.query("DROP TABLE IF EXISTS scans, templates, write_clock, schema_migrations");
   await client.end();
-  const store = new PostgresStore(TEST_DATABASE_URL);
-  openStores.push(store);
-  return store;
+  return trackStore(new PostgresStore(TEST_DATABASE_URL));
 }
 
 export const API_KEY = "test-key-123";
 export const AUTH = { Authorization: `Bearer ${API_KEY}` };
-const silent = { info() {} };
 
 export class FakeClassifier implements Classifier {
   readonly provider = "jev";
@@ -45,12 +50,15 @@ export class FakeClassifier implements Classifier {
   }
 }
 
-export async function setup(options: { classifier?: Classifier | null; apiKeys?: string[] } = {}): Promise<{
+export async function setup(
+  options: { classifier?: Classifier | null; apiKeys?: string[]; managedTemplatesDir?: string | null } = {},
+): Promise<{
   app: Express;
   store: Store;
 }> {
   const store = await createTestStore();
-  await bootstrapStore(store, silent);
+  // Repo-managed templates are off by default so tests see only the four built-ins.
+  await bootstrapStore(store, { logger: silentLogger, managedTemplatesDir: options.managedTemplatesDir ?? null });
   const app = createApp({
     store,
     classifier: options.classifier ?? null,

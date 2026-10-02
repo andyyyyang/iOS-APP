@@ -1,5 +1,5 @@
 import type { ScanCursor } from "../cursor.js";
-import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template } from "../types.js";
+import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template, TemplateRule } from "../types.js";
 
 export interface ScanWrite {
   id: string;
@@ -44,6 +44,7 @@ export interface TemplateWrite {
   keywords: string[];
   sample: JsonObject;
   instructions: string | null;
+  rules: TemplateRule[];
 }
 
 export interface WriteResult<T> {
@@ -73,4 +74,10 @@ export interface Store {
   /** Inserts only if no template with this id exists. Returns true if inserted. */
   insertTemplateIfMissing(template: TemplateWrite): Promise<boolean>;
   deleteTemplate(id: string): Promise<boolean>;
+
+  /**
+   * Runs `fn` while holding a store-wide startup lock, so concurrently starting instances
+   * seed/sync templates one at a time (no double version bumps).
+   */
+  runExclusive<T>(fn: () => Promise<T>): Promise<T>;
 }

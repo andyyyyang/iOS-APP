@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { AppError, toErrorBody } from "../errors.js";
+import { MAX_TEMPLATE_RULES } from "../schemas.js";
 import type { Services } from "../services/index.js";
 import type { Scan } from "../types.js";
 import { VERSION } from "../version.js";
@@ -124,8 +125,10 @@ export function createMcpServer(services: Services): McpServer {
     "get_template",
     {
       title: "Get template",
-      description: "取得單一情境樣板。sample 是輸出 JSON 的範例：欄位、巢狀結構、陣列形式與順序都要一致。\n" +
-        "Get one template. Its sample is an example of the output JSON: same keys, nesting, array shape and key order.",
+      description:
+        "取得單一情境樣板。sample 是輸出 JSON 的範例：欄位、巢狀結構、陣列形式與順序都要一致；rules 是抽取後由 App 套用的後處理規則。\n" +
+        "Get one template. Its sample is an example of the output JSON: same keys, nesting, array shape and key order. " +
+        "rules are post-processing steps clients apply after extraction.",
       inputSchema: { id: templateId },
       annotations: { readOnlyHint: true },
     },
@@ -137,8 +140,16 @@ export function createMcpServer(services: Services): McpServer {
     {
       title: "Create or update template",
       description:
-        "新增或更新情境樣板（version 自動加一）。新增情境不需改程式：App、伺服器與 harness 都會立即使用。\n" +
-        "Create or update a scenario template (version auto-increments). New scenarios need no code changes.",
+        "新增或更新情境樣板（整筆取代，version 自動加一）。新增情境不需改程式：App、伺服器與 harness 都會立即使用。\n" +
+        "rules（選用，最多 100 條）是 App 在 AI 抽取後依序套用的確定性後處理，伺服器只儲存不執行。每條規則必須有 set（目標路徑：field 或 array[].field），" +
+        "其他鍵為操作：value 固定值；copy 複製欄位；template 字串模板 \"{field}\"；sum [路徑...] 加總；join 路徑 + separator；" +
+        "divide [分子, 分母] + round 小數位；today: true 今天日期；generate: \"base36time\" 產生代碼；lookup 欄位 + table {鍵: 值} 對照；onlyIfEmpty: true 僅在目標為空時套用。\n" +
+        "Create or replace a scenario template (version auto-increments). New scenarios need no code changes. " +
+        "rules (optional, max 100) are deterministic post-processing steps clients apply in order after AI extraction; the server stores them verbatim. " +
+        "Each rule needs set (target path: field or array[].field) plus an op: value (constant), copy (field), template (\"{field}\" string), " +
+        "sum ([paths]), join (path + separator), divide ([num, den] + round), today: true, generate: \"base36time\", " +
+        "lookup (field + table {key: value}); onlyIfEmpty: true applies the rule only when the target is empty.\n" +
+        'Example: [{"set":"total","sum":["items[].price"]},{"set":"items[].category","lookup":"name","table":{"鮮乳":"飲品"},"onlyIfEmpty":true}]',
       inputSchema: {
         id: templateId.describe("代碼，符合 ^[a-z0-9][a-z0-9_-]{0,63}$ Id matching ^[a-z0-9][a-z0-9_-]{0,63}$"),
         name: z.string().describe("顯示名稱 Display name"),
@@ -146,6 +157,11 @@ export function createMcpServer(services: Services): McpServer {
         sample: jsonObject.describe("輸出 JSON 範例（保留欄位順序；null 代表可為空的字串） Example output JSON (key order kept; null = nullable string)"),
         instructions: z.string().optional().describe("額外抽取規則 Extra extraction rules"),
         keywords: z.array(z.string()).optional().describe("離線關鍵字分類備援 Keywords for offline fallback classification"),
+        rules: z
+          .array(z.record(z.string(), z.unknown()))
+          .max(MAX_TEMPLATE_RULES)
+          .optional()
+          .describe("後處理規則，每條需有 set；省略代表清空 Post-processing rules, each with a set target; omitted = none"),
       },
       annotations: { idempotentHint: true },
     },

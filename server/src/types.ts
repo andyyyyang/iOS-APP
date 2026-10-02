@@ -36,6 +36,13 @@ export interface Scan {
   device: string | null;
 }
 
+/**
+ * Deterministic post-processing step applied by clients after AI extraction.
+ * `set` is the target path (`field` or `array[].field`); every other key is free-form JSON
+ * (the server stores and returns rules verbatim, key order included, and never applies them).
+ */
+export type TemplateRule = { set: string } & { [key: string]: JsonValue };
+
 /** Wire shape of a template (API.md "Template"). */
 export interface Template {
   id: string;
@@ -44,6 +51,7 @@ export interface Template {
   keywords: string[];
   sample: JsonObject;
   instructions: string | null;
+  rules: TemplateRule[];
   version: number;
   updatedAt: string;
 }

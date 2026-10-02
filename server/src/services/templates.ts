@@ -37,6 +37,7 @@ export class TemplateService {
       keywords: input.keywords ?? [],
       sample: input.sample,
       instructions: input.instructions ?? null,
+      rules: input.rules ?? [],
     });
   }
 

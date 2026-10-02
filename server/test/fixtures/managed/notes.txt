@@ -1,0 +1,1 @@
+Not a template; only *.json files are loaded.

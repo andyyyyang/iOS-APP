@@ -1,4 +1,4 @@
-import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template } from "../types.js";
+import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template, TemplateRule } from "../types.js";
 
 // JSON columns are stored as TEXT (not jsonb) so object key order survives the round trip.
 
@@ -30,10 +30,16 @@ export interface TemplateRow {
   keywords: string[];
   sample: string;
   instructions: string | null;
+  /** Raw JSON array text; NULL for rows written before migration 2. */
+  rules: string | null;
   version: number;
   created_at: Date;
   updated_at: Date;
 }
+
+/** Empty rule lists are stored as NULL so "no rules" has a single representation. */
+export const rulesToText = (rules: TemplateRule[]): string | null =>
+  rules.length === 0 ? null : JSON.stringify(rules);
 
 export function scanFromRow(row: ScanRow): Scan {
   return {
@@ -60,6 +66,7 @@ export function templateFromRow(row: TemplateRow): Template {
     keywords: row.keywords,
     sample: JSON.parse(row.sample) as JsonObject,
     instructions: row.instructions,
+    rules: row.rules === null ? [] : (JSON.parse(row.rules) as TemplateRule[]),
     version: row.version,
     updatedAt: row.updated_at.toISOString(),
   };

@@ -1,7 +1,7 @@
 import pg from "pg";
 import type { Scan, Template } from "../types.js";
-import { runMigrations } from "./migrations.js";
-import { scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
+import { STARTUP_LOCK_KEY, runMigrations } from "./migrations.js";
+import { rulesToText, scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
 import type {
   ScanFieldsPatch,
   ScanListOptions,
@@ -14,7 +14,7 @@ import type {
 const SCAN_COLUMNS =
   "id, created_at, updated_at, source, text, template_id, classification, data, line_count, average_confidence, page_count, device";
 const TEMPLATE_COLUMNS =
-  "id, name, description, keywords, sample, instructions, version, created_at, updated_at";
+  "id, name, description, keywords, sample, instructions, rules, version, created_at, updated_at";
 
 /** Escapes LIKE wildcards so user input is matched literally (used with ESCAPE '\'). */
 const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, "\\$&")}%`;
@@ -180,13 +180,14 @@ export class PostgresStore implements Store {
       const now = await this.tick(client);
       const { rows } = await client.query<TemplateRow & { inserted: boolean }>(
         `INSERT INTO templates (${TEMPLATE_COLUMNS})
-         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            description = EXCLUDED.description,
            keywords = EXCLUDED.keywords,
            sample = EXCLUDED.sample,
            instructions = EXCLUDED.instructions,
+           rules = EXCLUDED.rules,
            version = templates.version + 1,
            updated_at = EXCLUDED.updated_at
          RETURNING ${TEMPLATE_COLUMNS}, (xmax = 0) AS inserted`,
@@ -204,7 +205,7 @@ export class PostgresStore implements Store {
       const now = await this.tick(client);
       const result = await client.query(
         `INSERT INTO templates (${TEMPLATE_COLUMNS})
-         VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
          ON CONFLICT (id) DO NOTHING`,
         this.templateParams(template, now),
       );
@@ -217,6 +218,17 @@ export class PostgresStore implements Store {
     return (result.rowCount ?? 0) > 0;
   }
 
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock($1)", [STARTUP_LOCK_KEY]);
+      return await fn();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [STARTUP_LOCK_KEY]).catch(() => {});
+      client.release();
+    }
+  }
+
   private templateParams(template: TemplateWrite, now: Date): unknown[] {
     return [
       template.id,
@@ -225,6 +237,7 @@ export class PostgresStore implements Store {
       template.keywords,
       JSON.stringify(template.sample),
       template.instructions,
+      rulesToText(template.rules),
       now,
     ];
   }

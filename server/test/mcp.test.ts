@@ -82,6 +82,46 @@ describe("MCP /mcp", () => {
     expect(template.name).toBe("酒標");
   });
 
+  it("upserts templates with rules", async () => {
+    const { client } = await connect();
+    const rules = [
+      { onlyIfEmpty: true, set: "date", today: true },
+      { set: "total", sum: ["items[].price"], round: 0 },
+      { set: "items[].category", lookup: "name", table: { 鮮乳: "飲品" } },
+    ];
+    const upsert = await client.callTool({
+      name: "upsert_template",
+      arguments: { id: "with_rules", name: "規則", description: "含規則", sample: { date: null, total: 0 }, rules },
+    });
+    expect(upsert.isError).toBeFalsy();
+    expect(parse(upsert).rules).toEqual(rules);
+
+    const get = await client.callTool({ name: "get_template", arguments: { id: "with_rules" } });
+    const template = parse(get);
+    expect(template.rules).toEqual(rules);
+    expect(Object.keys(template.rules[0])).toEqual(["onlyIfEmpty", "set", "today"]);
+
+    const cleared = parse(
+      await client.callTool({
+        name: "upsert_template",
+        arguments: { id: "with_rules", name: "規則", description: "含規則", sample: { date: null, total: 0 } },
+      }),
+    );
+    expect(cleared).toMatchObject({ rules: [], version: 2 });
+
+    const invalid = await client.callTool({
+      name: "upsert_template",
+      arguments: { id: "bad_rules", name: "x", description: "y", sample: { a: 1 }, rules: [{ value: 1 }] },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(parse(invalid).error).toMatchObject({ code: "invalid_request", message: expect.stringMatching(/rules\.0\.set/) });
+
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "upsert_template")!;
+    expect(tool.description).toContain("onlyIfEmpty");
+    expect(Object.keys(tool.inputSchema.properties ?? {})).toContain("rules");
+  });
+
   it("returns isError results for failures", async () => {
     const { client } = await connect();
     const missing = await client.callTool({ name: "get_template", arguments: { id: "missing" } });

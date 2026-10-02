@@ -1,7 +1,7 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { bootstrapStore } from "../src/bootstrap.js";
-import { AUTH, setup } from "./helpers.js";
+import { AUTH, setup, silentLogger } from "./helpers.js";
 
 const order = (text: string, keys: string[]) => keys.map((key) => text.indexOf(`"${key}"`));
 const isIncreasing = (values: number[]) => values.every((v, i) => v >= 0 && (i === 0 || v > values[i - 1]!));
@@ -23,7 +23,7 @@ describe("templates", () => {
       "store", "date", "time", "items", "subtotal", "tax", "total", "currency", "paymentMethod", "invoiceNumber",
     ]);
     expect(Object.keys(res.body.items[0])).toEqual([
-      "id", "name", "description", "keywords", "sample", "instructions", "version", "updatedAt",
+      "id", "name", "description", "keywords", "sample", "instructions", "rules", "version", "updatedAt",
     ]);
   });
 
@@ -34,7 +34,7 @@ describe("templates", () => {
       .set(AUTH)
       .send({ name: "我的收據", description: "自訂", sample: { total: 0 } })
       .expect(200);
-    await bootstrapStore(store, { info() {} });
+    await bootstrapStore(store, { logger: silentLogger, managedTemplatesDir: null });
     const res = await request(app).get("/v1/templates/receipt").set(AUTH).expect(200);
     expect(res.body).toMatchObject({ name: "我的收據", version: 2, sample: { total: 0 } });
   });

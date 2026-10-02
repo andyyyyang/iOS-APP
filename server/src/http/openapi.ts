@@ -1,3 +1,4 @@
+import { MAX_TEMPLATE_RULES, RULE_TARGET_PATTERN } from "../schemas.js";
 import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES } from "../types.js";
 import { VERSION } from "../version.js";
 
@@ -243,7 +244,7 @@ export function buildOpenApi(serverUrl?: string) {
         },
         Template: {
           type: "object",
-          required: ["id", "name", "description", "keywords", "sample", "instructions", "version", "updatedAt"],
+          required: ["id", "name", "description", "keywords", "sample", "instructions", "rules", "version", "updatedAt"],
           properties: {
             id: { type: "string", pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" },
             name: { type: "string" },
@@ -251,6 +252,7 @@ export function buildOpenApi(serverUrl?: string) {
             keywords: { type: "array", items: { type: "string" } },
             sample: { type: "object", description: "Example output JSON; key order is preserved" },
             instructions: { type: ["string", "null"] },
+            rules: { type: "array", maxItems: MAX_TEMPLATE_RULES, items: ref("TemplateRule"), description: "Empty when the template has no rules" },
             version: { type: "integer" },
             updatedAt: { type: "string", format: "date-time" },
           },
@@ -265,7 +267,31 @@ export function buildOpenApi(serverUrl?: string) {
             keywords: { type: ["array", "null"], items: { type: "string" } },
             sample: { type: "object" },
             instructions: { type: ["string", "null"] },
+            rules: {
+              type: ["array", "null"],
+              maxItems: MAX_TEMPLATE_RULES,
+              items: ref("TemplateRule"),
+              description: "Replaces the stored rules; omitted or null means no rules",
+            },
           },
+        },
+        TemplateRule: {
+          type: "object",
+          required: ["set"],
+          description:
+            "Deterministic post-processing step applied by clients after AI extraction (stored verbatim, key order kept; " +
+            "the server does not execute rules). Besides set, keys are free-form JSON. Supported ops: value, copy, " +
+            'template ("{field}"), sum ([paths]), join (path + separator), divide ([num, den] + round), today: true, ' +
+            'generate: "base36time", lookup (field + table {key: value}), onlyIfEmpty: true.',
+          properties: {
+            set: {
+              type: "string",
+              pattern: RULE_TARGET_PATTERN.source,
+              description: "Target path: field or array[].field",
+              examples: ["total", "items[].category"],
+            },
+          },
+          additionalProperties: true,
         },
         TemplateList: {
           type: "object",

@@ -1,0 +1,7 @@
+{
+  "id": "bad_rules",
+  "name": "規則錯誤",
+  "description": "規則缺少 set",
+  "sample": { "total": 0 },
+  "rules": [{ "sum": ["items[].price"] }]
+}

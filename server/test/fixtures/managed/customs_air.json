@@ -1,0 +1,21 @@
+{
+  "id": "customs_air",
+  "name": "空運報關單（測試）",
+  "description": "測試用的受管理樣板：空運報關文件",
+  "keywords": ["空運", "報關"],
+  "sample": {
+    "awb": "123-45678901",
+    "shipDate": "2026-10-02",
+    "items": [{ "name": "零件", "quantity": 1, "unitPrice": 10, "amount": 10, "category": null }],
+    "totalAmount": 10,
+    "reference": null
+  },
+  "instructions": "金額使用數字。",
+  "rules": [
+    { "set": "items[].amount", "divide": ["items[].unitPrice", 1], "round": 2 },
+    { "set": "totalAmount", "sum": ["items[].amount"] },
+    { "onlyIfEmpty": true, "set": "shipDate", "today": true },
+    { "set": "items[].category", "lookup": "name", "table": { "零件": "parts", "螺絲": "screws" } },
+    { "set": "reference", "generate": "base36time", "onlyIfEmpty": true }
+  ]
+}

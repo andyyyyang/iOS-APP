@@ -21,9 +21,9 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/scans/{id}` | 取得單筆 |
 | `PATCH /v1/scans/{id}` | 局部更新 `templateId`、`data`、`classification`（至少一項；`null` 代表清除） |
 | `DELETE /v1/scans/{id}` | 刪除，回傳 204 |
-| `GET /v1/templates` | `{"items":[Template...]}`（依建立順序） |
+| `GET /v1/templates` | `{"items":[Template...]}`（依建立順序）；每個樣板都有 `rules` 陣列（沒有規則時為 `[]`） |
 | `GET /v1/templates/{id}` | 取得單一樣板 |
-| `PUT /v1/templates/{id}` | 新增（201）或整筆取代（200）樣板，`version` 自動加一 |
+| `PUT /v1/templates/{id}` | 新增（201）或整筆取代（200）樣板，`version` 自動加一；`rules` 一併取代（省略代表清空） |
 | `DELETE /v1/templates/{id}` | 刪除，回傳 204 |
 | `POST /v1/classify` | `{"text":"...","templateIds":[...]}` → `{"templateId","confidence","probabilities","provider"}`；未設定 Jev 時回傳 503 `jev_not_configured` |
 | `POST /v1/validate` | `{"templateId":"receipt","data":{...}}` → `{"valid":false,"issues":[{"path":"$.items[0].price","message":"..."}]}`（REST 版的 `validate_data`） |
@@ -44,7 +44,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 
 `list_scans`、`get_scan`、`update_scan_data`、`list_templates`、`get_template`、`upsert_template`、`delete_template`、`classify_text`、`validate_data`。
 工具結果是格式化的 JSON 文字；失敗時 `isError: true`，內容為 `{"error":{"code","message"}}`。
-`list_scans` 另外接受選用的 `cursor` 參數以翻頁。
+`list_scans` 另外接受選用的 `cursor` 參數以翻頁；`upsert_template` 接受選用的 `rules`（工具說明中列出支援的操作）。
 
 ## 環境變數
 
@@ -76,7 +76,13 @@ curl localhost:3000/health
 curl -H "Authorization: Bearer dev-key" localhost:3000/v1/templates
 ```
 
-啟動時會自動執行資料庫遷移（`schema_migrations` 記錄已套用的版本，多個實例同時啟動時以 advisory lock 排隊），並補上缺少的內建樣板（`receipt`、`business_card`、`event`、`document`）。已存在的樣板不會被覆寫；刪除的內建樣板會在下次啟動時補回。
+啟動時依序：
+
+1. 執行資料庫遷移（`schema_migrations` 記錄已套用的版本，多個實例同時啟動時以 advisory lock 排隊）。
+2. 補上缺少的內建樣板（`receipt`、`business_card`、`event`、`document`）。已存在的樣板不會被覆寫；刪除的內建樣板會在下次啟動時補回。
+3. 同步 `templates/managed/*.json` 的受管理樣板（見下方「受管理的樣板」）。
+
+步驟 2、3 在全域鎖內執行，多個實例同時啟動也只會建立／更新一次。
 
 ### 測試
 
@@ -86,8 +92,11 @@ npm run typecheck
 npm run build
 
 # 以真實 Postgres 執行整套測試（會刪除資料表，請用拋棄式資料庫！）
+# 另外會執行只在 Postgres 上跑的測試：舊資料庫升級（遷移 2）與多實例同時啟動
 TEST_DATABASE_URL=postgres://user:pass@localhost:5432/localocr_test npm test
 ```
+
+測試會檢查 `templates/managed/` 裡每個檔案都是有效的樣板，壞掉的檔案在 CI 就會被發現。
 
 ### 部署到 Railway
 
@@ -120,9 +129,48 @@ curl -X PUT https://<host>/v1/templates/menu \
   "keywords": ["菜單", "價目表"], "instructions": "價格使用數字。" }
 ```
 
-`PUT`／`upsert_template` 是整筆取代：沒帶的 `keywords`、`instructions` 會被清空。每次更新 `version` 加一。
+`PUT`／`upsert_template` 是整筆取代：沒帶的 `keywords`、`instructions`、`rules` 會被清空。每次更新 `version` 加一。
 
 若要新增**內建**樣板（每個新部署都會有），在 `src/templates/builtin.ts` 加一筆即可，啟動時只會在缺少時插入。
+若希望樣板內容由 repo 控管（修改後重新部署就生效），改用下方的受管理樣板。
+
+### 後處理規則（`rules`）
+
+`rules` 是選用的陣列（最多 100 條），App 等客戶端在 AI 抽取完 JSON 後依序套用，做確定性的補值與計算。**伺服器只負責驗證、儲存與回傳，不會執行規則。**
+
+- 每條規則是一個 JSON 物件，必須有字串 `set`：目標路徑，格式為 `field` 或 `array[].field`（對陣列每個元素套用）。
+- 其他鍵為自由格式的 JSON，伺服器不檢查；目前客戶端支援的操作：
+
+| 操作 | 範例 | 說明 |
+| --- | --- | --- |
+| `value` | `{"set":"currency","value":"TWD"}` | 固定值（任何 JSON） |
+| `copy` | `{"set":"expenseAmount","copy":"amount"}` | 複製另一個欄位 |
+| `template` | `{"set":"text","template":"出口/{osat}/{caseNo}"}` | 字串模板，`{field}` 代入欄位值 |
+| `sum` | `{"set":"total","sum":["items[].price"]}` | 加總（路徑陣列） |
+| `join` | `{"set":"names","join":"items[].name","separator":"、"}` | 以分隔字串串接 |
+| `divide` | `{"set":"price","divide":["amount","qty"],"round":3}` | 相除，`round` 為小數位數 |
+| `today` | `{"set":"date","today":true}` | 今天日期（YYYY-MM-DD） |
+| `generate` | `{"set":"id","generate":"base36time"}` | 產生以時間為基礎的 base36 代碼 |
+| `lookup` | `{"set":"items[].category","lookup":"name","table":{"鮮乳":"飲品"}}` | 以欄位值查對照表 |
+| `onlyIfEmpty` | `{"set":"date","today":true,"onlyIfEmpty":true}` | 只在目標欄位為空時套用（可與任何操作並用） |
+
+規則以原始 JSON 文字儲存（Postgres `templates.rules TEXT`，由遷移 2 新增），陣列順序與物件鍵順序都會保留。驗證失敗（不是陣列、超過 100 條、缺少 `set`、`set` 不是字串或路徑格式不對）回傳 400 `invalid_request`。
+
+### 受管理的樣板（`templates/managed/`）
+
+`server/templates/managed/*.json` 每個檔案是一個完整的樣板物件（`id`、`name`、`description`、`keywords`、`sample`、`instructions`、`rules`；`keywords`、`instructions`、`rules` 可省略）。這些檔案是一般 JSON，不經過編譯，會隨 `server/` 目錄一起部署。
+
+每次啟動（內建樣板補齊之後）：
+
+- 資料庫中沒有該 `id` → 建立（`version` 1）。
+- `name`、`description`、`keywords`、`sample`（原始文字，含鍵順序）、`instructions`、`rules`（原始文字）任一不同 → 以檔案內容整筆取代，`version` 加一。
+- 完全相同 → 不動。
+- 檔案不是有效 JSON、不符合樣板格式或 `id` 與其他檔案重複 → 記錄錯誤並略過，伺服器照常啟動。
+
+啟動紀錄會列出結果，例如：`[managed] templates: created fv60_air; updated fv60_sea; unchanged -`。
+
+因為 repo 檔案是唯一來源，透過 API 或 MCP 修改受管理樣板只會維持到下次啟動；刪除也會在下次啟動時重建。要永久修改，請改檔案後重新部署。
+目錄位置以編譯後程式的位置推算（`dist/templates/` 與 `src/templates/` 往上兩層的 `templates/managed/`），所以 `npm start`、`npm run dev` 與測試都能找到；測試使用 `test/fixtures/managed/`，可透過 `bootstrapStore(store, { managedTemplatesDir })` 指定其他目錄（`null` 代表停用）。
 
 ## 新增分類器供應商
 
@@ -162,7 +210,7 @@ claude mcp add --transport http localocr https://<host>/mcp --header "Authorizat
 src/
   index.ts            進入點：讀設定、建立 store／classifier、監聽、SIGTERM 優雅關閉
   config.ts           環境變數解析
-  bootstrap.ts        遷移 + 補內建樣板
+  bootstrap.ts        遷移 + 補內建樣板 + 同步受管理樣板
   schemas.ts          zod 輸入格式（REST 與 MCP 共用）
   validate.ts         依樣板 sample 檢查 JSON 結構
   cursor.ts           不透明分頁游標
@@ -170,9 +218,11 @@ src/
   services/           商業邏輯：scans、templates、classify、validate
   classifier/         Classifier 介面與 Jev 實作
   templates/builtin.ts 內建樣板
+  templates/managed.ts 讀取並同步 templates/managed/*.json
   http/               createApp、驗證、錯誤處理、路由、OpenAPI
   mcp/                MCP 工具與無狀態 /mcp 路由
-test/                 vitest + supertest
+templates/managed/    受管理樣板（repo 控管的 JSON 檔）
+test/                 vitest + supertest（fixtures/managed/ 為測試用樣板檔）
 ```
 
 資料庫結構變更：在 `src/store/migrations.ts` 的 `MIGRATIONS` 陣列尾端加入下一個版本號的遷移，不要修改已發佈的遷移。

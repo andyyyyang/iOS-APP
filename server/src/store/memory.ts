@@ -1,5 +1,5 @@
 import type { Scan, Template } from "../types.js";
-import { scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
+import { rulesToText, scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
 import type {
   ScanFieldsPatch,
   ScanListOptions,
@@ -126,6 +126,10 @@ export class MemoryStore implements Store {
     return this.templates.delete(id);
   }
 
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
+
   private templateRow(template: TemplateWrite, now: Date, existing: TemplateRow | undefined): TemplateRow {
     return {
       id: template.id,
@@ -134,6 +138,7 @@ export class MemoryStore implements Store {
       keywords: [...template.keywords],
       sample: JSON.stringify(template.sample),
       instructions: template.instructions,
+      rules: rulesToText(template.rules),
       version: (existing?.version ?? 0) + 1,
       created_at: existing?.created_at ?? now,
       updated_at: now,

@@ -23,6 +23,7 @@ export const BUILTIN_TEMPLATES: readonly TemplateWrite[] = [
       invoiceNumber: "AB-12345678",
     },
     instructions: "金額使用數字；日期使用 YYYY-MM-DD；時間使用 24 小時制 HH:mm；找不到的欄位填 null。",
+    rules: [],
   },
   {
     id: "business_card",
@@ -40,6 +41,7 @@ export const BUILTIN_TEMPLATES: readonly TemplateWrite[] = [
       social: [{ platform: "LINE", handle: "ming" }],
     },
     instructions: "電話保留原始格式；找不到的欄位填 null，陣列可為空。",
+    rules: [],
   },
   {
     id: "event",
@@ -58,6 +60,7 @@ export const BUILTIN_TEMPLATES: readonly TemplateWrite[] = [
       url: "https://example.com/event",
     },
     instructions: "日期使用 YYYY-MM-DD；時間使用 24 小時制 HH:mm；找不到的欄位填 null。",
+    rules: [],
   },
   {
     id: "document",
@@ -73,5 +76,6 @@ export const BUILTIN_TEMPLATES: readonly TemplateWrite[] = [
       actionItems: [{ task: "整理需求文件", owner: "王小明", due: "2026-10-09" }],
     },
     instructions: "摘要不超過 100 字；找不到的欄位填 null，陣列可為空。",
+    rules: [],
   },
 ];

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES, type JsonObject, type JsonValue } from "./types.js";
+import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES, type JsonObject, type JsonValue, type TemplateRule } from "./types.js";
 
 // Shared input schemas: REST handlers and MCP tools both funnel through these (via services).
 
@@ -80,6 +80,27 @@ export const scanListQuerySchema = z.object({
 });
 export type ScanListQuery = z.infer<typeof scanListQuerySchema>;
 
+export const MAX_TEMPLATE_RULES = 100;
+/** `field` or `array[].field`; segments may be any key without `.`, `[` or `]`. */
+export const RULE_TARGET_PATTERN = /^[^.[\]]+(?:\[\]\.[^.[\]]+)?$/;
+
+/**
+ * A rule is any JSON object with a string `set` target. A record (not z.object) is used so the
+ * parsed output keeps the client's key order.
+ */
+export const templateRuleSchema = z.record(z.string(), jsonValueSchema).superRefine((rule, ctx) => {
+  const target = rule.set;
+  if (typeof target !== "string") {
+    ctx.addIssue({ code: "custom", path: ["set"], message: 'Rule must have a string "set" target path' });
+  } else if (!RULE_TARGET_PATTERN.test(target)) {
+    ctx.addIssue({ code: "custom", path: ["set"], message: 'Target path must be "field" or "array[].field"' });
+  }
+}) as unknown as z.ZodType<TemplateRule>;
+
+export const templateRulesSchema = z
+  .array(templateRuleSchema)
+  .max(MAX_TEMPLATE_RULES, `At most ${MAX_TEMPLATE_RULES} rules`);
+
 export const templateInputSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(200),
@@ -87,6 +108,7 @@ export const templateInputSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(200)).max(500).nullable().optional(),
   sample: jsonObjectSchema,
   instructions: z.string().max(20000).nullable().optional(),
+  rules: templateRulesSchema.nullable().optional(),
 });
 export type TemplateInput = z.infer<typeof templateInputSchema>;
 
