@@ -10,7 +10,7 @@ final class ScanRecord {
     var source: String
     var pageCount: Int
     var lineCount: Int
-    /// 即時掃描沒有信心度資訊，此時為 nil。
+    /// 沒有逐行信心度的紀錄（例如舊版即時掃描擷取的文字）此時為 nil。
     var averageConfidence: Double?
     @Attribute(.externalStorage) var thumbnailData: Data?
 

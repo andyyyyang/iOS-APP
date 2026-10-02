@@ -156,7 +156,12 @@ export function createMcpServer(services: Services): McpServer {
         description: z.string().describe("情境描述，供分類器判斷 Scenario description used by classifiers"),
         sample: jsonObject.describe("輸出 JSON 範例（保留欄位順序；null 代表可為空的字串） Example output JSON (key order kept; null = nullable string)"),
         instructions: z.string().optional().describe("額外抽取規則 Extra extraction rules"),
-        keywords: z.array(z.string()).optional().describe("離線關鍵字分類備援 Keywords for offline fallback classification"),
+        keywords: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "離線關鍵字分類備援；以 ! 開頭為強特徵（統編、公司名稱），唯一命中時直接判定 Keywords for fallback classification; a \"!\" prefix marks a strong signal (tax ID, company name) that decides the scenario when only one template matches",
+          ),
         rules: z
           .array(z.record(z.string(), z.unknown()))
           .max(MAX_TEMPLATE_RULES)
@@ -188,8 +193,8 @@ export function createMcpServer(services: Services): McpServer {
     {
       title: "Classify text",
       description:
-        "用 Jev 判斷文字屬於哪個情境樣板，回傳 templateId、信心度與各樣板機率。\n" +
-        "Classify text into a template with Jev; returns templateId, confidence and per-template probabilities.",
+        "判斷文字屬於哪個情境樣板：唯一命中強特徵（! 關鍵字）時直接判定，否則用 Jev；回傳 templateId、信心度與各樣板機率。\n" +
+        "Classify text into a template: a unique strong signal (\"!\" keyword) decides, otherwise Jev; returns templateId, confidence and per-template probabilities.",
       inputSchema: {
         text: z.string().describe("OCR 文字（超過 8000 字會截斷） Text to classify (truncated to 8000 chars)"),
         templateIds: z.array(templateId).optional().describe("限定候選樣板，預設全部 Restrict candidates (default: all templates)"),

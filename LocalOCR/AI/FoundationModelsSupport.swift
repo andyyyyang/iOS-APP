@@ -110,8 +110,14 @@ struct OnDeviceClassifier: DocumentClassifier {
             ]
         )
         let schema = try GenerationSchema(root: root, dependencies: [])
-        let catalog = templates.map { "- \($0.id)：\($0.name)。\($0.description)" }.joined(separator: "\n")
-        let instructions = "你是文件分類助理。根據 OCR 文字判斷文件屬於哪一個情境，只能從清單中選擇一個代碼。無法判斷時選擇 \(ScanTemplate.fallbackID)。"
+        // 具體的情境排前面並附上關鍵字；一般文件放最後，只在都不符合時使用
+        let ordered = templates.filter { $0.id != ScanTemplate.fallbackID } + templates.filter { $0.id == ScanTemplate.fallbackID }
+        let catalog = ordered.map { template -> String in
+            let words = template.keywords.map { $0.hasPrefix("!") ? String($0.dropFirst()) : $0 }.prefix(8)
+            let hint = words.isEmpty ? "" : "（常見字詞：\(words.joined(separator: "、"))）"
+            return "- \(template.id)：\(template.name)。\(template.description)\(hint)"
+        }.joined(separator: "\n")
+        let instructions = "你是文件分類助理。根據 OCR 文字判斷文件屬於哪一個情境，只能從清單中選擇一個代碼。優先選擇最具體、符合的情境；只有在其他情境都明顯不符合時才選擇 \(ScanTemplate.fallbackID)。"
         let prompt = "情境清單：\n\(catalog)\n\nOCR 文字：\n\"\"\"\n\(PageText.classificationText(PageText.split(text), limit: 1200))\n\"\"\""
 
         let session = LanguageModelSession(model: OnDeviceModel.extraction, tools: [], instructions: { instructions })

@@ -10,6 +10,9 @@ struct HistoryDetailView: View {
     @State private var feedbackTrigger = 0
     @State private var isUploading = false
     @State private var showsAnalysis = false
+    @State private var showsAddPages = false
+    @State private var sourceRequest: PageSource?
+    @State private var addingPages: (current: Int, total: Int)?
 
     var body: some View {
         ScrollView {
@@ -42,6 +45,23 @@ struct HistoryDetailView: View {
         .onChange(of: record.text) { _, _ in
             record.syncedAt = nil
         }
+        .addPagesDialog(isPresented: $showsAddPages, request: $sourceRequest)
+        .pageSources(
+            request: $sourceRequest,
+            onPick: { images, _ in Task { await addPages(images) } },
+            onError: { toast = $0 }
+        )
+        .overlay {
+            if let progress = addingPages {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在辨識新加入的第 \(progress.current)／\(progress.total) 頁…")
+                        .font(.subheadline)
+                }
+                .padding(24)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+            }
+        }
     }
 
     private var header: some View {
@@ -69,15 +89,26 @@ struct HistoryDetailView: View {
     }
 
     private var analyzeButton: some View {
-        Button {
-            showsAnalysis = true
-        } label: {
-            Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "wand.and.stars")
-                .frame(maxWidth: .infinity)
+        VStack(spacing: 10) {
+            Button {
+                showsAnalysis = true
+            } label: {
+                Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "wand.and.stars")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(record.text.isEmpty)
+
+            Button {
+                showsAddPages = true
+            } label: {
+                Label("補充頁面（目前 \(record.pageCount) 頁）", systemImage: "doc.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
-        .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .disabled(record.text.isEmpty)
+        .disabled(addingPages != nil)
     }
 
     private func jsonCard(_ json: String) -> some View {
@@ -139,6 +170,31 @@ struct HistoryDetailView: View {
         }
         .font(.subheadline)
         .card()
+    }
+
+    /// 辨識補充的頁面並接在原文之後，再重新判斷情境並產生 JSON。
+    private func addPages(_ images: [UIImage]) async {
+        guard !images.isEmpty else { return }
+        let service = OCRService()
+        var added: [OCRPage] = []
+        for (index, image) in images.enumerated() {
+            addingPages = (index + 1, images.count)
+            if let page = try? await service.recognize(image) {
+                added.append(page)
+            }
+        }
+        addingPages = nil
+        let newText = added.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        guard !newText.isEmpty else {
+            toast = "新加入的頁面沒有辨識到文字"
+            return
+        }
+        record.text = record.text.isEmpty ? newText : record.text + "\n\n" + newText
+        record.pageCount += added.count
+        record.lineCount += added.reduce(0) { $0 + $1.lines.count }
+        record.syncedAt = nil
+        try? modelContext.save()
+        showsAnalysis = true
     }
 
     private func copy(_ text: String, message: String) {

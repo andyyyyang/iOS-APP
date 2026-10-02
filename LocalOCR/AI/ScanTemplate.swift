@@ -56,6 +56,11 @@ struct ScanTemplate: Identifiable, Hashable, Codable {
         (try? JSONValue.parse(sampleJSON)) ?? .object([])
     }
 
+    /// 強特徵：以 `!` 開頭的關鍵字（去掉 `!`）。
+    var strongSignals: [String] {
+        keywords.filter { $0.hasPrefix("!") && $0.count > 1 }.map { String($0.dropFirst()) }
+    }
+
     var rules: [JSONValue] {
         guard let rulesJSON, case .array(let items)? = try? JSONValue.parse(rulesJSON) else { return [] }
         return items

@@ -1,9 +1,13 @@
 import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { fileURLToPath } from "node:url";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { JevClassifier, truncateText } from "../src/classifier/jev.js";
 import { ClassifierError } from "../src/classifier/types.js";
+import { strongSignals } from "../src/classifier/signals.js";
 import { AUTH, FakeClassifier, setup } from "./helpers.js";
+
+const MANAGED = fileURLToPath(new URL("../templates/managed/", import.meta.url));
 
 describe("POST /v1/classify", () => {
   it("passes the classifier result through", async () => {
@@ -54,6 +58,30 @@ describe("POST /v1/classify", () => {
     expect(unknown.body.error.code).toBe("unknown_template");
     await request(app).post("/v1/classify").set(AUTH).send({ text: "   " }).expect(400);
     await request(app).post("/v1/classify").set(AUTH).send({}).expect(400);
+  });
+
+  it("decides by a unique strong signal without calling the provider", async () => {
+    const classifier = new FakeClassifier();
+    const { app } = await setup({ classifier, managedTemplatesDir: MANAGED });
+    const res = await request(app)
+      .post("/v1/classify")
+      .set(AUTH)
+      .send({ text: "義佳國際物流股份有限公司\n統一編號 22368445\n請款單 合計 12,600" })
+      .expect(200);
+    expect(res.body).toEqual({ templateId: "fv60_sea", confidence: 1, probabilities: { fv60_sea: 1 }, provider: "keywords" });
+    expect(classifier.calls).toHaveLength(0);
+
+    // Signals from two templates are ambiguous: the provider decides.
+    await request(app).post("/v1/classify").set(AUTH).send({ text: "萬泰物流 義佳" }).expect(200);
+    expect(classifier.calls).toHaveLength(1);
+  });
+
+  it("uses strong signals even without Jev", async () => {
+    const { app } = await setup({ classifier: null, managedTemplatesDir: MANAGED });
+    const res = await request(app).post("/v1/classify").set(AUTH).send({ text: "萬泰物流 空運 AWB 123" }).expect(200);
+    expect(res.body.templateId).toBe("fv60_air");
+    expect(res.body.provider).toBe("keywords");
+    await request(app).post("/v1/classify").set(AUTH).send({ text: "全聯 合計 45" }).expect(503);
   });
 
   it("maps provider failures to 502", async () => {
@@ -123,5 +151,11 @@ describe("JevClassifier", () => {
     expect(truncateText("abc", 2)).toBe("ab");
     expect(truncateText("😀😀😀", 2)).toBe("😀😀");
     expect(truncateText("short")).toBe("short");
+  });
+});
+
+describe("strongSignals", () => {
+  it("keeps only non-empty ! keywords without the prefix", () => {
+    expect(strongSignals(["!義佳", "海運", "!", "!22368445"])).toEqual(["義佳", "22368445"]);
   });
 });

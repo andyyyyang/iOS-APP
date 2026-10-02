@@ -7,7 +7,7 @@
 
 ```
 iPhone App ──(OCR：Vision，裝置端)──▶ 文字
-   │  分類：Jev（經伺服器）→ 裝置端 Foundation Models → 關鍵字
+   │  分類：強特徵（! 關鍵字）→ Jev（經伺服器）→ 裝置端 Foundation Models → 關鍵字
    │  抽取：Foundation Models（裝置端）依樣板輸出 JSON
    ▼
 Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
@@ -53,7 +53,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `id` | 唯一代碼，符合 `^[a-z0-9][a-z0-9_-]{0,63}$` |
 | `name` | 顯示名稱 |
 | `description` | 情境描述；分類器（Jev 的 choice criteria、裝置端模型）依此判斷 |
-| `keywords` | 選用；離線時的關鍵字分類備援 |
+| `keywords` | 選用；離線時的關鍵字分類備援。以 `!` 開頭的是**強特徵**（例如廠商統一編號、公司名稱，例：`"!22368445"`）：文字中只出現一個情境的強特徵時直接判定（`provider` 為 `keywords`、信心度 1），不呼叫 Jev 或裝置端模型；同時命中多個情境則照常交給分類器 |
 | `sample` | **輸出樣式的範例 JSON**：輸出會有相同的欄位、巢狀結構、陣列形式與欄位順序。字串、數字、布林、陣列（以第一個元素為格式）、物件、`null`（代表可為空的字串）皆可 |
 | `instructions` | 選用；給 AI 的額外抽取說明 |
 | `rules` | 選用；AI 抽取後由程式套用的計算規則（見下方），回傳時一律為陣列 |
@@ -139,7 +139,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `GET /v1/templates/{id}` | 取得單一樣板 |
 | `PUT /v1/templates/{id}` | 新增或更新樣板（`version` 自動加一） |
 | `DELETE /v1/templates/{id}` | 刪除，回傳 204 |
-| `POST /v1/classify` | 請求 `{"text":"...","templateIds":["receipt","document"]}`（`templateIds` 選用，預設全部樣板）。回傳 `{"templateId":"receipt","confidence":0.93,"probabilities":{...},"provider":"jev"}`。未設定 Jev 金鑰時回傳 503 `jev_not_configured`，客戶端應改用其他分類器 |
+| `POST /v1/classify` | 請求 `{"text":"...","templateIds":["receipt","document"]}`（`templateIds` 選用，預設全部樣板）。回傳 `{"templateId":"receipt","confidence":0.93,"probabilities":{...},"provider":"jev"}`。文字命中唯一情境的強特徵（`!` 關鍵字）時直接回傳該情境，`provider` 為 `keywords`，不需要 Jev。其他情況若未設定 Jev 金鑰則回傳 503 `jev_not_configured`，客戶端應改用其他分類器 |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
 
 `nextCursor` 是不透明字串，客戶端原樣帶回即可。
@@ -157,7 +157,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `get_template` | `id` | 取得樣板 |
 | `upsert_template` | `id`, `name`, `description`, `sample`, `instructions?`, `keywords?`, `rules?` | 新增或更新情境 |
 | `delete_template` | `id` | 刪除情境 |
-| `classify_text` | `text`, `templateIds?` | 用 Jev 判斷情境 |
+| `classify_text` | `text`, `templateIds?` | 判斷情境：先比對強特徵，再用 Jev |
 | `validate_data` | `templateId`, `data` | 檢查 JSON 是否符合樣板結構，回傳問題清單 |
 
 ## Jev 分類

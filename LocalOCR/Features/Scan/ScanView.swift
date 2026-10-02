@@ -1,28 +1,20 @@
-import PhotosUI
 import SwiftData
 import SwiftUI
 
 struct ScanView: View {
-    private enum Capture: String, Identifiable {
-        case camera
-        case documentScanner
-
-        var id: String { rawValue }
-    }
-
     @Binding var selectedTab: AppTab
 
     @Environment(TemplateLibrary.self) private var library
+    @Environment(ScanDraft.self) private var draft
     @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
     @State private var model = ScanViewModel()
-    @State private var photoItems: [PhotosPickerItem] = []
-    @State private var capture: Capture?
+    @State private var sourceRequest: PageSource?
     @State private var aiStatus = OnDeviceAIStatus.current
     @State private var showsTools = false
     @State private var pendingTool: ToolMenuView.Tool?
-    @State private var showsPhotoPicker = false
     @State private var showsTemplates = false
     @State private var showsServer = false
+    @State private var toast: String?
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -33,6 +25,9 @@ struct ScanView: View {
                     BannerRow(systemImage: "sparkles", title: bannerTitle, subtitle: bannerSubtitle)
                     ShelfHeader(title: "智慧掃描", detail: "\(records.count) 份紀錄")
                     sourceGrid
+                    if !draft.isEmpty {
+                        DraftTray(draft: draft, isProcessing: model.isProcessing, onAnalyze: analyzeDraft)
+                    }
                     status
                     scenarioSection
                 }
@@ -47,13 +42,6 @@ struct ScanView: View {
                     showsTools = false
                 }
             }
-            .photosPicker(
-                isPresented: $showsPhotoPicker,
-                selection: $photoItems,
-                maxSelectionCount: 50,
-                selectionBehavior: .ordered,
-                matching: .images
-            )
             .sheet(isPresented: $showsTemplates) {
                 NavigationStack { TemplateListView() }
             }
@@ -68,14 +56,17 @@ struct ScanView: View {
             }
         }
         .onAppear { aiStatus = OnDeviceAIStatus.current }
-        .onChange(of: photoItems) { _, items in
-            guard !items.isEmpty else { return }
-            Task { await loadPhotos(items) }
-        }
-        .fullScreenCover(item: $capture) { kind in
-            captureView(for: kind)
-                .ignoresSafeArea()
-        }
+        .pageSources(
+            request: $sourceRequest,
+            onPick: { images, source in
+                Task {
+                    await draft.add(images, source: source)
+                    toast = "已加入 \(images.count) 頁，共 \(draft.pages.count) 頁"
+                }
+            },
+            onError: { toast = $0 }
+        )
+        .toast($toast)
     }
 
     // MARK: - Sections
@@ -83,7 +74,7 @@ struct ScanView: View {
     private var bannerTitle: String {
         let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
         let count = records.filter { $0.createdAt >= weekAgo }.count
-        return count > 0 ? "本週已辨識 \(count) 份文件" : "拍一張照片，自動整理成 JSON"
+        return count > 0 ? "本週已辨識 \(count) 份文件" : "把文件的每一頁加進來，自動整理成 JSON"
     }
 
     private var bannerSubtitle: String {
@@ -94,44 +85,36 @@ struct ScanView: View {
     }
 
     private var sourceGrid: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            PhotosPicker(
-                selection: $photoItems,
-                maxSelectionCount: 50,
-                selectionBehavior: .ordered,
-                matching: .images
-            ) {
-                SourceCard(title: "相簿", subtitle: "可多選，一次最多 50 頁", systemImage: ScanSource.photoLibrary.systemImage)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(draft.isEmpty ? "加入頁面：可混用各種來源，全部加入後再開始分析" : "繼續加入頁面")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(PageSource.allCases) { source in
+                    Button {
+                        sourceRequest = source
+                    } label: {
+                        SourceCard(
+                            title: source.title,
+                            subtitle: source.isAvailable ? subtitle(for: source) : "此裝置無法使用",
+                            systemImage: source.systemImage
+                        )
+                    }
+                    .disabled(!source.isAvailable)
+                }
             }
-
-            Button {
-                capture = .camera
-            } label: {
-                SourceCard(
-                    title: "拍照",
-                    subtitle: CameraPicker.isAvailable ? "使用相機拍攝" : "此裝置無法使用",
-                    systemImage: ScanSource.camera.systemImage
-                )
-            }
-            .disabled(!CameraPicker.isAvailable)
-
-            Button {
-                capture = .documentScanner
-            } label: {
-                SourceCard(
-                    title: "掃描文件",
-                    subtitle: DocumentScannerView.isSupported ? "自動裁切、可多頁" : "此裝置無法使用",
-                    systemImage: ScanSource.documentScanner.systemImage
-                )
-            }
-            .disabled(!DocumentScannerView.isSupported)
-
-            Button(action: pasteImage) {
-                SourceCard(title: "貼上圖片", subtitle: "從剪貼簿", systemImage: ScanSource.pasteboard.systemImage)
-            }
+            .buttonStyle(.plain)
+            .disabled(model.isProcessing)
         }
-        .buttonStyle(.plain)
-        .disabled(model.isProcessing)
+    }
+
+    private func subtitle(for source: PageSource) -> String {
+        switch source {
+        case .documentScanner: return "自動裁切，連續掃多頁"
+        case .camera: return "拍一頁加一頁"
+        case .photoLibrary: return "可多選，一次最多 50 頁"
+        case .pasteboard: return "從剪貼簿"
+        }
     }
 
     @ViewBuilder
@@ -143,7 +126,7 @@ struct ScanView: View {
             HStack(spacing: 12) {
                 ProgressView()
                 if total > 1 {
-                    Text("正在辨識第 \(current)／\(total) 張…")
+                    Text("正在辨識第 \(current)／\(total) 頁…")
                 } else {
                     Text("正在辨識…")
                 }
@@ -178,24 +161,6 @@ struct ScanView: View {
         records.filter { $0.templateID == template.id }.count
     }
 
-    @ViewBuilder
-    private func captureView(for kind: Capture) -> some View {
-        switch kind {
-        case .camera:
-            CameraPicker { image in
-                capture = nil
-                guard let image else { return }
-                Task { await model.process([image], source: .camera) }
-            }
-        case .documentScanner:
-            DocumentScannerView { images in
-                capture = nil
-                guard !images.isEmpty else { return }
-                Task { await model.process(images, source: .documentScanner) }
-            }
-        }
-    }
-
     private var toolsButton: some View {
         Button {
             showsTools = true
@@ -216,10 +181,10 @@ struct ScanView: View {
         guard let tool = pendingTool else { return }
         pendingTool = nil
         switch tool {
-        case .photos: showsPhotoPicker = true
-        case .camera: capture = .camera
-        case .document: capture = .documentScanner
-        case .paste: pasteImage()
+        case .photos: sourceRequest = .photoLibrary
+        case .camera: sourceRequest = .camera
+        case .document: sourceRequest = .documentScanner
+        case .paste: sourceRequest = .pasteboard
         case .live: selectedTab = .live
         case .history: selectedTab = .history
         case .templates: showsTemplates = true
@@ -228,31 +193,17 @@ struct ScanView: View {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Actions
 
-    @MainActor
-    private func loadPhotos(_ items: [PhotosPickerItem]) async {
-        photoItems = []
-        var images: [UIImage] = []
-        for item in items {
-            if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-                images.append(image)
+    private func analyzeDraft() {
+        let pages = draft.pages.map(\.imageData)
+        let source = draft.primarySource
+        Task {
+            await model.process(imageData: pages, source: source)
+            if model.session != nil {
+                draft.clear()
             }
         }
-        guard !images.isEmpty else {
-            model.fail("無法載入所選的照片。")
-            return
-        }
-        await model.process(images, source: .photoLibrary)
-    }
-
-    private func pasteImage() {
-        let images = UIPasteboard.general.images ?? []
-        guard !images.isEmpty else {
-            model.fail("剪貼簿中沒有圖片。")
-            return
-        }
-        Task { await model.process(images, source: .pasteboard) }
     }
 }
 
@@ -319,5 +270,6 @@ struct TemplateRecordsView: View {
 #Preview {
     ScanView(selectedTab: .constant(.scan))
         .environment(TemplateLibrary.shared)
+        .environment(ScanDraft())
         .modelContainer(for: ScanRecord.self, inMemory: true)
 }

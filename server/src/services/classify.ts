@@ -1,3 +1,4 @@
+import { matchStrongSignal } from "../classifier/signals.js";
 import { ClassifierError, type Classifier, type ClassifierResult } from "../classifier/types.js";
 import { AppError } from "../errors.js";
 import { classifyRequestSchema } from "../schemas.js";
@@ -14,15 +15,11 @@ export class ClassifyService {
     return this.classifier !== null;
   }
 
-  /** Picks the best template for `text` among all templates, or only `templateIds` when given. */
+  /**
+   * Picks the best template for `text` among all templates, or only `templateIds` when given.
+   * A unique strong signal ("!" keyword) decides without calling the provider, so it also works without Jev.
+   */
   async classify(body: unknown): Promise<ClassifierResult> {
-    if (!this.classifier) {
-      throw new AppError(
-        503,
-        "jev_not_configured",
-        "Server-side classification is not configured (set JEV_API_KEY); use an on-device classifier instead",
-      );
-    }
     const request = parse(classifyRequestSchema, body);
 
     const templates = await this.store.listTemplates();
@@ -37,6 +34,17 @@ export class ClassifyService {
     }
     if (candidates.length === 0) {
       throw new AppError(400, "no_templates", "There are no templates to classify against");
+    }
+    const signal = matchStrongSignal(request.text, candidates);
+    if (signal) {
+      return { templateId: signal.templateId, confidence: 1, probabilities: { [signal.templateId]: 1 }, provider: "keywords" };
+    }
+    if (!this.classifier) {
+      throw new AppError(
+        503,
+        "jev_not_configured",
+        "Server-side classification is not configured (set JEV_API_KEY); use an on-device classifier instead",
+      );
     }
     if (candidates.length === 1) {
       const only = candidates[0]!.id;

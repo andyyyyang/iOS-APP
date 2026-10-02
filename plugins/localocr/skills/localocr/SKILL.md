@@ -10,7 +10,7 @@ The LocalOCR iPhone app recognizes text on device (Apple Vision), detects the do
 ## Concepts
 
 - **Scan**: one scanned document — `id`, `createdAt`, `source`, `text` (OCR), `templateId`, `classification` (`provider`: `jev`, `on-device`, `keywords`, `manual`), `data` (JSON in the template's shape, may be `null`).
-- **Template (scenario)**: `id`, `name`, `description` (used for classification), `keywords`, `sample` (an example JSON object — output must have the same keys, nesting and key order), `instructions`, `rules`.
+- **Template (scenario)**: `id`, `name`, `description` (used for classification), `keywords` (a `!` prefix marks a strong signal — e.g. a vendor's tax ID or company name — that decides the scenario on its own when only one template matches), `sample` (an example JSON object — output must have the same keys, nesting and key order), `instructions`, `rules`.
   Built-ins: `receipt`, `business_card`, `event`, `document` (fallback). Repo-managed: `fv60_air` (FV60 air-freight vendor invoice, 萬泰物流) and `fv60_sea` (FV60 sea-freight claim from 義佳 with three companies' invoices).
 - **Rules**: deterministic post-processing applied after extraction, in order (`value`, `copy`, `template`, `sum`, `join`, `divide` + `round`, `today`, `generate: base36time`, `lookup` + `table`, `onlyIfEmpty`). When you fill `data` yourself, read the template's rules and apply them too (e.g. FV60 `amount` = sum of `taxItems[].taxBase` + `taxAmount`, `price` = amount ÷ qty rounded to 3 decimals, `text` = `出口/{osat}/{caseNo}`). Field targets of rules are not printed on the document. Sample keys starting with `_` are helper inputs for rules (e.g. FV60 `_declarationQuantities` = quantities of each line on the export customs declaration 報單, summed into `qty`); they are removed from the final `data`.
 
@@ -36,7 +36,7 @@ The LocalOCR iPhone app recognizes text on device (Apple Vision), detects the do
 4. `validate_data`; fix every issue, then `update_scan_data`.
 
 **Add a new scenario** when the user describes a new document type or desired format:
-1. Draft `id` (lowercase, `a-z0-9_-`), `name`, a specific `description`, `keywords`, a realistic `sample` object in the user's desired shape, and `instructions`.
+1. Draft `id` (lowercase, `a-z0-9_-`), `name`, a specific `description`, `keywords` (prefix text unique to this scenario's documents with `!`, e.g. `"!22368445"`), a realistic `sample` object in the user's desired shape, and `instructions`.
 2. `upsert_template`. The iPhone app picks it up on its next template sync, and Jev starts classifying into it immediately.
 
 **Report or export**: use `list_scans` with `templateId` (e.g. `receipt`) and `updatedAfter`, read `data`, then summarize (totals per store, contacts list, upcoming events) or convert to CSV/Markdown as asked.

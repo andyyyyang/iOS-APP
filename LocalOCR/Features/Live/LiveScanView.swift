@@ -1,27 +1,26 @@
 import AVFoundation
-import SwiftData
 import SwiftUI
 import VisionKit
 
+/// 相機分頁：按快門一頁一頁拍，全部拍完再一起分析（與「掃描」分頁共用同一份文件）。
 struct LiveScanView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(ScanDraft.self) private var draft
     @AppStorage(OCRSettings.Key.languages) private var languagesRaw = OCRSettings.encode(OCRSettings.defaultLanguages)
     @State private var isVisible = false
     @State private var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
     @State private var bridge = LiveScannerBridge()
-    @State private var collected: [String] = []
     @State private var toast: String?
-    @State private var feedbackTrigger = 0
+    @State private var shutterTrigger = 0
     @State private var captureModel = ScanViewModel()
     @State private var isCapturing = false
-    @State private var showsTextAnalysis = false
+    @State private var showsFlash = false
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("即時掃描")
+                .navigationTitle("連續拍照")
                 .navigationBarTitleDisplayMode(.inline)
-                // 推入結果頁或切換分頁時移除掃描器，釋放相機
+                // 推入結果頁或切換分頁時移除相機，釋放資源
                 .onAppear {
                     isVisible = true
                     cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
@@ -31,28 +30,23 @@ struct LiveScanView: View {
                     ResultView(session: session)
                 }
         }
-        .sheet(isPresented: $showsTextAnalysis) {
-            NavigationStack {
-                SmartAnalysisView(text: collectedText, source: .liveScanner)
-            }
-        }
         .toast($toast)
-        .sensoryFeedback(.selection, trigger: feedbackTrigger)
+        .sensoryFeedback(.impact, trigger: shutterTrigger)
     }
 
     @ViewBuilder
     private var content: some View {
         if !DataScannerViewController.isSupported {
             ContentUnavailableView(
-                "此裝置不支援即時掃描",
-                systemImage: "camera.viewfinder",
-                description: Text("即時文字掃描需要 A12 仿生晶片以上的實體裝置，模擬器無法使用。你仍可在「辨識」分頁選取照片進行辨識。")
+                "此裝置無法使用連續拍照",
+                systemImage: "camera",
+                description: Text("需要實體 iPhone，模擬器無法使用。你仍可在「掃描」分頁從相簿加入頁面。")
             )
         } else {
             switch cameraStatus {
             case .authorized:
                 if DataScannerViewController.isAvailable {
-                    scanner
+                    camera
                 } else {
                     ContentUnavailableView(
                         "目前無法使用相機",
@@ -69,22 +63,31 @@ struct LiveScanView: View {
         }
     }
 
-    private var scanner: some View {
+    private var camera: some View {
         ZStack(alignment: .bottom) {
             if isVisible {
-                DataScannerRepresentable(languages: scannerLanguages, bridge: bridge) { text in
-                    add([text])
-                }
-                .ignoresSafeArea(edges: .horizontal)
+                DataScannerRepresentable(languages: scannerLanguages, bridge: bridge)
+                    .ignoresSafeArea(edges: .horizontal)
             }
-            collectedPanel
+            if showsFlash {
+                Color.white
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+            controls
         }
         .overlay {
-            if isCapturing || captureModel.isProcessing {
+            if captureModel.isProcessing {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("正在辨識並交給 Apple Intelligence 分析…")
-                        .font(.subheadline)
+                    if case let .processing(current, total) = captureModel.phase, total > 1 {
+                        Text("正在辨識第 \(current)／\(total) 頁…")
+                            .font(.subheadline)
+                    } else {
+                        Text("正在辨識…")
+                            .font(.subheadline)
+                    }
                 }
                 .padding(24)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -92,87 +95,85 @@ struct LiveScanView: View {
         }
     }
 
-    private var collectedPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                Task { await captureAndAnalyze() }
-            } label: {
-                Label("拍照並用 Apple Intelligence 分析", systemImage: "camera.aperture")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(isCapturing || captureModel.isProcessing)
-
-            if collected.isEmpty {
-                Text("或點選畫面中標示的文字加入清單，再按「分析文字」。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ScrollView {
-                    Text(collectedText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+    private var controls: some View {
+        VStack(spacing: 14) {
+            if !draft.pages.isEmpty {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(draft.pages.enumerated()), id: \.element.id) { index, page in
+                                DraftPageThumbnail(draft: draft, page: page, number: index + 1, width: 48)
+                                    .id(page.id)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: draft.pages.last?.id) { _, id in
+                        guard let id else { return }
+                        withAnimation { proxy.scrollTo(id, anchor: .trailing) }
+                    }
                 }
-                .frame(maxHeight: 140)
             }
 
-            HStack(spacing: 16) {
-                Button {
-                    add(bridge.currentTexts())
+            Text(hint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack {
+                Button(role: .destructive) {
+                    draft.clear()
                 } label: {
-                    Label("擷取全部", systemImage: "text.viewfinder")
+                    Label("清除", systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
+                .disabled(draft.pages.isEmpty)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer()
+                shutterButton
 
-                Group {
-                    Button {
-                        showsTextAnalysis = true
-                    } label: {
-                        Image(systemName: "wand.and.stars")
-                    }
-                    .accessibilityLabel("分析文字")
-
-                    Button {
-                        UIPasteboard.general.string = collectedText
-                        toast = "已複製"
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                    }
-                    .accessibilityLabel("複製")
-
-                    ShareLink(item: collectedText) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("分享")
-
-                    Button(action: save) {
-                        Image(systemName: "tray.and.arrow.down")
-                    }
-                    .accessibilityLabel("儲存到紀錄")
-
-                    Button(role: .destructive) {
-                        collected.removeAll()
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .accessibilityLabel("清除")
+                Button(action: analyzeDraft) {
+                    Label("分析（\(draft.pages.count)）", systemImage: "wand.and.stars")
                 }
-                .disabled(collected.isEmpty)
+                .buttonStyle(.borderedProminent)
+                .disabled(draft.pages.isEmpty || draft.pendingCount > 0)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .disabled(captureModel.isProcessing)
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .padding()
     }
 
+    private var shutterButton: some View {
+        Button {
+            Task { await capturePage() }
+        } label: {
+            ZStack {
+                Circle()
+                    .strokeBorder(Color.primary.opacity(0.8), lineWidth: 4)
+                    .frame(width: 74, height: 74)
+                Circle()
+                    .fill(.white)
+                    .frame(width: 60, height: 60)
+                    .shadow(color: .black.opacity(0.15), radius: 2)
+                if isCapturing {
+                    ProgressView()
+                        .tint(.black)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isCapturing)
+        .accessibilityLabel(draft.pages.isEmpty ? "拍下這一頁" : "再拍一頁")
+    }
+
     private var deniedView: some View {
         ContentUnavailableView {
             Label("需要相機權限", systemImage: "camera")
         } description: {
-            Text("請到「設定」允許本 App 使用相機，才能即時掃描文字。辨識全程在裝置上進行。")
+            Text("請到「設定」允許本 App 使用相機。照片與辨識全程在裝置上處理。")
         } actions: {
             Button("前往設定") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -185,8 +186,10 @@ struct LiveScanView: View {
 
     // MARK: - Helpers
 
-    private var collectedText: String {
-        collected.joined(separator: "\n")
+    private var hint: String {
+        if draft.pendingCount > 0 { return "處理中…" }
+        if draft.pages.isEmpty { return "對準文件按下快門；多頁文件（例如發票＋報單）全部拍完再按「分析」。" }
+        return "已拍 \(draft.pages.count) 頁，可以繼續拍下一頁。長按縮圖可調整順序。"
     }
 
     private var scannerLanguages: [String] {
@@ -194,43 +197,36 @@ struct LiveScanView: View {
         return OCRSettings.decode(languagesRaw).filter { supported.contains($0) }
     }
 
-    private func add(_ texts: [String]) {
-        let newTexts = texts.filter { !collected.contains($0) }
-        guard !newTexts.isEmpty else {
-            toast = texts.isEmpty ? "畫面中沒有文字" : "已經加入過了"
-            return
-        }
-        collected.append(contentsOf: newTexts)
-        feedbackTrigger += 1
-    }
-
-    private func save() {
-        let record = ScanRecord(
-            text: collectedText,
-            source: ScanSource.liveScanner.rawValue,
-            pageCount: 1,
-            lineCount: collected.count,
-            averageConfidence: nil,
-            thumbnailData: nil
-        )
-        modelContext.insert(record)
-        try? modelContext.save()
-        toast = "已儲存到紀錄"
-    }
-
-    /// 以掃描器拍一張照片，走與相簿相同的完整流程：OCR → 判斷情境 → Apple Intelligence 產生 JSON。
+    /// 拍一張高解析度照片，加入正在收集的文件。
     @MainActor
-    private func captureAndAnalyze() async {
+    private func capturePage() async {
         isCapturing = true
         defer { isCapturing = false }
         do {
             let image = try await bridge.capturePhoto()
-            await captureModel.process([image], source: .liveScanner)
-            if case .failed(let message) = captureModel.phase {
-                toast = message
+            shutterTrigger += 1
+            showsFlash = true
+            Task {
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation(.easeOut(duration: 0.25)) { showsFlash = false }
             }
+            await draft.add([image], source: .liveScanner)
         } catch {
             toast = "無法拍照：\(error.localizedDescription)"
+        }
+    }
+
+    /// 完整流程：逐頁 OCR → 判斷情境 → Apple Intelligence 產生 JSON。
+    private func analyzeDraft() {
+        let pages = draft.pages.map(\.imageData)
+        let source = draft.primarySource
+        Task {
+            await captureModel.process(imageData: pages, source: source)
+            if captureModel.session != nil {
+                draft.clear()
+            } else if case .failed(let message) = captureModel.phase {
+                toast = message
+            }
         }
     }
 

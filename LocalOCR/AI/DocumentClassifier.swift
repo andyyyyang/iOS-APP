@@ -22,6 +22,8 @@ struct Classification: Equatable {
     var confidence: Double?
     var probabilities: [String: Double]
     var provider: Provider
+    /// 判斷依據（只在 App 顯示，不上傳）。
+    var reason: String? = nil
 
     var jsonValue: JSONValue {
         var members: [(key: String, value: JSONValue)] = [
@@ -43,7 +45,38 @@ protocol DocumentClassifier {
     func classify(text: String, among templates: [ScanTemplate]) async throws -> Classification
 }
 
+/// 強特徵：以 `!` 開頭的關鍵字（例如統一編號、公司名稱），只出現在該情境的文件上。
+/// 只有一個情境命中時直接判定，不交給 AI；同時命中多個情境則交由後續分類器。
+struct SignalClassifier: DocumentClassifier {
+    struct NotDecisive: LocalizedError {
+        var errorDescription: String? { "沒有可直接判定的強特徵" }
+    }
+
+    var provider: Classification.Provider { .keywords }
+
+    func classify(text: String, among templates: [ScanTemplate]) async throws -> Classification {
+        guard let result = Self.classify(text: text, among: templates) else { throw NotDecisive() }
+        return result
+    }
+
+    static func classify(text: String, among templates: [ScanTemplate]) -> Classification? {
+        let matches = templates.compactMap { template -> (id: String, hits: [String])? in
+            let hits = template.strongSignals.filter { text.localizedCaseInsensitiveContains($0) }
+            return hits.isEmpty ? nil : (template.id, hits)
+        }
+        guard matches.count == 1, let match = matches.first else { return nil }
+        return Classification(
+            templateID: match.id,
+            confidence: 1,
+            probabilities: [match.id: 1],
+            provider: .keywords,
+            reason: "依強特徵「\(match.hits.prefix(3).joined(separator: "、"))」判斷"
+        )
+    }
+}
+
 /// 離線備援：依樣板關鍵字出現次數判斷。永遠不會失敗。
+/// 「一般文件」只在其他情境都沒有命中時才勝出（權重較低）。
 struct KeywordClassifier: DocumentClassifier {
     var provider: Classification.Provider { .keywords }
 
@@ -52,9 +85,14 @@ struct KeywordClassifier: DocumentClassifier {
     }
 
     static func classify(text: String, among templates: [ScanTemplate]) -> Classification {
+        if let strong = SignalClassifier.classify(text: text, among: templates) {
+            return strong
+        }
         let scores = templates.map { template -> (id: String, score: Double) in
-            let hits = template.keywords.filter { !$0.isEmpty && text.localizedCaseInsensitiveContains($0) }.count
-            return (template.id, Double(hits))
+            let words = template.keywords.map { $0.hasPrefix("!") ? String($0.dropFirst()) : $0 }
+            let hits = words.filter { !$0.isEmpty && text.localizedCaseInsensitiveContains($0) }.count
+            let weight = template.id == ScanTemplate.fallbackID ? 0.5 : 1
+            return (template.id, Double(hits) * weight)
         }
         let total = scores.reduce(0) { $0 + $1.score }
         guard total > 0, let best = scores.max(by: { $0.score < $1.score }) else {
@@ -73,8 +111,16 @@ struct KeywordClassifier: DocumentClassifier {
 struct ClassifierPipeline {
     var classifiers: [any DocumentClassifier]
 
+    init(classifiers: [any DocumentClassifier]) {
+        self.classifiers = classifiers
+    }
+
     func classify(text: String, among templates: [ScanTemplate]) async -> (Classification, [String]) {
         var failures: [String] = []
+        // 強特徵最優先：命中唯一情境時不需要呼叫 AI 或網路
+        if let strong = SignalClassifier.classify(text: text, among: templates) {
+            return (strong, [])
+        }
         for classifier in classifiers {
             do {
                 let result = try await classifier.classify(text: text, among: templates)

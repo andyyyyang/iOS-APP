@@ -103,6 +103,57 @@ final class SmartScanTests: XCTestCase {
         XCTAssertEqual(failures.count, 2)
     }
 
+    // MARK: - 強特徵（以 ! 開頭的關鍵字）
+
+    private var allTemplates: [ScanTemplate] { ScanTemplate.builtIns + ScanTemplate.bundled }
+
+    func testStrongSignalPicksSeaFreightVendor() throws {
+        let text = "義佳國際物流股份有限公司\n統一編號 22368445\n請款單\n發票號碼 AB12345678\n金額合計 12,600"
+        let result = try XCTUnwrap(SignalClassifier.classify(text: text, among: allTemplates))
+        XCTAssertEqual(result.templateID, "fv60_sea")
+        XCTAssertEqual(result.confidence, 1)
+        XCTAssertEqual(result.provider, .keywords)
+        XCTAssertTrue(result.reason?.contains("義佳") == true)
+    }
+
+    func testStrongSignalPicksAirFreightVendor() throws {
+        let text = "萬泰物流股份有限公司\n統一發票\n合計 3,450\n總計 3,450"
+        XCTAssertEqual(SignalClassifier.classify(text: text, among: allTemplates)?.templateID, "fv60_air")
+    }
+
+    func testStrongSignalsInSeveralTemplatesAreNotDecisive() {
+        let text = "萬泰物流\n義佳國際物流"
+        XCTAssertNil(SignalClassifier.classify(text: text, among: allTemplates))
+        XCTAssertNil(SignalClassifier.classify(text: "全聯福利中心 合計 45", among: allTemplates))
+    }
+
+    func testPipelineUsesStrongSignalBeforeAI() async {
+        struct AlwaysDocument: DocumentClassifier {
+            var provider: Classification.Provider { .onDevice }
+            func classify(text: String, among templates: [ScanTemplate]) async throws -> Classification {
+                Classification(templateID: "document", confidence: 0.9, probabilities: [:], provider: .onDevice)
+            }
+        }
+        let pipeline = ClassifierPipeline(classifiers: [AlwaysDocument()])
+        let (result, failures) = await pipeline.classify(text: "義佳國際物流 請款單 金額 12,600", among: allTemplates)
+        XCTAssertEqual(result.templateID, "fv60_sea")
+        XCTAssertNotNil(result.reason)
+        XCTAssertTrue(failures.isEmpty)
+    }
+
+    func testKeywordFallbackWeighsGeneralDocumentLower() {
+        // 一般文件命中 3 個、收據命中 2 個：一般文件權重減半，所以仍判斷為收據
+        let text = "會議紀錄 說明\n合計 1,200 發票"
+        XCTAssertEqual(KeywordClassifier.classify(text: text, among: ScanTemplate.builtIns).templateID, "receipt")
+    }
+
+    func testStrongSignalsComeFromBangKeywords() throws {
+        let template = try XCTUnwrap(ScanTemplate.bundled.first { $0.id == "fv60_sea" })
+        XCTAssertTrue(template.strongSignals.contains("22368445"))
+        XCTAssertFalse(template.strongSignals.contains("海運"))
+        XCTAssertFalse(template.strongSignals.contains { $0.hasPrefix("!") })
+    }
+
     func testClassificationJSONIsOrdered() {
         let classification = Classification(templateID: "receipt", confidence: 0.9, probabilities: ["document": 0.1, "receipt": 0.9], provider: .jev)
         XCTAssertEqual(

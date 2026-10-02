@@ -132,7 +132,7 @@ struct ArcWheelMenu: View {
             ArcWheelItem(id: "camera", title: "拍照", systemImage: "camera", color: .blue),
             ArcWheelItem(id: "document", title: "掃描文件", systemImage: "doc.viewfinder", color: .orange),
             ArcWheelItem(id: "paste", title: "貼上圖片", systemImage: "doc.on.clipboard", color: .red),
-            ArcWheelItem(id: "live", title: "即時掃描", systemImage: "camera.viewfinder", color: .pink),
+            ArcWheelItem(id: "live", title: "連續拍照", systemImage: "camera.on.rectangle", color: .pink),
         ]
 
         var body: some View {

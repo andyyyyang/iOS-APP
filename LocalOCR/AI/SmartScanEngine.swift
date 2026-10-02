@@ -73,7 +73,8 @@ enum SmartScanEngine {
         } else {
             result = await classifierPipeline(useJev: useJev).classify(text: fullText, among: templates)
         }
-        let (classification, notes) = result
+        let (classification, failures) = result
+        let notes = (classification.reason.map { [$0] } ?? []) + failures
         let template = templates.first { $0.id == classification.templateID } ?? templates[0]
         onClassified(template, classification)
 

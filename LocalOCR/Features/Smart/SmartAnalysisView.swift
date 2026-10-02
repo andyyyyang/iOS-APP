@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 /// 對一段文字執行智慧分析（判斷情境＋Apple Intelligence 產生 JSON）。
-/// 用於即時掃描擷取的文字，以及紀錄中尚未分析的舊資料。
+/// 用於紀錄的重新分析（包含補充頁面後），以及舊版即時掃描擷取的文字。
 struct SmartAnalysisView: View {
     let text: String
     let source: ScanSource

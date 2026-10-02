@@ -86,7 +86,7 @@ struct TemplateEditorView: View {
             } header: {
                 Text("規則（選填）")
             } footer: {
-                Text("關鍵字用於離線時的情境判斷備援。")
+                Text("關鍵字用於離線時的情境判斷備援。以 ! 開頭的是「強特徵」（例如 !22368445 統一編號、!公司名稱），只要出現就直接判定為這個情境。")
             }
 
             Section {

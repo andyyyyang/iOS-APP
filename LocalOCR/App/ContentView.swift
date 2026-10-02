@@ -12,7 +12,7 @@ struct ContentView: View {
                 .tag(AppTab.scan)
 
             LiveScanView()
-                .tabItem { Label("即時", systemImage: "camera.viewfinder") }
+                .tabItem { Label("相機", systemImage: "camera") }
                 .tag(AppTab.live)
 
             HistoryView()
@@ -37,5 +37,6 @@ struct ContentView: View {
 #Preview {
     ContentView()
         .environment(TemplateLibrary.shared)
+        .environment(ScanDraft())
         .modelContainer(for: ScanRecord.self, inMemory: true)
 }

@@ -42,7 +42,7 @@ enum ScanSource: String, CaseIterable {
         case .camera: return "相機"
         case .documentScanner: return "文件掃描"
         case .pasteboard: return "剪貼簿"
-        case .liveScanner: return "即時掃描"
+        case .liveScanner: return "連續拍照"
         }
     }
 
@@ -52,7 +52,7 @@ enum ScanSource: String, CaseIterable {
         case .camera: return "camera"
         case .documentScanner: return "doc.viewfinder"
         case .pasteboard: return "doc.on.clipboard"
-        case .liveScanner: return "camera.viewfinder"
+        case .liveScanner: return "camera.on.rectangle"
         }
     }
 }

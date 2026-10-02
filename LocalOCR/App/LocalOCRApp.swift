@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct LocalOCRApp: App {
     @State private var library = TemplateLibrary.shared
+    @State private var draft = ScanDraft()
 
     init() {
         OCRSettings.registerDefaults()
@@ -16,6 +17,7 @@ struct LocalOCRApp: App {
         WindowGroup {
             ContentView()
                 .environment(library)
+                .environment(draft)
         }
         .modelContainer(for: ScanRecord.self)
     }

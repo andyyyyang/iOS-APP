@@ -27,6 +27,11 @@ struct ResultView: View {
     @State private var toast: String?
     @State private var feedbackTrigger = 0
     @State private var didLoad = false
+    /// 目前文件的所有頁面（可在結果頁繼續加入）。
+    @State private var pages: [OCRPage] = []
+    @State private var showsAddPages = false
+    @State private var sourceRequest: PageSource?
+    @State private var addingPages: (current: Int, total: Int)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,23 +65,40 @@ struct ResultView: View {
         .toast($toast)
         .sensoryFeedback(.success, trigger: feedbackTrigger)
         .onAppear(perform: loadIfNeeded)
+        .addPagesDialog(isPresented: $showsAddPages, request: $sourceRequest)
+        .pageSources(
+            request: $sourceRequest,
+            onPick: { images, _ in Task { await addPages(images) } },
+            onError: { toast = $0 }
+        )
+        .overlay {
+            if let progress = addingPages {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在辨識新加入的第 \(progress.current)／\(progress.total) 頁…")
+                        .font(.subheadline)
+                }
+                .padding(24)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+            }
+        }
     }
 
     // MARK: - Modes
 
     private var imagePages: some View {
         TabView {
-            ForEach(session.pages) { page in
+            ForEach(pages) { page in
                 AnnotatedImageView(page: page, showsBoxes: showsBoxes) { line in
                     copy(line.text, message: "已複製：\(line.text)")
                 }
                 .padding([.horizontal, .bottom])
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: session.pages.count > 1 ? .always : .never))
+        .tabViewStyle(.page(indexDisplayMode: pages.count > 1 ? .always : .never))
         .indexViewStyle(.page(backgroundDisplayMode: .always))
         .overlay(alignment: .top) {
-            if session.allLines.isEmpty {
+            if pages.allSatisfy({ $0.lines.isEmpty }) {
                 Label("沒有辨識到任何文字", systemImage: "text.badge.xmark")
                     .font(.subheadline)
                     .padding(10)
@@ -108,7 +130,7 @@ struct ResultView: View {
 
     private var lineList: some View {
         List {
-            ForEach(Array(session.pages.enumerated()), id: \.element.id) { index, page in
+            ForEach(Array(pages.enumerated()), id: \.element.id) { index, page in
                 Section {
                     ForEach(page.orderedLines) { line in
                         Button {
@@ -123,7 +145,7 @@ struct ResultView: View {
                         }
                     }
                 } header: {
-                    if session.pages.count > 1 {
+                    if pages.count > 1 {
                         Text("第 \(index + 1) 頁")
                     }
                 }
@@ -133,9 +155,10 @@ struct ResultView: View {
     }
 
     private var summary: some View {
-        let confidence = Int((session.averageConfidence * 100).rounded())
+        let lines = pages.flatMap(\.lines)
+        let average = lines.isEmpty ? 0 : lines.reduce(0) { $0 + Double($1.confidence) } / Double(lines.count)
         let seconds = String(format: "%.2f", session.duration)
-        return Text("\(session.pages.count) 頁 · \(session.allLines.count) 個區塊 · 平均信心度 \(confidence)% · 耗時 \(seconds) 秒")
+        return Text("\(pages.count) 頁 · \(lines.count) 個區塊 · 平均信心度 \(Int((average * 100).rounded()))% · 首次辨識 \(seconds) 秒")
             .font(.caption)
             .foregroundStyle(.secondary)
     }
@@ -153,6 +176,12 @@ struct ResultView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                Button {
+                    showsAddPages = true
+                } label: {
+                    Label("加入頁面…", systemImage: "doc.badge.plus")
+                }
+                .disabled(smart.isRunning || addingPages != nil)
                 Button {
                     copy(editedText, message: "已複製全部文字")
                 } label: {
@@ -178,6 +207,7 @@ struct ResultView: View {
     private func loadIfNeeded() {
         guard !didLoad else { return }
         didLoad = true
+        pages = session.pages
         editedText = session.fullText
         uploadState = ServerSettings.isConfigured ? .idle : .notConfigured
         if autoSave, !session.allLines.isEmpty {
@@ -220,6 +250,33 @@ struct ResultView: View {
         }
     }
 
+    /// 辨識新加入的頁面，合併到這份文件後重新判斷情境並產生 JSON。
+    private func addPages(_ images: [UIImage]) async {
+        guard !images.isEmpty else { return }
+        let service = OCRService()
+        var added: [OCRPage] = []
+        for (index, image) in images.enumerated() {
+            addingPages = (index + 1, images.count)
+            if let page = try? await service.recognize(image) {
+                added.append(page)
+            }
+        }
+        addingPages = nil
+        guard !added.isEmpty else {
+            toast = "無法辨識新加入的頁面"
+            return
+        }
+        pages.append(contentsOf: added)
+        let newText = added.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if !newText.isEmpty {
+            editedText = editedText.isEmpty ? newText : editedText + "\n\n" + newText
+        }
+        toast = "已加入 \(added.count) 頁，共 \(pages.count) 頁，重新分析中"
+        save()
+        mode = .json
+        await runSmartScan(forcedTemplate: nil)
+    }
+
     private func copy(_ text: String, message: String) {
         UIPasteboard.general.string = text
         toast = message
@@ -227,15 +284,19 @@ struct ResultView: View {
     }
 
     private func save() {
+        let record: ScanRecord
         if let savedRecord {
-            savedRecord.text = editedText
-            if let outcome = smart.outcome { savedRecord.apply(outcome) }
+            record = savedRecord
+            record.text = editedText
         } else {
-            let record = ScanRecord.make(from: session, text: editedText)
-            if let outcome = smart.outcome { record.apply(outcome) }
+            record = ScanRecord.make(from: session, text: editedText)
             modelContext.insert(record)
             savedRecord = record
         }
+        record.pageCount = pages.count
+        record.lineCount = pages.reduce(0) { $0 + $1.lines.count }
+        record.syncedAt = nil
+        if let outcome = smart.outcome { record.apply(outcome) }
         try? modelContext.save()
     }
 }
