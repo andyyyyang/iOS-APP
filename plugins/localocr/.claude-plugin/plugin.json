@@ -1,0 +1,37 @@
+{
+  "name": "localocr",
+  "displayName": "LocalOCR",
+  "version": "1.0.0",
+  "description": "Connect Claude Code to your LocalOCR server: browse scans from the iPhone app, read OCR text and scenario JSON, classify with Jev, and manage scenario templates over MCP.",
+  "author": {
+    "name": "andyyyyang"
+  },
+  "homepage": "https://github.com/andyyyyang/iOS-APP",
+  "repository": "https://github.com/andyyyyang/iOS-APP",
+  "keywords": ["ocr", "mcp", "ios", "json", "jev", "obsidian"],
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "LocalOCR server URL",
+      "description": "Base URL of your LocalOCR server, without a trailing slash (for example https://localocr-server-production.up.railway.app).",
+      "required": true,
+      "default": "https://localocr-server-production.up.railway.app"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API key",
+      "description": "One of the keys in the server's API_KEYS variable.",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "mcpServers": {
+    "localocr": {
+      "type": "http",
+      "url": "${user_config.server_url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.api_key}"
+      }
+    }
+  }
+}
