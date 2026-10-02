@@ -20,15 +20,19 @@ struct SettingsView: View {
                     } label: {
                         LabeledContent("情境樣板", value: "\(library.all.count) 種")
                     }
-                    LabeledContent("Apple Intelligence") {
-                        switch aiStatus {
-                        case .available:
-                            Label("可使用", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        case .unavailable(let reason):
-                            Text(reason)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.trailing)
+                    NavigationLink {
+                        AIDiagnosticsView()
+                    } label: {
+                        LabeledContent("Apple Intelligence") {
+                            switch aiStatus {
+                            case .available:
+                                Label("可使用", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            case .unavailable(let reason):
+                                Text(reason)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
                         }
                     }
                     Toggle("以 Jev 判斷情境", isOn: $useJev)

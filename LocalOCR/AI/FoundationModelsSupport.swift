@@ -107,9 +107,9 @@ struct OnDeviceClassifier: DocumentClassifier {
         let schema = try GenerationSchema(root: root, dependencies: [])
         let catalog = templates.map { "- \($0.id)：\($0.name)。\($0.description)" }.joined(separator: "\n")
         let instructions = "你是文件分類助理。根據 OCR 文字判斷文件屬於哪一個情境，只能從清單中選擇一個代碼。無法判斷時選擇 \(ScanTemplate.fallbackID)。"
-        let prompt = "情境清單：\n\(catalog)\n\nOCR 文字：\n\"\"\"\n\(String(text.prefix(1500)))\n\"\"\""
+        let prompt = "情境清單：\n\(catalog)\n\nOCR 文字：\n\"\"\"\n\(String(text.prefix(1200)))\n\"\"\""
 
-        let session = LanguageModelSession(instructions: { instructions })
+        let session = LanguageModelSession(model: OnDeviceModel.extraction, tools: [], instructions: { instructions })
         let response = try await session.respond(
             schema: schema,
             includeSchemaInPrompt: true,
@@ -125,29 +125,41 @@ struct OnDeviceClassifier: DocumentClassifier {
     }
 }
 
+/// 共用的裝置端模型設定。
+@available(iOS 26.0, *)
+enum OnDeviceModel {
+    /// 擷取資料屬於「轉換輸入文字」：使用寬鬆的內容防護，避免一般收據、名片被安全機制誤擋。
+    static var extraction: SystemLanguageModel {
+        SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
+    }
+}
+
 /// 使用裝置端模型，依樣板結構從 OCR 文字抽取資料。
 @available(iOS 26.0, *)
 struct FoundationModelsExtractor: StructuredExtractor {
-    var maximumCharacters = 3000
+    /// 依序嘗試的文字長度（字元）。裝置端模型的上下文有限，太長時改用較短的文字再試。
+    var characterBudgets = [1800, 900]
 
     func extract(text: String, template: ScanTemplate) async throws -> JSONValue {
-        do {
-            return try await extract(text: String(text.prefix(maximumCharacters)), template: template, attempt: 1)
-        } catch let error as StructuredExtractionError {
-            throw error
-        } catch where text.count > 800 {
-            // 超過模型的上下文長度時，縮短文字再試一次
-            return try await extract(text: String(text.prefix(min(text.count, maximumCharacters) / 2)), template: template, attempt: 2)
+        var lastError: Error = StructuredExtractionError.invalidOutput
+        for budget in characterBudgets {
+            do {
+                return try await extractOnce(text: String(text.prefix(budget)), template: template)
+            } catch {
+                lastError = error
+                if text.count <= budget { break }
+            }
         }
+        throw StructuredExtractionError.generation(AIErrorDescriber.describe(lastError))
     }
 
-    private func extract(text: String, template: ScanTemplate, attempt: Int) async throws -> JSONValue {
+    private func extractOnce(text: String, template: ScanTemplate) async throws -> JSONValue {
         let sample = template.sample
         let schema = try TemplateSchemaBuilder.generationSchema(for: sample)
         let instructions = Self.instructions(for: template)
         let prompt = "情境：\(template.name)\n\nOCR 文字：\n\"\"\"\n\(text)\n\"\"\""
 
-        let session = LanguageModelSession(instructions: { instructions })
+        let session = LanguageModelSession(model: OnDeviceModel.extraction, tools: [], instructions: { instructions })
         let response = try await session.respond(
             schema: schema,
             includeSchemaInPrompt: true,
@@ -175,7 +187,56 @@ struct FoundationModelsExtractor: StructuredExtractor {
     }
 }
 
+/// 診斷畫面使用的模型資訊。
+@available(iOS 26.0, *)
+enum OnDeviceAIDiagnostics {
+    static var supportsCurrentLocale: Bool {
+        SystemLanguageModel.default.supportsLocale(Locale.current)
+    }
+
+    static var supportedLanguageNames: [String] {
+        SystemLanguageModel.default.supportedLanguages
+            .map { Locale.current.localizedString(forIdentifier: $0.minimalIdentifier) ?? $0.minimalIdentifier }
+            .sorted()
+    }
+}
+
 #endif
+
+/// 把模型錯誤轉成使用者看得懂的說明（不依賴特定錯誤型別，iOS 26 與 27 的錯誤型別不同）。
+enum AIErrorDescriber {
+    static func describe(_ error: Error) -> String {
+        var parts: [String] = []
+        if let hint = hint(for: String(describing: error)) {
+            parts.append(hint)
+        }
+        if let localized = error as? LocalizedError {
+            for text in [localized.errorDescription, localized.failureReason, localized.recoverySuggestion] {
+                if let text, !text.isEmpty, !parts.contains(text) { parts.append(text) }
+            }
+        } else {
+            parts.append(error.localizedDescription)
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    static func hint(for raw: String) -> String? {
+        // 所有生成錯誤都帶有 Context，因此要比對完整的錯誤名稱
+        let text = raw.lowercased()
+        if text.contains("guardrail") { return "內容觸發了 Apple Intelligence 的安全機制。" }
+        if text.contains("exceededcontextwindowsize") || text.contains("contextsizeexceeded") {
+            return "文字太長，超過裝置端模型可處理的長度。"
+        }
+        if text.contains("unsupportedlanguageorlocale") {
+            return "Apple Intelligence 的語言設定不支援這段文字，請到「設定 → Apple Intelligence 與 Siri」確認語言。"
+        }
+        if text.contains("assetsunavailable") { return "Apple Intelligence 模型尚未下載完成，請連上 Wi-Fi 並稍後再試。" }
+        if text.contains("ratelimited") { return "請求太頻繁，或 App 不在前景，請稍後再試。" }
+        if text.contains("refusal") { return "模型拒絕處理這段內容。" }
+        if text.contains("decodingfailure") { return "模型輸出無法對應到樣板結構，請簡化樣板後再試。" }
+        return nil
+    }
+}
 
 /// 結構化抽取引擎。目前實作為裝置端 Foundation Models；未來可加入其他模型提供者。
 protocol StructuredExtractor {
@@ -185,11 +246,13 @@ protocol StructuredExtractor {
 enum StructuredExtractionError: LocalizedError {
     case unavailable(String)
     case invalidOutput
+    case generation(String)
 
     var errorDescription: String? {
         switch self {
         case .unavailable(let reason): return reason
         case .invalidOutput: return "模型輸出的格式不正確，請再試一次。"
+        case .generation(let detail): return detail
         }
     }
 }

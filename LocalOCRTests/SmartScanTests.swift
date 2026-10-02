@@ -111,6 +111,31 @@ final class SmartScanTests: XCTestCase {
         )
     }
 
+    // MARK: - 錯誤說明
+
+    func testAIErrorHints() {
+        XCTAssertEqual(AIErrorDescriber.hint(for: "exceededContextWindowSize(Context(...))"), "文字太長，超過裝置端模型可處理的長度。")
+        XCTAssertEqual(AIErrorDescriber.hint(for: "LanguageModelError.contextSizeExceeded"), "文字太長，超過裝置端模型可處理的長度。")
+        XCTAssertEqual(AIErrorDescriber.hint(for: "guardrailViolation(Context(debugDescription: \"x\"))"), "內容觸發了 Apple Intelligence 的安全機制。")
+        XCTAssertNil(AIErrorDescriber.hint(for: "unknownError(Context(debugDescription: \"x\"))"))
+        XCTAssertNotNil(AIErrorDescriber.hint(for: "unsupportedLanguageOrLocale(...)"))
+        XCTAssertNotNil(AIErrorDescriber.hint(for: "assetsUnavailable(...)"))
+        XCTAssertNil(AIErrorDescriber.hint(for: "something else"))
+    }
+
+    func testAIErrorDescriptionIncludesLocalizedParts() {
+        struct Sample: LocalizedError {
+            var errorDescription: String? { "生成失敗" }
+            var failureReason: String? { "原因" }
+            var recoverySuggestion: String? { "建議" }
+        }
+        XCTAssertEqual(AIErrorDescriber.describe(Sample()), "生成失敗\n原因\n建議")
+        XCTAssertEqual(
+            StructuredExtractionError.generation("詳細說明").localizedDescription,
+            "詳細說明"
+        )
+    }
+
     // MARK: - 伺服器格式
 
     func testNormalizedServerURL() {

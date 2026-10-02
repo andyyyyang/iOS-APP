@@ -12,18 +12,30 @@ struct LiveScanView: View {
     @State private var collected: [String] = []
     @State private var toast: String?
     @State private var feedbackTrigger = 0
+    @State private var captureModel = ScanViewModel()
+    @State private var isCapturing = false
+    @State private var showsTextAnalysis = false
 
     var body: some View {
         NavigationStack {
             content
                 .navigationTitle("即時掃描")
                 .navigationBarTitleDisplayMode(.inline)
+                // 推入結果頁或切換分頁時移除掃描器，釋放相機
+                .onAppear {
+                    isVisible = true
+                    cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+                }
+                .onDisappear { isVisible = false }
+                .navigationDestination(item: $captureModel.session) { session in
+                    ResultView(session: session)
+                }
         }
-        .onAppear {
-            isVisible = true
-            cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        .sheet(isPresented: $showsTextAnalysis) {
+            NavigationStack {
+                SmartAnalysisView(text: collectedText, source: .liveScanner)
+            }
         }
-        .onDisappear { isVisible = false }
         .toast($toast)
         .sensoryFeedback(.selection, trigger: feedbackTrigger)
     }
@@ -59,7 +71,6 @@ struct LiveScanView: View {
 
     private var scanner: some View {
         ZStack(alignment: .bottom) {
-            // 切換到其他分頁時移除掃描器，釋放相機
             if isVisible {
                 DataScannerRepresentable(languages: scannerLanguages, bridge: bridge) { text in
                     add([text])
@@ -68,12 +79,33 @@ struct LiveScanView: View {
             }
             collectedPanel
         }
+        .overlay {
+            if isCapturing || captureModel.isProcessing {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在辨識並交給 Apple Intelligence 分析…")
+                        .font(.subheadline)
+                }
+                .padding(24)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+            }
+        }
     }
 
     private var collectedPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Button {
+                Task { await captureAndAnalyze() }
+            } label: {
+                Label("拍照並用 Apple Intelligence 分析", systemImage: "camera.aperture")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(isCapturing || captureModel.isProcessing)
+
             if collected.isEmpty {
-                Text("點選畫面中標示的文字即可加入，或按「擷取全部」。")
+                Text("或點選畫面中標示的文字加入清單，再按「分析文字」。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -91,11 +123,18 @@ struct LiveScanView: View {
                 } label: {
                     Label("擷取全部", systemImage: "text.viewfinder")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
 
                 Spacer()
 
                 Group {
+                    Button {
+                        showsTextAnalysis = true
+                    } label: {
+                        Image(systemName: "wand.and.stars")
+                    }
+                    .accessibilityLabel("分析文字")
+
                     Button {
                         UIPasteboard.general.string = collectedText
                         toast = "已複製"
@@ -177,6 +216,22 @@ struct LiveScanView: View {
         modelContext.insert(record)
         try? modelContext.save()
         toast = "已儲存到紀錄"
+    }
+
+    /// 以掃描器拍一張照片，走與相簿相同的完整流程：OCR → 判斷情境 → Apple Intelligence 產生 JSON。
+    @MainActor
+    private func captureAndAnalyze() async {
+        isCapturing = true
+        defer { isCapturing = false }
+        do {
+            let image = try await bridge.capturePhoto()
+            await captureModel.process([image], source: .liveScanner)
+            if case .failed(let message) = captureModel.phase {
+                toast = message
+            }
+        } catch {
+            toast = "無法拍照：\(error.localizedDescription)"
+        }
     }
 
     @MainActor

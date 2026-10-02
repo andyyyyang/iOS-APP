@@ -140,6 +140,12 @@ struct SmartResultPanel: View {
                     Text("辨識文字仍會保存；上傳到伺服器後，也可以由接入的 harness 透過 MCP 產生並回寫 JSON。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    NavigationLink {
+                        AIDiagnosticsView()
+                    } label: {
+                        Label("查看 Apple Intelligence 診斷", systemImage: "stethoscope")
+                            .font(.subheadline.weight(.medium))
+                    }
                 }
                 .card()
             }

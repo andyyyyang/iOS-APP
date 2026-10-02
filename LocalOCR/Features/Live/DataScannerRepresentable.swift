@@ -4,6 +4,14 @@ import VisionKit
 /// 保存掃描器目前畫面中辨識到的文字，讓 SwiftUI 端可以隨時「擷取全部」。
 final class LiveScannerBridge {
     fileprivate var currentItems: [RecognizedItem] = []
+    fileprivate weak var scanner: DataScannerViewController?
+
+    /// 以掃描器目前的畫面拍一張高解析度照片。
+    @MainActor
+    func capturePhoto() async throws -> UIImage {
+        guard let scanner else { throw OCRError.invalidImage }
+        return try await scanner.capturePhoto()
+    }
 
     /// 目前畫面中的文字，依閱讀順序排列。
     func currentTexts() -> [String] {
@@ -43,6 +51,7 @@ struct DataScannerRepresentable: UIViewControllerRepresentable {
             isHighlightingEnabled: true
         )
         scanner.delegate = context.coordinator
+        bridge.scanner = scanner
         return scanner
     }
 

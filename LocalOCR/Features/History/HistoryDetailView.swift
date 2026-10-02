@@ -9,6 +9,7 @@ struct HistoryDetailView: View {
     @State private var toast: String?
     @State private var feedbackTrigger = 0
     @State private var isUploading = false
+    @State private var showsAnalysis = false
 
     var body: some View {
         ScrollView {
@@ -17,6 +18,7 @@ struct HistoryDetailView: View {
                 if let json = record.jsonText {
                     jsonCard(json)
                 }
+                analyzeButton
                 textCard
                 syncCard
             }
@@ -32,6 +34,11 @@ struct HistoryDetailView: View {
         }
         .toast($toast)
         .sensoryFeedback(.success, trigger: feedbackTrigger)
+        .sheet(isPresented: $showsAnalysis) {
+            NavigationStack {
+                SmartAnalysisView(text: record.text, source: ScanSource(rawValue: record.source) ?? .pasteboard, record: record)
+            }
+        }
         .onChange(of: record.text) { _, _ in
             record.syncedAt = nil
         }
@@ -59,6 +66,18 @@ struct HistoryDetailView: View {
             }
         }
         .card()
+    }
+
+    private var analyzeButton: some View {
+        Button {
+            showsAnalysis = true
+        } label: {
+            Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "wand.and.stars")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(record.text.isEmpty)
     }
 
     private func jsonCard(_ json: String) -> some View {
