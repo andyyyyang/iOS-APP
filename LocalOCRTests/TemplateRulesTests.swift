@@ -23,19 +23,20 @@ final class TemplateRulesTests: XCTestCase {
         let conformed = try JSONValue.parse(extracted).conformed(to: template.sample)
         return TemplateRules.apply(template.rules, to: conformed, now: fixedDate, makeID: { "testid00001" })
             .conformed(to: template.sample)
+            .removingHelperFields()
     }
 
     func testBundledFV60TemplatesLoad() {
         XCTAssertEqual(sea.name, "FV60 海運請款（義佳，三家發票）")
-        XCTAssertEqual(air.rules.count, 12)
-        XCTAssertEqual(sea.rules.count, 14)
+        XCTAssertEqual(air.rules.count, 13)
+        XCTAssertEqual(sea.rules.count, 15)
         XCTAssertEqual(sea.origin, .builtIn)
     }
 
     func testSeaRulesReproduceRecord() throws {
         // 2026-09-29 的 JT2609240：AI 讀出三張發票（名稱刻意寫錯，應依統編校正）
         let extracted = #"""
-        {"osat":"ATK","caseNo":"JT2609240","billNo":"E1509008","qty":34841,"taxItems":[
+        {"osat":"ATK","caseNo":"JT2609240","billNo":"E1509008","_declarationQuantities":[20000,14841],"taxItems":[
           {"name":"樂爾幸","invDate":"2026-09-04","invoice":"FR83149979","taxId":"28006223","taxBase":11020,"taxAmount":551},
           {"name":"義佳有限公司","invDate":"2026-09-03","invoice":"ED17531516","taxId":"22368445","taxBase":1000,"taxAmount":50},
           {"name":"","invDate":"2026-09-03","invoice":"ED17316511","taxId":"12762783","taxBase":500,"taxAmount":25}]}
@@ -47,7 +48,7 @@ final class TemplateRulesTests: XCTestCase {
 
     func testAirRulesReproduceRecord() throws {
         // 2026-09-29 的 JT2609260（萬泰物流 SCK）
-        let extracted = #"{"osat":"SCK","caseNo":"JT2609260","invoice":"FR14077356","invDate":"2026-09-22","amount":1556,"qty":1200}"#
+        let extracted = #"{"osat":"SCK","caseNo":"JT2609260","invoice":"FR14077356","invDate":"2026-09-22","amount":1556,"_declarationQuantities":["1,200"]}"#
         let result = try apply(air, to: extracted)
         let expected = #"{"id":"testid00001","date":"2026-09-29","supplier":"801988","supplierName":"萬泰物流","osat":"SCK","caseNo":"JT2609260","billNo":"","invoice":"FR14077356","invDate":"2026-09-22","amount":1556,"expenseAmount":1556,"isMultiItem":false,"taxItems":[],"qty":1200,"price":1.297,"text":"出口/SCK/JT2609260","docNo":"","done":false}"#
         XCTAssertEqual(result.compactString, expected)
@@ -55,21 +56,26 @@ final class TemplateRulesTests: XCTestCase {
 
     func testMissingQuantityLeavesPriceNull() throws {
         let result = try apply(air, to: #"{"osat":"ATK","caseNo":"JT2609248","invoice":"FR14077199","invDate":"2026-09-21","amount":12172}"#)
+        XCTAssertEqual(result["qty"], .null)
         XCTAssertEqual(result["price"], .null)
         XCTAssertEqual(result["expenseAmount"], .number(12172))
+        XCTAssertNil(result["_declarationQuantities"], "輔助欄位不應出現在輸出")
     }
 
     func testMultiPageMergeThenRules() throws {
-        // 第 1 頁：義佳請款單；第 2～4 頁：三張發票；第 5 頁：重複掃到第 2 頁
+        // 第 1 頁：義佳請款單；第 2～4 頁：三張發票；第 5 頁：重複掃到第 2 頁；第 6、7 頁：報單（第 7 頁重複掃描）
         let pages = [
-            #"{"osat":"ATK","caseNo":"JT2609245","billNo":"E1509025","qty":34841,"taxItems":[]}"#,
+            #"{"osat":"ATK","caseNo":"JT2609245","billNo":"E1509025","taxItems":[],"_declarationQuantities":[]}"#,
             #"{"osat":null,"caseNo":"JT2609245","taxItems":[{"invDate":"2026-09-09","invoice":"FR83150095","taxId":"28006223","taxBase":9660,"taxAmount":483}]}"#,
             #"{"taxItems":[{"invDate":"2026-09-08","invoice":"ED17531542","taxId":"22368445","taxBase":1000,"taxAmount":50}]}"#,
             #"{"taxItems":[{"invDate":"2026-09-08","invoice":"ED17316531","taxId":"12762783","taxBase":500,"taxAmount":25}]}"#,
             #"{"taxItems":[{"invDate":"2026-09-09","invoice":"FR83150095","taxId":"28006223","taxBase":9660,"taxAmount":483}]}"#,
+            #"{"_declarationQuantities":[30000,4841]}"#,
+            #"{"_declarationQuantities":[30000,4841]}"#,
         ].map { try! JSONValue.parse($0).conformed(to: sea.sample) }
         let merged = JSONValue.merged(pages, sample: sea.sample)
         let result = TemplateRules.apply(sea.rules, to: merged, now: fixedDate, makeID: { "x" })
+        XCTAssertEqual(result["qty"], .number(34841), "重複掃描的報單頁不應重複加總")
         XCTAssertEqual(result["billNo"]?.stringValue, "E1509025")
         XCTAssertEqual(result["osat"]?.stringValue, "ATK")
         XCTAssertEqual(result["invoice"]?.stringValue, "FR83150095 / ED17531542 / ED17316531")
@@ -82,9 +88,21 @@ final class TemplateRulesTests: XCTestCase {
 
     func testRuleTargetsExcludeArrayPaths() {
         let targets = TemplateRules.topLevelTargets(of: sea.rules)
-        XCTAssertTrue(targets.isSuperset(of: ["id", "amount", "invoice", "price", "text"]))
+        XCTAssertTrue(targets.isSuperset(of: ["id", "amount", "invoice", "qty", "price", "text"]))
+        XCTAssertFalse(targets.contains("_declarationQuantities"))
         XCTAssertFalse(targets.contains("taxItems"))
         XCTAssertFalse(targets.contains("osat"))
+    }
+
+    func testDeclarationItemsWithSameQuantityAreBothCounted() throws {
+        // 同一張報單上兩個品項數量相同，都要加總
+        let pages = [
+            #"{"_declarationQuantities":[1000,1000]}"#,
+            #"{"taxItems":[{"invoice":"FR14077356","taxId":"28006223","taxBase":3000,"taxAmount":150}]}"#,
+        ].map { try! JSONValue.parse($0).conformed(to: sea.sample) }
+        let result = TemplateRules.apply(sea.rules, to: JSONValue.merged(pages, sample: sea.sample), now: fixedDate, makeID: { "x" })
+        XCTAssertEqual(result["qty"], .number(2000))
+        XCTAssertEqual(result["price"], .number(1.575))
     }
 
     func testOnlyIfEmptyAndValidation() throws {

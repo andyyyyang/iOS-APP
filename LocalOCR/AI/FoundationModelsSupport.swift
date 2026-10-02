@@ -171,7 +171,7 @@ struct FoundationModelsExtractor: StructuredExtractor {
             throw StructuredExtractionError.generation(AIErrorDescriber.describe(lastError))
         }
         let merged = JSONValue.merged(results, sample: sample)
-        return TemplateRules.apply(rules, to: merged).conformed(to: sample)
+        return TemplateRules.apply(rules, to: merged).conformed(to: sample).removingHelperFields()
     }
 
     private func extractPage(

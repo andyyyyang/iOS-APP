@@ -1,8 +1,19 @@
 {
   "id": "fv60_sea",
   "name": "FV60 海運請款（義佳，三家發票）",
-  "description": "義佳有限公司（供應商 800000）的海運出口請款文件，通常多頁，包含三家公司的統一發票：樂爾幸泛通世、義佳、貳零零；含請款單號、各發票號碼、發票日期、統一編號、銷售額與稅額",
-  "keywords": ["義佳", "海運", "泛通世", "樂爾幸", "貳零零", "提單", "B/L", "OCEAN", "請款單", "海運費"],
+  "description": "義佳有限公司（供應商 800000）的海運出口請款文件，通常多頁，包含三家公司的統一發票：樂爾幸泛通世、義佳、貳零零；含請款單號、各發票號碼、發票日期、統一編號、銷售額與稅額；通常與出口報單一起掃描，出貨數量取自報單",
+  "keywords": [
+    "義佳",
+    "海運",
+    "泛通世",
+    "樂爾幸",
+    "貳零零",
+    "提單",
+    "B/L",
+    "OCEAN",
+    "請款單",
+    "海運費"
+  ],
   "sample": {
     "id": "mum0takt3q2",
     "date": "2026-09-29",
@@ -30,27 +41,89 @@
     "price": 0.377,
     "text": "出口/ATK/JT2609240",
     "docNo": "",
-    "done": false
+    "done": false,
+    "_declarationQuantities": [
+      34841
+    ]
   },
-  "instructions": "taxItems：每一張統一發票一筆，通常有三家：樂爾幸泛通世（統一編號 28006223）、義佳（22368445）、貳零零（12762783）。每筆填 invoice（兩個英文字母加 8 位數字）、invDate（發票日期 YYYY-MM-DD，民國年換算西元，115 年 = 2026 年）、taxId（賣方統一編號 8 碼）、taxBase（銷售額／未稅金額，數字）、taxAmount（營業稅額，數字）。非發票的頁面（請款單、提單）不要產生 taxItems。billNo：義佳請款單號（例如 E1509008 或 YJ2607400）。caseNo：出口案號，JT 開頭加 7 位數字。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。qty：出貨數量，找不到填 null。",
+  "instructions": "taxItems：每一張統一發票一筆，通常有三家：樂爾幸泛通世（統一編號 28006223）、義佳（22368445）、貳零零（12762783）。每筆填 invoice（兩個英文字母加 8 位數字）、invDate（發票日期 YYYY-MM-DD，民國年換算西元，115 年 = 2026 年）、taxId（賣方統一編號 8 碼）、taxBase（銷售額／未稅金額，數字）、taxAmount（營業稅額，數字）。非發票的頁面（請款單、提單）不要產生 taxItems。billNo：義佳請款單號（例如 E1509008 或 YJ2607400）。caseNo：出口案號，JT 開頭加 7 位數字。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
   "rules": [
-    { "set": "id", "generate": "base36time" },
-    { "set": "date", "today": true },
-    { "set": "supplier", "value": "800000" },
-    { "set": "supplierName", "value": "義佳有限公司" },
+    {
+      "set": "id",
+      "generate": "base36time"
+    },
+    {
+      "set": "date",
+      "today": true
+    },
+    {
+      "set": "supplier",
+      "value": "800000"
+    },
+    {
+      "set": "supplierName",
+      "value": "義佳有限公司"
+    },
     {
       "set": "taxItems[].name",
       "lookup": "taxId",
-      "table": { "28006223": "樂爾幸泛通世", "22368445": "義佳", "12762783": "貳零零" }
+      "table": {
+        "28006223": "樂爾幸泛通世",
+        "22368445": "義佳",
+        "12762783": "貳零零"
+      }
     },
-    { "set": "isMultiItem", "value": true },
-    { "set": "invoice", "join": "taxItems[].invoice", "separator": " / " },
-    { "set": "expenseAmount", "sum": ["taxItems[].taxBase"] },
-    { "set": "amount", "sum": ["taxItems[].taxBase", "taxItems[].taxAmount"] },
-    { "set": "invDate", "copy": "date" },
-    { "set": "price", "divide": ["amount", "qty"], "round": 3 },
-    { "set": "text", "template": "出口/{osat}/{caseNo}" },
-    { "set": "docNo", "value": "" },
-    { "set": "done", "value": false }
+    {
+      "set": "isMultiItem",
+      "value": true
+    },
+    {
+      "set": "invoice",
+      "join": "taxItems[].invoice",
+      "separator": " / "
+    },
+    {
+      "set": "expenseAmount",
+      "sum": [
+        "taxItems[].taxBase"
+      ]
+    },
+    {
+      "set": "amount",
+      "sum": [
+        "taxItems[].taxBase",
+        "taxItems[].taxAmount"
+      ]
+    },
+    {
+      "set": "invDate",
+      "copy": "date"
+    },
+    {
+      "set": "qty",
+      "sum": [
+        "_declarationQuantities[]"
+      ]
+    },
+    {
+      "set": "price",
+      "divide": [
+        "amount",
+        "qty"
+      ],
+      "round": 3
+    },
+    {
+      "set": "text",
+      "template": "出口/{osat}/{caseNo}"
+    },
+    {
+      "set": "docNo",
+      "value": ""
+    },
+    {
+      "set": "done",
+      "value": false
+    }
   ]
 }

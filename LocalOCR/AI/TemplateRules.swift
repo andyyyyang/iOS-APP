@@ -14,6 +14,9 @@ import Foundation
 /// - `generate`："base36time"：時間戳記 id
 /// - `lookup` + `table`：依同一層的欄位值對照設定
 /// - `onlyIfEmpty`：目標已有值時不覆寫
+///
+/// 路徑可為 `field`、`array[].field` 或純值陣列 `array[]`。以 `_` 開頭的頂層欄位是輔助欄位：
+/// 由 AI 擷取、供規則計算，最後會從輸出移除（例如報單各品項數量 → 加總成 qty）。
 enum TemplateRules {
     /// 規則會設定的頂層欄位；這些欄位不需要 AI 產生。
     static func topLevelTargets(of rules: [JSONValue]) -> Set<String> {
@@ -139,6 +142,10 @@ enum TemplateRules {
     }
 
     private static func values(at path: String, in members: [(key: String, value: JSONValue)]) -> [JSONValue] {
+        // "quantities[]"：純值陣列的所有元素
+        if path.hasSuffix("[]"), !path.contains("[]."), case .array(let elements)? = value(of: String(path.dropLast(2)), in: members) {
+            return elements
+        }
         if let (arrayKey, field) = splitArrayPath(path) {
             guard case .array(let elements)? = value(of: arrayKey, in: members) else { return [] }
             return elements.compactMap { $0[field] }
@@ -224,21 +231,37 @@ extension JSONValue {
             return .object(sampleMembers.map { member in
                 (key: member.key, value: merged(values.compactMap { $0[member.key] }, sample: member.value))
             })
-        case .array:
-            var seen = Set<String>()
+        case .array(let sampleElements):
             var combined: [JSONValue] = []
-            for value in values {
-                guard case .array(let elements) = value else { continue }
-                for element in elements where !element.isBlank {
-                    if seen.insert(element.compactString).inserted {
+            if case .object? = sampleElements.first {
+                // 物件項目（例如每張發票）：逐項去除重複，避免同一頁掃兩次重複計入
+                var seen = Set<String>()
+                for value in values {
+                    guard case .array(let elements) = value else { continue }
+                    for element in elements where !element.isBlank && seen.insert(element.compactString).inserted {
                         combined.append(element)
                     }
+                }
+            } else {
+                // 純值項目（例如報單各品項數量）：同一頁內的相同數值都要保留，只略過整頁重複的結果
+                var seenPages = Set<String>()
+                for value in values {
+                    guard case .array(let elements) = value else { continue }
+                    let kept = elements.filter { !$0.isBlank }
+                    guard !kept.isEmpty, seenPages.insert(JSONValue.array(kept).compactString).inserted else { continue }
+                    combined.append(contentsOf: kept)
                 }
             }
             return .array(combined)
         default:
             return values.first { !$0.isBlank } ?? .null
         }
+    }
+
+    /// 移除以 `_` 開頭的頂層輔助欄位：它們只提供給規則計算，不屬於輸出格式。
+    func removingHelperFields() -> JSONValue {
+        guard case .object(let members) = self else { return self }
+        return .object(members.filter { !$0.key.hasPrefix("_") })
     }
 
     /// null、空字串、空陣列，或所有欄位都是空值的物件。

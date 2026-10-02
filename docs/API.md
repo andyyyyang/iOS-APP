@@ -68,7 +68,9 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 
 #### 計算規則（rules）
 
-金額加總、串接、固定值這類計算交給程式，AI 只讀出文件上印的內容。規則依序執行，`set` 是目標欄位（`field` 或 `array[].field`）；規則設定的頂層欄位不會交給 AI 產生。
+金額加總、串接、固定值這類計算交給程式，AI 只讀出文件上印的內容。規則依序執行，`set` 是目標欄位（`field` 或 `array[].field`）；規則設定的頂層欄位不會交給 AI 產生。來源路徑另可使用純值陣列 `array[]`。
+
+**輔助欄位**：`sample` 中以 `_` 開頭的頂層欄位由 AI 擷取、只供規則計算，最後會從輸出移除，`validate_data` 也不要求它們。例如 FV60 的 `_declarationQuantities` 是出口報單上各品項的數量，規則 `{"set":"qty","sum":["_declarationQuantities[]"]}` 加總成 `qty`。
 
 | 運算 | 範例 | 說明 |
 | --- | --- | --- |
@@ -83,7 +85,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `lookup` | `{"set":"taxItems[].name","lookup":"taxId","table":{"22368445":"義佳"}}` | 依同一層欄位對照 |
 | `onlyIfEmpty` | `{"set":"note","value":"—","onlyIfEmpty":true}` | 已有值時不覆寫 |
 
-多頁文件逐頁抽取後合併：單一值取第一個非空值，陣列依頁序串接並去除空白與重複項目，最後才套用規則。
+多頁文件逐頁抽取後合併：單一值取第一個非空值；物件陣列依頁序串接並去除空白與重複項目；純值陣列只略過整頁重複的結果（同一頁的相同數值都保留）。最後套用規則並移除輔助欄位。
 
 ### Scan（掃描紀錄）
 

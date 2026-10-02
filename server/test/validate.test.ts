@@ -33,6 +33,14 @@ describe("validateAgainstSample", () => {
     ]);
   });
 
+  it("treats helper keys starting with _ as optional inputs", () => {
+    const sample = { qty: 1, _declarationQuantities: [1] };
+    expect(validateAgainstSample({ qty: 34841 }, sample)).toEqual({ valid: true, issues: [] });
+    expect(validateAgainstSample({ qty: 1, _declarationQuantities: ["x"] }, sample).issues).toEqual([
+      { path: "$._declarationQuantities[0]", message: expect.stringContaining("Expected number") },
+    ]);
+  });
+
   it("reports wrong types", () => {
     const result = validateAgainstSample({ ...validReceipt, total: "45", items: {} }, receiptSample);
     expect(result.issues).toEqual([

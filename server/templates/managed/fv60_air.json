@@ -1,8 +1,17 @@
 {
   "id": "fv60_air",
   "name": "FV60 空運請款（萬泰物流）",
-  "description": "萬泰物流（供應商 801988）的空運出口運費發票：單一張統一發票，含發票號碼、發票日期、含稅總金額、出口案號（JT 開頭）與客戶（OSAT）",
-  "keywords": ["萬泰", "萬泰物流", "空運", "AIR", "AWB", "AIRWAY", "航空", "機場"],
+  "description": "萬泰物流（供應商 801988）的空運出口運費發票：單一張統一發票，含發票號碼、發票日期、含稅總金額、出口案號（JT 開頭）與客戶（OSAT）；通常與出口報單一起掃描，出貨數量取自報單",
+  "keywords": [
+    "萬泰",
+    "萬泰物流",
+    "空運",
+    "AIR",
+    "AWB",
+    "AIRWAY",
+    "航空",
+    "機場"
+  ],
   "sample": {
     "id": "mum0c2b04zd",
     "date": "2026-09-29",
@@ -21,21 +30,70 @@
     "price": 1.297,
     "text": "出口/SCK/JT2609260",
     "docNo": "",
-    "done": false
+    "done": false,
+    "_declarationQuantities": [
+      1200
+    ]
   },
-  "instructions": "invoice：統一發票號碼，兩個英文字母加 8 位數字（例如 FR14077356）。invDate：發票日期 YYYY-MM-DD，民國年請換算成西元（115 年 = 2026 年）。amount：發票總計（含稅）金額，數字。caseNo：出口案號，JT 開頭加 7 位數字（例如 JT2609260），可能有 -1 之類的後綴，多個案號以逗號分隔。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。qty：出貨數量（件數），找不到填 null。",
+  "instructions": "invoice：統一發票號碼，兩個英文字母加 8 位數字（例如 FR14077356）。invDate：發票日期 YYYY-MM-DD，民國年請換算成西元（115 年 = 2026 年）。amount：發票總計（含稅）金額，數字。caseNo：出口案號，JT 開頭加 7 位數字（例如 JT2609260），可能有 -1 之類的後綴，多個案號以逗號分隔。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
   "rules": [
-    { "set": "id", "generate": "base36time" },
-    { "set": "date", "today": true },
-    { "set": "supplier", "value": "801988" },
-    { "set": "supplierName", "value": "萬泰物流" },
-    { "set": "billNo", "value": "" },
-    { "set": "expenseAmount", "copy": "amount" },
-    { "set": "isMultiItem", "value": false },
-    { "set": "taxItems", "value": [] },
-    { "set": "price", "divide": ["amount", "qty"], "round": 3 },
-    { "set": "text", "template": "出口/{osat}/{caseNo}" },
-    { "set": "docNo", "value": "" },
-    { "set": "done", "value": false }
+    {
+      "set": "id",
+      "generate": "base36time"
+    },
+    {
+      "set": "date",
+      "today": true
+    },
+    {
+      "set": "supplier",
+      "value": "801988"
+    },
+    {
+      "set": "supplierName",
+      "value": "萬泰物流"
+    },
+    {
+      "set": "billNo",
+      "value": ""
+    },
+    {
+      "set": "expenseAmount",
+      "copy": "amount"
+    },
+    {
+      "set": "isMultiItem",
+      "value": false
+    },
+    {
+      "set": "taxItems",
+      "value": []
+    },
+    {
+      "set": "qty",
+      "sum": [
+        "_declarationQuantities[]"
+      ]
+    },
+    {
+      "set": "price",
+      "divide": [
+        "amount",
+        "qty"
+      ],
+      "round": 3
+    },
+    {
+      "set": "text",
+      "template": "出口/{osat}/{caseNo}"
+    },
+    {
+      "set": "docNo",
+      "value": ""
+    },
+    {
+      "set": "done",
+      "value": false
+    }
   ]
 }

@@ -23,7 +23,8 @@ const childPath = (path: string, key: string) =>
 
 /**
  * Structurally validates `data` against a template `sample`:
- * - objects must have exactly the sample's keys (missing and unexpected keys are reported);
+ * - objects must have exactly the sample's keys (missing and unexpected keys are reported), except
+ *   helper keys starting with "_", which only feed template rules and are removed from final output;
  * - leaf types must match; `null` in data is always allowed; `null` in the sample means "string or null";
  * - arrays are checked element-wise against the sample's first element (an empty sample array allows anything).
  */
@@ -55,7 +56,7 @@ function check(data: unknown, sample: JsonValue, path: string, issues: Validatio
     const dataObject = data as Record<string, unknown>;
     for (const [key, sampleValue] of Object.entries(sampleObject)) {
       if (!Object.hasOwn(dataObject, key)) {
-        issues.push({ path: childPath(path, key), message: "Missing key" });
+        if (!key.startsWith("_")) issues.push({ path: childPath(path, key), message: "Missing key" });
         continue;
       }
       check(dataObject[key], sampleValue, childPath(path, key), issues);
