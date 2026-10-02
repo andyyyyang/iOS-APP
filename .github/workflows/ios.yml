@@ -1,0 +1,80 @@
+name: iOS CI
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Pick an iPhone simulator
+        id: simulator
+        run: |
+          xcrun simctl list devices available --json > devices.json
+          UDID=$(python3 - <<'PY'
+          import json, re
+          devices = json.load(open("devices.json"))["devices"]
+          best = None
+          for runtime, items in devices.items():
+              match = re.search(r"iOS-(\d+)-(\d+)", runtime)
+              if not match:
+                  continue
+              version = (int(match.group(1)), int(match.group(2)))
+              for device in items:
+                  if device.get("isAvailable") and device["name"].startswith("iPhone"):
+                      if best is None or version > best[0]:
+                          best = (version, device["udid"], device["name"])
+          print(best[1])
+          PY
+          )
+          echo "Using simulator $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests (iOS Simulator)
+        run: |
+          status=0
+          xcodebuild test \
+            -project LocalOCR.xcodeproj \
+            -scheme LocalOCR \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            > test.log 2>&1 || status=$?
+          grep -E "error:|warning:|Test Case .* (passed|failed)|Executed [0-9]+ test|\*\* TEST" test.log || true
+          exit $status
+
+      - name: Release build (device, unsigned)
+        run: |
+          status=0
+          xcodebuild build \
+            -project LocalOCR.xcodeproj \
+            -scheme LocalOCR \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            > build.log 2>&1 || status=$?
+          grep -E "error:|warning:|\*\* BUILD" build.log || true
+          exit $status
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-logs
+          path: |
+            test.log
+            build.log
+            TestResults.xcresult
+          if-no-files-found: ignore

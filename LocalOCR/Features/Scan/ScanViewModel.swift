@@ -1,0 +1,45 @@
+import Observation
+import UIKit
+
+@MainActor
+@Observable
+final class ScanViewModel {
+    enum Phase: Equatable {
+        case idle
+        case processing(current: Int, total: Int)
+        case failed(String)
+    }
+
+    var phase: Phase = .idle
+    /// 辨識完成後設定，畫面會導向結果頁。
+    var session: ScanSession?
+
+    var isProcessing: Bool {
+        if case .processing = phase { return true }
+        return false
+    }
+
+    func process(_ images: [UIImage], source: ScanSource) async {
+        guard !images.isEmpty, !isProcessing else { return }
+
+        // 每次辨識都讀取最新設定
+        let service = OCRService()
+        let start = Date()
+        var pages: [OCRPage] = []
+
+        do {
+            for (index, image) in images.enumerated() {
+                phase = .processing(current: index + 1, total: images.count)
+                pages.append(try await service.recognize(image))
+            }
+            phase = .idle
+            session = ScanSession(source: source, pages: pages, duration: Date().timeIntervalSince(start))
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
+    func fail(_ message: String) {
+        phase = .failed(message)
+    }
+}
