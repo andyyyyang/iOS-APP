@@ -1,0 +1,58 @@
+name: Server smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "伺服器網址"
+        default: "https://localocr-server-production.up.railway.app"
+        required: true
+
+jobs:
+  smoke:
+    name: Smoke test deployed server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: ${{ inputs.base_url }}
+      API_KEY: ${{ secrets.LOCALOCR_API_KEY }}
+    steps:
+      - name: Public checks
+        run: |
+          set -euo pipefail
+          echo "## Smoke test：$BASE_URL" >> "$GITHUB_STEP_SUMMARY"
+          health=$(curl -fsS "$BASE_URL/health")
+          echo "health: $health"
+          echo "- /health：\`$health\`" >> "$GITHUB_STEP_SUMMARY"
+          for path in /v1/templates /v1/scans; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL$path")
+            [ "$code" = "401" ] || { echo "::error::$path 未驗證時應回傳 401，實際為 $code"; exit 1; }
+          done
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/mcp" -H "Content-Type: application/json" -d '{}')
+          [ "$code" = "401" ] || { echo "::error::/mcp 未驗證時應回傳 401，實際為 $code"; exit 1; }
+          echo "- 未帶金鑰的 /v1 與 /mcp 都回傳 401" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Authenticated checks (needs LOCALOCR_API_KEY secret)
+        if: env.API_KEY != ''
+        run: |
+          set -euo pipefail
+          auth=(-H "Authorization: Bearer $API_KEY")
+          templates=$(curl -fsS "${auth[@]}" "$BASE_URL/v1/templates")
+          count=$(echo "$templates" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['items']))")
+          echo "templates: $count"
+          [ "$count" -ge 4 ] || { echo "::error::情境樣板少於 4 個"; exit 1; }
+
+          id=$(python3 -c "import uuid; print(str(uuid.uuid4()).upper())")
+          body=$(printf '{"id":"%s","createdAt":"2026-01-01T00:00:00.000Z","source":"pasteboard","text":"smoke test 合計 45","templateId":"receipt","data":{"store":"smoke","total":45}}' "$id")
+          curl -fsS "${auth[@]}" -X PUT -H "Content-Type: application/json" -d "$body" "$BASE_URL/v1/scans/$id" > /dev/null
+          curl -fsS "${auth[@]}" "$BASE_URL/v1/scans/$id" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['data']['total']==45, d"
+
+          init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+          curl -fsS "${auth[@]}" -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d "$init" "$BASE_URL/mcp" | head -c 300; echo
+          tools=$(curl -fsS "${auth[@]}" -X POST -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "$BASE_URL/mcp")
+          echo "$tools" | python3 -c "import json,sys; t=[x['name'] for x in json.load(sys.stdin)['result']['tools']]; print('tools:', t); assert len(t)>=9"
+
+          code=$(curl -s -o /dev/null -w "%{http_code}" "${auth[@]}" -X DELETE "$BASE_URL/v1/scans/$id")
+          [ "$code" = "204" ] || { echo "::error::刪除測試資料失敗：$code"; exit 1; }
+          echo "- 已驗證：樣板 $count 個、掃描新增／讀取／刪除、MCP initialize 與 tools/list" >> "$GITHUB_STEP_SUMMARY"
