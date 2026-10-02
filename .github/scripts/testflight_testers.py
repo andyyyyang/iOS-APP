@@ -61,14 +61,23 @@ def find_app() -> str:
 
 
 def wait_for_build(app_id: str) -> None:
+    """等待最新 build 處理完成；有 EXPECTED_BUILD 時等待這次上傳的 build 出現並處理完成。"""
+    expected = os.environ.get("EXPECTED_BUILD", "").strip()
     deadline = time.time() + 40 * 60
     while True:
-        builds = call(
-            "GET",
-            f"/builds?filter[app]={app_id}&sort=-uploadedDate&limit=1&fields[builds]=version,processingState,uploadedDate",
-        )["data"]
+        query = f"/builds?filter[app]={app_id}&sort=-uploadedDate&limit=1&fields[builds]=version,processingState,uploadedDate"
+        if expected:
+            query += f"&filter[version]={expected}"
+        builds = call("GET", query)["data"]
         if not builds:
-            sys.exit("::error::還沒有上傳任何 build")
+            if not expected:
+                sys.exit("::error::還沒有上傳任何 build")
+            if time.time() > deadline:
+                summary(f"- build {expected} 仍未出現在 App Store Connect，處理完成後群組成員會自動收到")
+                return
+            print(f"等待 build {expected} 出現在 App Store Connect…")
+            time.sleep(60)
+            continue
         attributes = builds[0]["attributes"]
         state = attributes["processingState"]
         print(f"最新 build {attributes['version']}：{state}")
@@ -141,12 +150,20 @@ def add_testers(app_id: str, group_id: str) -> None:
         user for user in users
         if {"ACCOUNT_HOLDER", "ADMIN"} & set(user["attributes"].get("roles") or [])
     ]
-    assigned = invited = 0
+    members_before = {
+        (tester["attributes"].get("email") or "").lower()
+        for tester in call("GET", f"/betaGroups/{group_id}/betaTesters?limit=200&fields[betaTesters]=email")["data"]
+    }
+    assigned = invited = already = 0
     failures: list[str] = []
     for user in targets:
         attributes = user["attributes"]
         email = attributes["username"]
         print(f"::add-mask::{email}")
+        if email.lower() in members_before:
+            # 已在群組中：可存取所有 build 的內部群組會自動收到新版本，不需再邀請
+            already += 1
+            continue
         try:
             tester_id = assign(app_id, group_id, email, attributes.get("firstName") or "", attributes.get("lastName") or "")
             assigned += 1
@@ -169,7 +186,7 @@ def add_testers(app_id: str, group_id: str) -> None:
             print(f"未另外寄送邀請：{error}")
 
     members = group_tester_count(group_id)
-    summary(f"- 帳號持有人／管理員 {len(targets)} 位：成功加入 {assigned} 位，另外寄出 {invited} 封邀請")
+    summary(f"- 帳號持有人／管理員 {len(targets)} 位：已在群組 {already} 位、新加入 {assigned} 位、寄出 {invited} 封邀請")
     summary(f"- 「內部測試」群組目前有 **{members}** 位測試人員")
     for failure in failures:
         summary(f"  - 加入失敗：{failure}")
@@ -183,7 +200,7 @@ def main() -> None:
     group_id = internal_group(app_id)
     add_testers(app_id, group_id)
     summary("")
-    summary("請到 Apple ID 的信箱打開 TestFlight 邀請信，在 iPhone 上點「在 TestFlight 中檢視」，或在 TestFlight App 輸入信中的兌換碼。")
+    summary("已在群組的測試人員會在 TestFlight App 收到新版本通知；新加入的人請打開 TestFlight 邀請信，或在 TestFlight App 輸入信中的兌換碼。")
 
 
 if __name__ == "__main__":
