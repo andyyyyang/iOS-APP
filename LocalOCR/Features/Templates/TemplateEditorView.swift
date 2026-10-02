@@ -7,10 +7,22 @@ struct TemplateEditorView: View {
 
     @State private var draft: ScanTemplate
     @State private var keywordsText: String
+    @State private var rulesText: String
 
     init(template: ScanTemplate) {
         _draft = State(initialValue: template)
         _keywordsText = State(initialValue: template.keywords.joined(separator: "、"))
+        _rulesText = State(initialValue: template.rules.isEmpty ? "" : JSONValue.array(template.rules).prettyPrinted())
+    }
+
+    private var rulesError: String? {
+        let trimmed = rulesText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        do {
+            return TemplateRules.validate(try JSONValue.parse(trimmed))
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     private var sampleResult: Result<JSONValue, Error> {
@@ -29,6 +41,7 @@ struct TemplateEditorView: View {
         !draft.name.trimmingCharacters(in: .whitespaces).isEmpty
             && ScanTemplate.isValidID(draft.id)
             && sampleError == nil
+            && rulesError == nil
     }
 
     var body: some View {
@@ -77,6 +90,23 @@ struct TemplateEditorView: View {
             }
 
             Section {
+                TextEditor(text: $rulesText)
+                    .font(.system(.footnote, design: .monospaced))
+                    .frame(minHeight: 120)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if let rulesError {
+                    Label(rulesError, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("計算規則（進階，選填）")
+            } footer: {
+                Text("AI 擷取後由程式計算的欄位，例如 [{\"set\":\"total\",\"sum\":[\"items[].price\"]}]。支援 value、copy、template、sum、join、divide、today、generate、lookup。")
+            }
+
+            Section {
                 TextField("代碼", text: $draft.id)
                     .font(.body.monospaced())
                     .textInputAutocapitalization(.never)
@@ -107,6 +137,8 @@ struct TemplateEditorView: View {
                     if case .success(let value) = sampleResult {
                         draft.sampleJSON = value.compactString
                     }
+                    let rules = rulesText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    draft.rulesJSON = rules.isEmpty ? nil : (try? JSONValue.parse(rules))?.compactString
                     library.saveCustom(draft)
                     dismiss()
                 }

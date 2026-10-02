@@ -22,10 +22,10 @@ final class TemplateLibrary {
     /// 合併後的所有情境，內建情境在前。
     var all: [ScanTemplate] {
         var merged: [String: ScanTemplate] = [:]
-        for template in ScanTemplate.builtIns + serverTemplates + customTemplates {
+        for template in ScanTemplate.builtIns + ScanTemplate.bundled + serverTemplates + customTemplates {
             merged[template.id] = template
         }
-        let builtInIDs = ScanTemplate.builtIns.map(\.id)
+        let builtInIDs = ScanTemplate.builtIns.map(\.id) + ScanTemplate.bundled.map(\.id)
         let extras = merged.values
             .filter { !builtInIDs.contains($0.id) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }

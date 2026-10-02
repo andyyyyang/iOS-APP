@@ -55,13 +55,35 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `description` | 情境描述；分類器（Jev 的 choice criteria、裝置端模型）依此判斷 |
 | `keywords` | 選用；離線時的關鍵字分類備援 |
 | `sample` | **輸出樣式的範例 JSON**：輸出會有相同的欄位、巢狀結構、陣列形式與欄位順序。字串、數字、布林、陣列（以第一個元素為格式）、物件、`null`（代表可為空的字串）皆可 |
-| `instructions` | 選用；額外的抽取規則 |
+| `instructions` | 選用；給 AI 的額外抽取說明 |
+| `rules` | 選用；AI 抽取後由程式套用的計算規則（見下方），回傳時一律為陣列 |
 | `version` | 伺服器每次更新自動加一 |
 | `updatedAt` | 伺服器設定，ISO 8601 |
 
 `sample` 的欄位順序必須保留：伺服器以文字儲存原始 JSON（不可用 Postgres `jsonb`，它會重排鍵值）。
 
 內建樣板：`receipt`（收據／發票）、`business_card`（名片）、`event`（活動／海報）、`document`（一般文件，作為無法判斷時的預設）。
+
+受管理樣板：`server/templates/managed/*.json`（每個檔案是一個完整樣板）。伺服器啟動時若內容與資料庫不同就更新，repo 是唯一來源；App 也內附同一份（`LocalOCR/Resources/ManagedTemplates`，CI 檢查兩者一致）。目前有 `fv60_air`（FV60 空運請款）與 `fv60_sea`（FV60 海運請款，三家發票）。
+
+#### 計算規則（rules）
+
+金額加總、串接、固定值這類計算交給程式，AI 只讀出文件上印的內容。規則依序執行，`set` 是目標欄位（`field` 或 `array[].field`）；規則設定的頂層欄位不會交給 AI 產生。
+
+| 運算 | 範例 | 說明 |
+| --- | --- | --- |
+| `value` | `{"set":"supplier","value":"800000"}` | 固定值 |
+| `copy` | `{"set":"expenseAmount","copy":"amount"}` | 複製欄位 |
+| `template` | `{"set":"text","template":"出口/{osat}/{caseNo}"}` | 代入欄位的字串 |
+| `sum` | `{"set":"amount","sum":["taxItems[].taxBase","taxItems[].taxAmount"]}` | 加總 |
+| `join` | `{"set":"invoice","join":"taxItems[].invoice","separator":" / "}` | 串接 |
+| `divide` | `{"set":"price","divide":["amount","qty"],"round":3}` | 除法（分母為 0 或空值時為 null） |
+| `today` | `{"set":"date","today":true}` | 今天（YYYY-MM-DD） |
+| `generate` | `{"set":"id","generate":"base36time"}` | 時間戳記 id（例如 `mum0takt3q2`） |
+| `lookup` | `{"set":"taxItems[].name","lookup":"taxId","table":{"22368445":"義佳"}}` | 依同一層欄位對照 |
+| `onlyIfEmpty` | `{"set":"note","value":"—","onlyIfEmpty":true}` | 已有值時不覆寫 |
+
+多頁文件逐頁抽取後合併：單一值取第一個非空值，陣列依頁序串接並去除空白與重複項目，最後才套用規則。
 
 ### Scan（掃描紀錄）
 
@@ -131,7 +153,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `update_scan_data` | `id`, `data`, `templateId?` | 回寫結構化資料 |
 | `list_templates` | — | 列出情境樣板 |
 | `get_template` | `id` | 取得樣板 |
-| `upsert_template` | `id`, `name`, `description`, `sample`, `instructions?`, `keywords?` | 新增或更新情境 |
+| `upsert_template` | `id`, `name`, `description`, `sample`, `instructions?`, `keywords?`, `rules?` | 新增或更新情境 |
 | `delete_template` | `id` | 刪除情境 |
 | `classify_text` | `text`, `templateIds?` | 用 Jev 判斷情境 |
 | `validate_data` | `templateId`, `data` | 檢查 JSON 是否符合樣板結構，回傳問題清單 |

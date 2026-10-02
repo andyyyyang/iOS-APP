@@ -1,0 +1,41 @@
+{
+  "id": "fv60_air",
+  "name": "FV60 空運請款（萬泰物流）",
+  "description": "萬泰物流（供應商 801988）的空運出口運費發票：單一張統一發票，含發票號碼、發票日期、含稅總金額、出口案號（JT 開頭）與客戶（OSAT）",
+  "keywords": ["萬泰", "萬泰物流", "空運", "AIR", "AWB", "AIRWAY", "航空", "機場"],
+  "sample": {
+    "id": "mum0c2b04zd",
+    "date": "2026-09-29",
+    "supplier": "801988",
+    "supplierName": "萬泰物流",
+    "osat": "SCK",
+    "caseNo": "JT2609260",
+    "billNo": "",
+    "invoice": "FR14077356",
+    "invDate": "2026-09-22",
+    "amount": 1556,
+    "expenseAmount": 1556,
+    "isMultiItem": false,
+    "taxItems": [],
+    "qty": 1200,
+    "price": 1.297,
+    "text": "出口/SCK/JT2609260",
+    "docNo": "",
+    "done": false
+  },
+  "instructions": "invoice：統一發票號碼，兩個英文字母加 8 位數字（例如 FR14077356）。invDate：發票日期 YYYY-MM-DD，民國年請換算成西元（115 年 = 2026 年）。amount：發票總計（含稅）金額，數字。caseNo：出口案號，JT 開頭加 7 位數字（例如 JT2609260），可能有 -1 之類的後綴，多個案號以逗號分隔。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。qty：出貨數量（件數），找不到填 null。",
+  "rules": [
+    { "set": "id", "generate": "base36time" },
+    { "set": "date", "today": true },
+    { "set": "supplier", "value": "801988" },
+    { "set": "supplierName", "value": "萬泰物流" },
+    { "set": "billNo", "value": "" },
+    { "set": "expenseAmount", "copy": "amount" },
+    { "set": "isMultiItem", "value": false },
+    { "set": "taxItems", "value": [] },
+    { "set": "price", "divide": ["amount", "qty"], "round": 3 },
+    { "set": "text", "template": "出口/{osat}/{caseNo}" },
+    { "set": "docNo", "value": "" },
+    { "set": "done", "value": false }
+  ]
+}

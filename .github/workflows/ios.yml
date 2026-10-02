@@ -6,6 +6,7 @@ on:
       - "LocalOCR/**"
       - "LocalOCRTests/**"
       - "LocalOCR.xcodeproj/**"
+      - "server/templates/managed/**"
       - ".github/workflows/ios.yml"
   workflow_dispatch:
 
@@ -28,6 +29,9 @@ jobs:
             runner: xcode-27
     steps:
       - uses: actions/checkout@v5
+
+      - name: Check bundled templates match the server
+        run: diff -r server/templates/managed LocalOCR/Resources/ManagedTemplates
 
       - name: Show Xcode version
         run: xcodebuild -version

@@ -83,6 +83,14 @@ struct TemplateDetailView: View {
                 }
                 .card()
 
+                if !template.rules.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CardHeader(title: "計算規則", systemImage: "function", trailing: "\(template.rules.count) 條")
+                        JSONBlock(json: JSONValue.array(template.rules).prettyPrinted())
+                    }
+                    .card()
+                }
+
                 if !template.instructions.isEmpty || !template.keywords.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         CardHeader(title: "規則", systemImage: "list.bullet")

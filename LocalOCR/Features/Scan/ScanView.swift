@@ -50,7 +50,7 @@ struct ScanView: View {
             .photosPicker(
                 isPresented: $showsPhotoPicker,
                 selection: $photoItems,
-                maxSelectionCount: 10,
+                maxSelectionCount: 50,
                 selectionBehavior: .ordered,
                 matching: .images
             )
@@ -97,11 +97,11 @@ struct ScanView: View {
         LazyVGrid(columns: columns, spacing: 12) {
             PhotosPicker(
                 selection: $photoItems,
-                maxSelectionCount: 10,
+                maxSelectionCount: 50,
                 selectionBehavior: .ordered,
                 matching: .images
             ) {
-                SourceCard(title: "相簿", subtitle: "一次最多 10 張", systemImage: ScanSource.photoLibrary.systemImage)
+                SourceCard(title: "相簿", subtitle: "可多選，一次最多 50 頁", systemImage: ScanSource.photoLibrary.systemImage)
             }
 
             Button {

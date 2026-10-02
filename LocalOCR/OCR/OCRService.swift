@@ -21,12 +21,12 @@ struct OCRService {
         self.options = options
     }
 
-    /// 辨識單張圖片。圖片會先轉正並縮小，回傳的座標對應 `OCRPage.image`。
+    /// 辨識單張圖片。以高解析度圖片辨識，回傳較小的顯示用圖片；座標為正規化座標，兩者通用。
     func recognize(_ image: UIImage) async throws -> OCRPage {
         let prepared = ImagePreprocessor.normalized(image)
         guard let cgImage = prepared.cgImage else { throw OCRError.invalidImage }
         let lines = try await recognizeText(in: cgImage)
-        return OCRPage(image: prepared, lines: lines)
+        return OCRPage(image: ImagePreprocessor.displayImage(prepared), lines: lines)
     }
 
     func recognizeText(in cgImage: CGImage) async throws -> [RecognizedLine] {

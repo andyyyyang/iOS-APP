@@ -10,8 +10,9 @@ The LocalOCR iPhone app recognizes text on device (Apple Vision), detects the do
 ## Concepts
 
 - **Scan**: one scanned document — `id`, `createdAt`, `source`, `text` (OCR), `templateId`, `classification` (`provider`: `jev`, `on-device`, `keywords`, `manual`), `data` (JSON in the template's shape, may be `null`).
-- **Template (scenario)**: `id`, `name`, `description` (used for classification), `keywords`, `sample` (an example JSON object — output must have the same keys, nesting and key order), `instructions`.
-  Built-ins: `receipt`, `business_card`, `event`, `document` (fallback).
+- **Template (scenario)**: `id`, `name`, `description` (used for classification), `keywords`, `sample` (an example JSON object — output must have the same keys, nesting and key order), `instructions`, `rules`.
+  Built-ins: `receipt`, `business_card`, `event`, `document` (fallback). Repo-managed: `fv60_air` (FV60 air-freight vendor invoice, 萬泰物流) and `fv60_sea` (FV60 sea-freight claim from 義佳 with three companies' invoices).
+- **Rules**: deterministic post-processing applied after extraction, in order (`value`, `copy`, `template`, `sum`, `join`, `divide` + `round`, `today`, `generate: base36time`, `lookup` + `table`, `onlyIfEmpty`). When you fill `data` yourself, read the template's rules and apply them too (e.g. FV60 `amount` = sum of `taxItems[].taxBase` + `taxAmount`, `price` = amount ÷ qty rounded to 3 decimals, `text` = `出口/{osat}/{caseNo}`). Field targets of rules are not printed on the document.
 
 ## Tools
 

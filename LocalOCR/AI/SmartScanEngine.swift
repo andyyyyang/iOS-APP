@@ -42,15 +42,36 @@ enum SmartScanEngine {
         templates: [ScanTemplate],
         forcedTemplate: ScanTemplate? = nil,
         useJev: Bool,
-        onClassified: (ScanTemplate, Classification) -> Void = { _, _ in }
+        onClassified: (ScanTemplate, Classification) -> Void = { _, _ in },
+        onProgress: (Int, Int) -> Void = { _, _ in }
+    ) async -> SmartScanOutcome {
+        await run(
+            pages: PageText.split(text),
+            templates: templates,
+            forcedTemplate: forcedTemplate,
+            useJev: useJev,
+            onClassified: onClassified,
+            onProgress: onProgress
+        )
+    }
+
+    /// `pages`：每頁的 OCR 文字。多頁文件逐頁抽取後合併，頁數不受模型長度限制。
+    static func run(
+        pages: [String],
+        templates: [ScanTemplate],
+        forcedTemplate: ScanTemplate? = nil,
+        useJev: Bool,
+        onClassified: (ScanTemplate, Classification) -> Void = { _, _ in },
+        onProgress: (Int, Int) -> Void = { _, _ in }
     ) async -> SmartScanOutcome {
         precondition(!templates.isEmpty, "至少需要一個情境樣板")
+        let fullText = pages.joined(separator: "\n\n")
 
         let result: (Classification, [String])
         if let forcedTemplate {
             result = (Classification(templateID: forcedTemplate.id, confidence: nil, probabilities: [:], provider: .manual), [])
         } else {
-            result = await classifierPipeline(useJev: useJev).classify(text: text, among: templates)
+            result = await classifierPipeline(useJev: useJev).classify(text: fullText, among: templates)
         }
         let (classification, notes) = result
         let template = templates.first { $0.id == classification.templateID } ?? templates[0]
@@ -66,7 +87,7 @@ enum SmartScanEngine {
             )
         }
         do {
-            let data = try await extractor.extract(text: text, template: template)
+            let data = try await extractor.extract(pages: pages, template: template, progress: onProgress)
             return SmartScanOutcome(template: template, classification: classification, data: data, extractionError: nil, notes: notes)
         } catch {
             return SmartScanOutcome(
@@ -99,6 +120,8 @@ final class SmartScanModel {
     }
 
     private(set) var phase: Phase = .idle
+    /// 多頁抽取進度（目前頁, 總頁數）。
+    private(set) var pageProgress: (current: Int, total: Int)?
 
     var outcome: SmartScanOutcome? {
         if case .finished(let outcome) = phase { return outcome }
@@ -113,16 +136,26 @@ final class SmartScanModel {
     }
 
     func run(text: String, templates: [ScanTemplate], forcedTemplate: ScanTemplate? = nil, useJev: Bool) async -> SmartScanOutcome? {
+        await run(pages: PageText.split(text), templates: templates, forcedTemplate: forcedTemplate, useJev: useJev)
+    }
+
+    func run(pages: [String], templates: [ScanTemplate], forcedTemplate: ScanTemplate? = nil, useJev: Bool) async -> SmartScanOutcome? {
         guard !isRunning, !templates.isEmpty else { return nil }
         phase = .classifying
+        pageProgress = nil
         let outcome = await SmartScanEngine.run(
-            text: text,
+            pages: pages,
             templates: templates,
             forcedTemplate: forcedTemplate,
-            useJev: useJev
-        ) { template, classification in
-            self.phase = .extracting(template, classification)
-        }
+            useJev: useJev,
+            onClassified: { template, classification in
+                self.phase = .extracting(template, classification)
+            },
+            onProgress: { current, total in
+                self.pageProgress = (current, total)
+            }
+        )
+        pageProgress = nil
         phase = .finished(outcome)
         return outcome
     }

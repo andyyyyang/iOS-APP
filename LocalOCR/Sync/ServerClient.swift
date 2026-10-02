@@ -124,6 +124,7 @@ struct ServerClient {
             (key: "keywords", value: keywords),
             (key: "sample", value: template.sample),
             (key: "instructions", value: .string(template.instructions)),
+            (key: "rules", value: .array(template.rules)),
         ])
         _ = try await send("PUT", "/v1/templates/\(Self.escape(template.id))", body: body)
     }
@@ -206,6 +207,10 @@ struct ServerClient {
         }
         var version = 1
         if case .number(let number)? = value["version"] { version = Int(number) }
+        var rulesJSON: String?
+        if case .array(let rules)? = value["rules"], !rules.isEmpty {
+            rulesJSON = JSONValue.array(rules).compactString
+        }
         return ScanTemplate(
             id: id,
             name: name,
@@ -214,7 +219,8 @@ struct ServerClient {
             sampleJSON: sample.compactString,
             instructions: value["instructions"]?.stringValue ?? "",
             origin: .server,
-            version: version
+            version: version,
+            rulesJSON: rulesJSON
         )
     }
 }

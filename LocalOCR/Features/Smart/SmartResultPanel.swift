@@ -105,8 +105,13 @@ struct SmartResultPanel: View {
                 CardHeader(title: "JSON", systemImage: "curlybraces")
                 HStack(spacing: 10) {
                     ProgressView()
-                    Text("Apple Intelligence 正在依樣板產生資料…")
-                        .foregroundStyle(.secondary)
+                    if let progress = model.pageProgress, progress.total > 1 {
+                        Text("Apple Intelligence 正在分析第 \(progress.current)／\(progress.total) 頁…")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Apple Intelligence 正在依樣板產生資料…")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .card()

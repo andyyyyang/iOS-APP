@@ -39,9 +39,14 @@ enum OnDeviceAIStatus: Equatable {
 /// 讓裝置端模型直接產生相同結構的資料。
 @available(iOS 26.0, *)
 enum TemplateSchemaBuilder {
-    static func generationSchema(for sample: JSONValue) throws -> GenerationSchema {
+    static func generationSchema(for sample: JSONValue, excluding excluded: Set<String> = []) throws -> GenerationSchema {
         var counter = 0
-        let root = schema(for: sample, counter: &counter)
+        var target = sample
+        if case .object(let members) = sample, !excluded.isEmpty {
+            let kept = members.filter { !excluded.contains($0.key) }
+            target = kept.isEmpty ? sample : .object(kept)
+        }
+        let root = schema(for: target, counter: &counter)
         return try GenerationSchema(root: root, dependencies: [])
     }
 
@@ -107,7 +112,7 @@ struct OnDeviceClassifier: DocumentClassifier {
         let schema = try GenerationSchema(root: root, dependencies: [])
         let catalog = templates.map { "- \($0.id)：\($0.name)。\($0.description)" }.joined(separator: "\n")
         let instructions = "你是文件分類助理。根據 OCR 文字判斷文件屬於哪一個情境，只能從清單中選擇一個代碼。無法判斷時選擇 \(ScanTemplate.fallbackID)。"
-        let prompt = "情境清單：\n\(catalog)\n\nOCR 文字：\n\"\"\"\n\(String(text.prefix(1200)))\n\"\"\""
+        let prompt = "情境清單：\n\(catalog)\n\nOCR 文字：\n\"\"\"\n\(PageText.classificationText(PageText.split(text), limit: 1200))\n\"\"\""
 
         let session = LanguageModelSession(model: OnDeviceModel.extraction, tools: [], instructions: { instructions })
         let response = try await session.respond(
@@ -135,29 +140,71 @@ enum OnDeviceModel {
 }
 
 /// 使用裝置端模型，依樣板結構從 OCR 文字抽取資料。
+/// 多頁文件逐頁抽取再合併，因此頁數不受模型上下文長度限制；最後套用樣板規則計算欄位。
 @available(iOS 26.0, *)
 struct FoundationModelsExtractor: StructuredExtractor {
-    /// 依序嘗試的文字長度（字元）。裝置端模型的上下文有限，太長時改用較短的文字再試。
+    /// 每頁依序嘗試的文字長度（字元）。裝置端模型的上下文有限，太長時改用較短的文字再試。
     var characterBudgets = [1800, 900]
 
-    func extract(text: String, template: ScanTemplate) async throws -> JSONValue {
+    func extract(pages: [String], template: ScanTemplate, progress: (Int, Int) -> Void) async throws -> JSONValue {
+        let pages = pages
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 4 }
+        guard !pages.isEmpty else { throw StructuredExtractionError.generation("沒有可分析的文字") }
+
+        let sample = template.sample
+        let rules = template.rules
+        let schema = try TemplateSchemaBuilder.generationSchema(for: sample, excluding: TemplateRules.topLevelTargets(of: rules))
+
+        var results: [JSONValue] = []
+        var lastError: Error = StructuredExtractionError.invalidOutput
+        for (index, page) in pages.enumerated() {
+            progress(index + 1, pages.count)
+            do {
+                results.append(try await extractPage(page, template: template, schema: schema, pageNumber: index + 1, pageCount: pages.count))
+            } catch {
+                // 單頁失敗（例如與情境無關的附件頁）不影響其他頁
+                lastError = error
+            }
+        }
+        guard !results.isEmpty else {
+            throw StructuredExtractionError.generation(AIErrorDescriber.describe(lastError))
+        }
+        let merged = JSONValue.merged(results, sample: sample)
+        return TemplateRules.apply(rules, to: merged).conformed(to: sample)
+    }
+
+    private func extractPage(
+        _ text: String,
+        template: ScanTemplate,
+        schema: GenerationSchema,
+        pageNumber: Int,
+        pageCount: Int
+    ) async throws -> JSONValue {
         var lastError: Error = StructuredExtractionError.invalidOutput
         for budget in characterBudgets {
             do {
-                return try await extractOnce(text: String(text.prefix(budget)), template: template)
+                return try await extractOnce(
+                    text: String(text.prefix(budget)),
+                    template: template,
+                    schema: schema,
+                    pageLabel: pageCount > 1 ? "第 \(pageNumber)／\(pageCount) 頁" : nil
+                )
             } catch {
                 lastError = error
                 if text.count <= budget { break }
             }
         }
-        throw StructuredExtractionError.generation(AIErrorDescriber.describe(lastError))
+        throw lastError
     }
 
-    private func extractOnce(text: String, template: ScanTemplate) async throws -> JSONValue {
-        let sample = template.sample
-        let schema = try TemplateSchemaBuilder.generationSchema(for: sample)
+    private func extractOnce(text: String, template: ScanTemplate, schema: GenerationSchema, pageLabel: String?) async throws -> JSONValue {
         let instructions = Self.instructions(for: template)
-        let prompt = "情境：\(template.name)\n\nOCR 文字：\n\"\"\"\n\(text)\n\"\"\""
+        var prompt = "情境：\(template.name)\n"
+        if let pageLabel {
+            prompt += "這是多頁文件的\(pageLabel)，只擷取本頁出現的資訊。\n"
+        }
+        prompt += "\nOCR 文字：\n\"\"\"\n\(text)\n\"\"\""
 
         let session = LanguageModelSession(model: OnDeviceModel.extraction, tools: [], instructions: { instructions })
         let response = try await session.respond(
@@ -170,7 +217,7 @@ struct FoundationModelsExtractor: StructuredExtractor {
         guard let value = try? JSONValue.parse(response.content.jsonString) else {
             throw StructuredExtractionError.invalidOutput
         }
-        return value.conformed(to: sample)
+        return value.conformed(to: template.sample)
     }
 
     static func instructions(for template: ScanTemplate) -> String {
@@ -240,7 +287,29 @@ enum AIErrorDescriber {
 
 /// 結構化抽取引擎。目前實作為裝置端 Foundation Models；未來可加入其他模型提供者。
 protocol StructuredExtractor {
-    func extract(text: String, template: ScanTemplate) async throws -> JSONValue
+    /// `pages`：每頁的 OCR 文字；`progress`：（目前頁, 總頁數）。
+    func extract(pages: [String], template: ScanTemplate, progress: (Int, Int) -> Void) async throws -> JSONValue
+}
+
+extension StructuredExtractor {
+    func extract(text: String, template: ScanTemplate) async throws -> JSONValue {
+        try await extract(pages: [text], template: template, progress: { _, _ in })
+    }
+}
+
+/// 多頁文字以空白行分隔（OCR 結果與紀錄都以此格式保存）。
+enum PageText {
+    static func split(_ text: String) -> [String] {
+        let pages = text.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return pages.isEmpty ? [text] : pages
+    }
+
+    /// 分類用的摘要：每頁取開頭一段，讓多頁文件的每一頁都能被看到。
+    static func classificationText(_ pages: [String], limit: Int = 1500) -> String {
+        guard pages.count > 1 else { return String((pages.first ?? "").prefix(limit)) }
+        let perPage = max(200, limit / pages.count)
+        return String(pages.map { String($0.prefix(perPage)) }.joined(separator: "\n\n").prefix(limit))
+    }
 }
 
 enum StructuredExtractionError: LocalizedError {

@@ -38,7 +38,7 @@ final class SmartScanTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let library = TemplateLibrary(fileURL: url)
-        XCTAssertEqual(library.all.map(\.id), ScanTemplate.builtIns.map(\.id))
+        XCTAssertEqual(library.all.map(\.id), ScanTemplate.builtIns.map(\.id) + ScanTemplate.bundled.map(\.id))
 
         var serverReceipt = ScanTemplate.builtIns[0]
         serverReceipt.name = "伺服器收據"

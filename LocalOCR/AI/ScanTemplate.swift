@@ -27,6 +27,8 @@ struct ScanTemplate: Identifiable, Hashable, Codable {
     var instructions: String
     var origin: Origin
     var version: Int
+    /// 抽取後套用的規則（JSON 陣列文字，見 TemplateRules）；舊資料沒有此欄位。
+    var rulesJSON: String?
 
     init(
         id: String,
@@ -36,7 +38,8 @@ struct ScanTemplate: Identifiable, Hashable, Codable {
         sampleJSON: String,
         instructions: String = "",
         origin: Origin,
-        version: Int = 1
+        version: Int = 1,
+        rulesJSON: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -46,10 +49,16 @@ struct ScanTemplate: Identifiable, Hashable, Codable {
         self.instructions = instructions
         self.origin = origin
         self.version = version
+        self.rulesJSON = rulesJSON
     }
 
     var sample: JSONValue {
         (try? JSONValue.parse(sampleJSON)) ?? .object([])
+    }
+
+    var rules: [JSONValue] {
+        guard let rulesJSON, case .array(let items)? = try? JSONValue.parse(rulesJSON) else { return [] }
+        return items
     }
 
     static let fallbackID = "document"
@@ -61,6 +70,24 @@ struct ScanTemplate: Identifiable, Hashable, Codable {
     static func makeCustomID() -> String {
         "custom-" + UUID().uuidString.prefix(8).lowercased()
     }
+}
+
+// MARK: - App 內附的受管理情境（與 server/templates/managed 相同，CI 會檢查）
+
+extension ScanTemplate {
+    /// App 套件中的 JSON 情境檔，例如 FV60 請款。未連接伺服器時也能使用；伺服器上的同 id 情境優先。
+    static let bundled: [ScanTemplate] = {
+        let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
+        return urls
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { url -> ScanTemplate? in
+                guard let data = try? Data(contentsOf: url),
+                      let value = try? JSONValue.parse(String(decoding: data, as: UTF8.self)),
+                      var template = ServerClient.template(from: value) else { return nil }
+                template.origin = .builtIn
+                return template
+            }
+    }()
 }
 
 // MARK: - 內建情境（與伺服器 server/src/templates/builtin.ts 相同）
