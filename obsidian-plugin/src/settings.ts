@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type LocalOcrSyncPlugin from "./main";
 import { formatDateTime } from "./format";
+import type { JsonMapping } from "./json-export";
 
 export interface LocalOcrSettings {
 	serverUrl: string;
@@ -10,6 +11,14 @@ export interface LocalOcrSettings {
 	/** Minutes between automatic syncs; 0 disables auto-sync. */
 	autoSyncMinutes: number;
 	includeText: boolean;
+	/** Create Markdown notes (turn off for JSON-only output). */
+	createNotes: boolean;
+	/** Template id → JSON array file. */
+	jsonMappings: JsonMapping[];
+	/** Comma-separated fields whose existing values survive updates. */
+	jsonPreserveFields: string;
+	/** Field that marks a JSON record as finished (never touched again). */
+	jsonDoneField: string;
 }
 
 export const DEFAULT_SETTINGS: LocalOcrSettings = {
@@ -19,7 +28,28 @@ export const DEFAULT_SETTINGS: LocalOcrSettings = {
 	subfolderPerTemplate: true,
 	autoSyncMinutes: 15,
 	includeText: true,
+	createNotes: true,
+	jsonMappings: [],
+	jsonPreserveFields: "docNo, done",
+	jsonDoneField: "done",
 };
+
+/** Merge saved settings over the defaults (never sharing the defaults' arrays). */
+export function loadSettings(saved: Partial<LocalOcrSettings> | undefined): LocalOcrSettings {
+	const settings: LocalOcrSettings = { ...DEFAULT_SETTINGS, ...(saved ?? {}) };
+	if (typeof settings.autoSyncMinutes !== "number" || !(settings.autoSyncMinutes >= 0)) {
+		settings.autoSyncMinutes = DEFAULT_SETTINGS.autoSyncMinutes;
+	}
+	settings.jsonMappings = Array.isArray(saved?.jsonMappings)
+		? saved.jsonMappings.map((m) => ({
+				templateId: typeof m?.templateId === "string" ? m.templateId : "",
+				filePath: typeof m?.filePath === "string" ? m.filePath : "",
+			}))
+		: [];
+	if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
+	if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
+	return settings;
+}
 
 export class LocalOcrSettingTab extends PluginSettingTab {
 	constructor(
@@ -81,6 +111,16 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("筆記").setHeading();
 
 		new Setting(containerEl)
+			.setName("同時建立筆記")
+			.setDesc("每筆掃描建立一則 Markdown 筆記。關閉時只寫入下方設定的 JSON 陣列檔。")
+			.addToggle((toggle) =>
+				toggle.setValue(settings.createNotes).onChange(async (value) => {
+					settings.createNotes = value;
+					await this.plugin.saveSettings();
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("目標資料夾")
 			.setDesc("同步的筆記會放在這個資料夾（相對於保險庫根目錄）。")
 			.addText((text) =>
@@ -113,6 +153,8 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		this.displayJsonSection(containerEl);
+
 		new Setting(containerEl).setName("同步").setHeading();
 
 		new Setting(containerEl)
@@ -137,7 +179,7 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("重設同步進度")
 			.setDesc(
-				`下次同步時重新下載全部掃描；已存在的筆記會原地更新，不會重複建立。${progress ? `目前進度：${progress}` : ""}`,
+				`下次同步時重新下載全部掃描；已存在的筆記與 JSON 紀錄會原地更新，不會重複建立。${progress ? `目前進度：${progress}` : ""}`,
 			)
 			.addButton((button) =>
 				button
@@ -146,6 +188,90 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 					.onClick(async () => {
 						await this.plugin.resetProgress();
 						this.display();
+					}),
+			);
+	}
+
+	private displayJsonSection(containerEl: HTMLElement): void {
+		const settings = this.plugin.settings;
+		new Setting(containerEl)
+			.setName("JSON 陣列輸出")
+			.setDesc(
+				"把指定情境（樣板）掃描的結構化資料，依 id 新增或更新到保險庫中的 JSON 陣列檔（最新的在最前面）。" +
+					"新增對應後，執行「重新同步全部（重設進度）」即可補上先前的掃描。",
+			)
+			.setHeading();
+
+		settings.jsonMappings.forEach((mapping, index) => {
+			new Setting(containerEl)
+				.setName(`對應 ${index + 1}`)
+				.setDesc("情境代碼 → JSON 檔案路徑")
+				.addText((text) => {
+					text.inputEl.setAttr("aria-label", "情境代碼");
+					text
+						.setPlaceholder("情境代碼，例如 fv60_air")
+						.setValue(mapping.templateId)
+						.onChange(async (value) => {
+							mapping.templateId = value.trim();
+							await this.plugin.saveSettings();
+						});
+				})
+				.addText((text) => {
+					text.inputEl.setAttr("aria-label", "JSON 檔案路徑");
+					text
+						.setPlaceholder("JSON 檔案路徑，例如 11 SOP/紀錄.json")
+						.setValue(mapping.filePath)
+						.onChange(async (value) => {
+							mapping.filePath = value.trim();
+							await this.plugin.saveSettings();
+						});
+				})
+				.addExtraButton((button) =>
+					button
+						.setIcon("trash-2")
+						.setTooltip("移除這個對應")
+						.onClick(async () => {
+							settings.jsonMappings.splice(index, 1);
+							await this.plugin.saveSettings();
+							this.display();
+						}),
+				);
+		});
+
+		new Setting(containerEl).addButton((button) =>
+			button
+				.setButtonText("新增對應")
+				.setCta()
+				.onClick(async () => {
+					settings.jsonMappings.push({ templateId: "", filePath: "" });
+					await this.plugin.saveSettings();
+					this.display();
+				}),
+		);
+
+		new Setting(containerEl)
+			.setName("更新時保留的欄位")
+			.setDesc("以逗號分隔。更新既有紀錄時，這些欄位維持 JSON 檔中的現有值（例如你之後填入的傳票號碼）。")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.jsonPreserveFields)
+					.setValue(settings.jsonPreserveFields)
+					.onChange(async (value) => {
+						settings.jsonPreserveFields = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("已完成欄位")
+			.setDesc("紀錄中這個欄位為真（例如 done: true）時，同步不會再修改該筆紀錄。留空表示不檢查。")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_SETTINGS.jsonDoneField)
+					.setValue(settings.jsonDoneField)
+					.onChange(async (value) => {
+						settings.jsonDoneField = value.trim();
+						await this.plugin.saveSettings();
 					}),
 			);
 	}

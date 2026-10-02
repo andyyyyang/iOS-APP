@@ -1,6 +1,7 @@
 // Pure sync logic: REST client over an injected HTTP transport, cursor
 // bookkeeping and the paging loop. No "obsidian" imports — unit-tested.
 
+import type { JsonOutcome } from "./json-export";
 import type { HealthResponse, Scan, ScanPage, SyncCursorState, Template, WriteOutcome } from "./types";
 
 export const PAGE_SIZE = 100;
@@ -240,14 +241,44 @@ export function advanceCursor(state: SyncCursorState, page: ScanPage): CursorAdv
 // ---------------------------------------------------------------------------
 // Sync loop
 
+export interface JsonCounts {
+	created: number;
+	updated: number;
+	skipped: number;
+	unchanged: number;
+	failed: number;
+}
+
 export interface SyncResult {
+	/** Note outcomes. */
 	created: number;
 	updated: number;
 	unchanged: number;
 	failed: number;
+	/** JSON-array export outcomes. */
+	json: JsonCounts;
+	/** Scans whose note or JSON record was created or updated. */
+	changed: number;
 	pages: number;
-	/** First few per-scan error messages. */
+	/** First few distinct error messages. */
 	errors: string[];
+}
+
+export function emptySyncResult(): SyncResult {
+	return {
+		created: 0,
+		updated: 0,
+		unchanged: 0,
+		failed: 0,
+		json: { created: 0, updated: 0, skipped: 0, unchanged: 0, failed: 0 },
+		changed: 0,
+		pages: 0,
+		errors: [],
+	};
+}
+
+function pushError(result: SyncResult, message: string): void {
+	if (result.errors.length < 5 && !result.errors.includes(message)) result.errors.push(message);
 }
 
 export class SyncAbortedError extends Error {
@@ -264,8 +295,10 @@ export interface SyncDeps {
 	client: Pick<LocalOcrClient, "listTemplates" | "listScans">;
 	/** Saved progress to resume from. */
 	state: SyncCursorState;
-	/** Create or update the note for one scan. */
-	writeScan(scan: Scan, templates: ReadonlyMap<string, string>): Promise<WriteOutcome>;
+	/** Create or update the note for one scan (omit when notes are disabled). */
+	writeScan?(scan: Scan, templates: ReadonlyMap<string, string>): Promise<WriteOutcome>;
+	/** Upsert the scan into its JSON array file; null when the scan has no JSON mapping. */
+	exportJson?(scan: Scan): Promise<JsonOutcome | null>;
 	/** Persist progress (called after every page). */
 	saveState(state: SyncCursorState): Promise<void>;
 	pageSize?: number;
@@ -287,7 +320,7 @@ export function isValidScan(item: unknown): item is Scan {
 }
 
 export async function runSync(deps: SyncDeps): Promise<SyncResult> {
-	const result: SyncResult = { created: 0, updated: 0, unchanged: 0, failed: 0, pages: 0, errors: [] };
+	const result = emptySyncResult();
 	const pageSize = deps.pageSize ?? PAGE_SIZE;
 	const maxPages = deps.maxPages ?? 10_000;
 	let state: SyncCursorState = { ...deps.state };
@@ -301,16 +334,33 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 				if (deps.isCancelled?.()) return result; // progress for this page is not saved
 				if (!isValidScan(item)) {
 					result.failed++;
-					if (result.errors.length < 5) result.errors.push("伺服器回傳了格式不正確的掃描紀錄");
+					pushError(result, "伺服器回傳了格式不正確的掃描紀錄");
 					continue;
 				}
-				try {
-					const outcome = await deps.writeScan(item, templates);
-					result[outcome]++;
-				} catch (error) {
-					result.failed++;
-					if (result.errors.length < 5) result.errors.push(`${item.id}：${describeError(error)}`);
+				let changed = false;
+				if (deps.writeScan) {
+					try {
+						const outcome = await deps.writeScan(item, templates);
+						result[outcome]++;
+						changed = outcome !== "unchanged";
+					} catch (error) {
+						result.failed++;
+						pushError(result, `${item.id}：${describeError(error)}`);
+					}
 				}
+				if (deps.exportJson) {
+					try {
+						const outcome = await deps.exportJson(item);
+						if (outcome) {
+							result.json[outcome]++;
+							changed ||= outcome === "created" || outcome === "updated";
+						}
+					} catch (error) {
+						result.json.failed++;
+						pushError(result, describeError(error));
+					}
+				}
+				if (changed) result.changed++;
 			}
 			const advance = advanceCursor(state, page);
 			state = advance.state;
@@ -324,10 +374,25 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 	return result;
 }
 
-/** One-line summary such as「新增 3 筆、更新 1 筆」. */
-export function summarize(result: SyncResult): string {
-	const parts = [`新增 ${result.created} 筆`, `更新 ${result.updated} 筆`];
-	if (result.unchanged) parts.push(`未變更 ${result.unchanged} 筆`);
-	if (result.failed) parts.push(`失敗 ${result.failed} 筆`);
-	return parts.join("、");
+/**
+ * One-line summary such as「新增 3 筆、更新 1 筆；JSON：新增 1 筆、更新 0 筆、略過 2 筆」.
+ * The JSON part appears when there was JSON activity or notes are disabled.
+ */
+export function summarize(result: SyncResult, opts: { notes?: boolean } = {}): string {
+	const notes = opts.notes ?? true;
+	const sections: string[] = [];
+	if (notes) {
+		const parts = [`新增 ${result.created} 筆`, `更新 ${result.updated} 筆`];
+		if (result.unchanged) parts.push(`未變更 ${result.unchanged} 筆`);
+		if (result.failed) parts.push(`失敗 ${result.failed} 筆`);
+		sections.push(parts.join("、"));
+	}
+	const j = result.json;
+	if (!notes || j.created + j.updated + j.skipped + j.unchanged + j.failed > 0) {
+		const parts = [`新增 ${j.created} 筆`, `更新 ${j.updated} 筆`, `略過 ${j.skipped} 筆`];
+		if (j.failed) parts.push(`失敗 ${j.failed} 筆`);
+		sections.push(`JSON：${parts.join("、")}`);
+	}
+	if (!notes && result.failed) sections.push(`失敗 ${result.failed} 筆`);
+	return sections.join("；");
 }

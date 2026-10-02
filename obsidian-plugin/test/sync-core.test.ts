@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { JsonArrayError, type JsonOutcome } from "../src/json-export";
 import {
 	ApiError,
 	EPOCH,
 	LocalOcrClient,
 	SyncAbortedError,
 	advanceCursor,
+	emptySyncResult,
 	initialCursorState,
 	lastUpdatedAt,
 	nextScanQuery,
@@ -335,7 +337,7 @@ describe("runSync", () => {
 			...deps,
 			writeScan: async (s, t) => {
 				if (s.id === "scan-2") throw new Error("disk full");
-				return deps.writeScan(s, t);
+				return deps.writeScan!(s, t);
 			},
 		});
 		expect(result).toMatchObject({ created: 2, failed: 2 });
@@ -369,7 +371,7 @@ describe("runSync", () => {
 			...deps,
 			writeScan: async (s, t) => {
 				writes++;
-				return deps.writeScan(s, t);
+				return deps.writeScan!(s, t);
 			},
 			isCancelled: () => writes >= 15,
 		});
@@ -388,12 +390,59 @@ describe("runSync", () => {
 });
 
 describe("summarize", () => {
-	it("formats counts", () => {
-		expect(summarize({ created: 3, updated: 1, unchanged: 0, failed: 0, pages: 1, errors: [] })).toBe(
-			"新增 3 筆、更新 1 筆",
-		);
-		expect(summarize({ created: 0, updated: 0, unchanged: 2, failed: 1, pages: 1, errors: [] })).toBe(
-			"新增 0 筆、更新 0 筆、未變更 2 筆、失敗 1 筆",
-		);
+	const base = () => emptySyncResult();
+
+	it("formats note counts", () => {
+		expect(summarize({ ...base(), created: 3, updated: 1 })).toBe("新增 3 筆、更新 1 筆");
+		expect(summarize({ ...base(), unchanged: 2, failed: 1 })).toBe("新增 0 筆、更新 0 筆、未變更 2 筆、失敗 1 筆");
+	});
+
+	it("adds JSON counts when there was JSON activity", () => {
+		const r = base();
+		r.created = 2;
+		r.json = { created: 1, updated: 2, skipped: 3, unchanged: 4, failed: 0 };
+		expect(summarize(r)).toBe("新增 2 筆、更新 0 筆；JSON：新增 1 筆、更新 2 筆、略過 3 筆");
+		r.json.failed = 1;
+		expect(summarize(r)).toBe("新增 2 筆、更新 0 筆；JSON：新增 1 筆、更新 2 筆、略過 3 筆、失敗 1 筆");
+	});
+
+	it("shows only JSON counts when notes are disabled", () => {
+		expect(summarize(base(), { notes: false })).toBe("JSON：新增 0 筆、更新 0 筆、略過 0 筆");
+	});
+});
+
+describe("runSync with JSON export", () => {
+	it("counts JSON outcomes, changed scans and JSON errors without stopping", async () => {
+		const server = new FakeServer(4);
+		const h = harness(server);
+		const outcomes: Array<JsonOutcome | null | Error> = [
+			"created",
+			null,
+			new JsonArrayError("「a.json」的內容不是 JSON 陣列，已略過，不會覆寫"),
+			"skipped",
+		];
+		let i = 0;
+		const result = await runSync({
+			...h.deps(),
+			writeScan: undefined,
+			exportJson: async () => {
+				const next = outcomes[i++];
+				if (next instanceof Error) throw next;
+				return next;
+			},
+		});
+		expect(result.json).toEqual({ created: 1, updated: 0, skipped: 1, unchanged: 0, failed: 1 });
+		expect(result).toMatchObject({ created: 0, updated: 0, failed: 0, changed: 1 });
+		expect(result.errors).toEqual(["「a.json」的內容不是 JSON 陣列，已略過，不會覆寫"]);
+		expect(h.notes.size).toBe(0);
+		expect(h.getState().cursor).toBeNull();
+	});
+
+	it("runs notes and JSON for the same scan", async () => {
+		const server = new FakeServer(2);
+		const h = harness(server);
+		const result = await runSync({ ...h.deps(), exportJson: async () => "updated" });
+		expect(result).toMatchObject({ created: 2, changed: 2 });
+		expect(result.json.updated).toBe(2);
 	});
 });

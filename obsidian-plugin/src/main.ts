@@ -1,5 +1,5 @@
 import { Notice, Plugin, TAbstractFile, TFile, TFolder, debounce, normalizePath, requestUrl } from "obsidian";
-import { DEFAULT_SETTINGS, LocalOcrSettingTab, describeProgress, type LocalOcrSettings } from "./settings";
+import { DEFAULT_SETTINGS, LocalOcrSettingTab, describeProgress, loadSettings, type LocalOcrSettings } from "./settings";
 import {
 	buildNotePath,
 	formatClock,
@@ -10,6 +10,15 @@ import {
 	uniquePath,
 	type RenderOptions,
 } from "./format";
+import {
+	findMapping,
+	parseFieldList,
+	prepareRecord,
+	upsertIntoJsonText,
+	type JsonOutcome,
+	type JsonRecordRef,
+	type UpsertOptions,
+} from "./json-export";
 import {
 	LocalOcrClient,
 	SyncAbortedError,
@@ -33,6 +42,8 @@ interface PluginData {
 	meta: SyncMeta;
 	/** scan id → vault path of its note */
 	paths: Record<string, string>;
+	/** scan id → JSON array file and record id written for it */
+	jsonRecords: Record<string, JsonRecordRef>;
 }
 
 const LOG_PREFIX = "[LocalOCR Sync]";
@@ -60,6 +71,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	private syncState: SyncCursorState = initialCursorState();
 	private meta: SyncMeta = { lastSyncAt: null, lastSyncCount: 0 };
 	private paths: Record<string, string> = {};
+	private jsonRecords: Record<string, JsonRecordRef> = {};
 
 	private syncing = false;
 	private unloaded = false;
@@ -122,13 +134,11 @@ export default class LocalOcrSyncPlugin extends Plugin {
 
 	private async loadPluginData(): Promise<void> {
 		const raw = ((await this.loadData()) ?? {}) as Partial<PluginData>;
-		this.settings = { ...DEFAULT_SETTINGS, ...(raw.settings ?? {}) };
-		if (typeof this.settings.autoSyncMinutes !== "number" || !(this.settings.autoSyncMinutes >= 0)) {
-			this.settings.autoSyncMinutes = DEFAULT_SETTINGS.autoSyncMinutes;
-		}
+		this.settings = loadSettings(raw.settings);
 		this.syncState = { ...initialCursorState(), ...(raw.sync ?? {}) };
 		this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(raw.meta ?? {}) };
 		this.paths = { ...(raw.paths ?? {}) };
+		this.jsonRecords = { ...(raw.jsonRecords ?? {}) };
 	}
 
 	private async savePluginData(): Promise<void> {
@@ -137,6 +147,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			sync: this.syncState,
 			meta: this.meta,
 			paths: this.paths,
+			jsonRecords: this.jsonRecords,
 		};
 		await this.saveData(data);
 	}
@@ -225,6 +236,13 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			if (opts.manual) new Notice("LocalOCR：請先在設定中填入伺服器網址與 API 金鑰");
 			return;
 		}
+		const createNotes = this.settings.createNotes;
+		const exportJson = this.hasJsonMappings();
+		if (!createNotes && !exportJson) {
+			// Syncing would advance the progress without writing anything.
+			if (opts.manual) new Notice("LocalOCR：請開啟「同時建立筆記」或新增 JSON 陣列輸出的對應");
+			return;
+		}
 		this.syncing = true;
 		this.frontmatterIndex = null;
 		this.setStatus("LocalOCR：同步中…");
@@ -232,31 +250,32 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			const result = await runSync({
 				client: this.createClient(),
 				state: this.syncState,
-				writeScan: (scan, templates) => this.writeScan(scan, templates),
+				writeScan: createNotes ? (scan, templates) => this.writeScan(scan, templates) : undefined,
+				exportJson: exportJson ? (scan) => this.exportJson(scan) : undefined,
 				saveState: async (state) => {
 					this.syncState = state;
 					await this.savePluginData();
 				},
 				isCancelled: () => this.unloaded,
-				onProgress: (r) => this.setStatus(`LocalOCR：同步中…（${r.created + r.updated + r.unchanged} 筆）`),
+				onProgress: (r) => this.setStatus(`LocalOCR：同步中…（已處理 ${r.pages} 頁）`),
 			});
 			if (this.unloaded) return;
-			this.meta = { lastSyncAt: new Date().toISOString(), lastSyncCount: result.created + result.updated };
+			this.meta = { lastSyncAt: new Date().toISOString(), lastSyncCount: result.changed };
 			await this.savePluginData();
 			this.lastSyncFailed = false;
 			this.renderIdleStatus();
-			if (opts.manual) new Notice(`LocalOCR 同步完成：${summarize(result)}`);
-			if (result.failed > 0) {
+			if (opts.manual) new Notice(`LocalOCR 同步完成：${summarize(result, { notes: createNotes })}`);
+			const failed = result.failed + result.json.failed;
+			if (failed > 0) {
 				console.warn(LOG_PREFIX, "部分掃描無法寫入：", result.errors);
-				new Notice(`LocalOCR：${result.failed} 筆掃描無法寫入\n${result.errors.join("\n")}`, 15_000);
+				new Notice(`LocalOCR：${failed} 筆寫入失敗\n${result.errors.join("\n")}`, 15_000);
 			}
 		} catch (error) {
 			const message = describeError(error);
 			this.setStatus("LocalOCR：同步失敗", message);
 			if (opts.manual || !this.lastSyncFailed) {
 				const partial = error instanceof SyncAbortedError ? error.result : null;
-				const done = partial ? partial.created + partial.updated + partial.unchanged : 0;
-				const extra = done > 0 ? `\n（已處理 ${done} 筆，下次會從中斷處繼續）` : "";
+				const extra = partial && partial.pages > 0 ? "\n（已完成的頁面會保留，下次會從中斷處繼續）" : "";
 				new Notice(`LocalOCR 同步失敗：${message}${extra}`, 10_000);
 			}
 			this.lastSyncFailed = true;
@@ -296,6 +315,65 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		const file = await this.app.vault.create(path, renderNote(scan, opts));
 		this.paths[scan.id] = file.path;
 		return "created";
+	}
+
+	private hasJsonMappings(): boolean {
+		return this.settings.jsonMappings.some((m) => m.templateId.trim() && m.filePath.trim());
+	}
+
+	private jsonOptions(): UpsertOptions {
+		return {
+			preserveFields: parseFieldList(this.settings.jsonPreserveFields),
+			doneField: this.settings.jsonDoneField.trim(),
+		};
+	}
+
+	/** Upsert the scan's `data` into the JSON array file mapped to its template. */
+	private async exportJson(scan: Scan): Promise<JsonOutcome | null> {
+		const mapping = findMapping(this.settings.jsonMappings, scan.templateId);
+		if (!mapping) return null;
+		const prepared = prepareRecord(scan);
+		if (!prepared) return null; // data is not a JSON object
+		const filePath = normalizePath(mapping.filePath.trim());
+		const opts = this.jsonOptions();
+		const ref = this.jsonRecords[scan.id];
+		// Also match the id written last time (e.g. data gained its own id since).
+		const altIds = ref && ref.filePath === filePath && ref.recordId !== prepared.recordId ? [ref.recordId] : [];
+
+		let outcome: JsonOutcome;
+		const existing = this.app.vault.getAbstractFileByPath(filePath);
+		if (existing instanceof TFile) {
+			// Dry run first so unchanged/skipped records and invalid files cause no write.
+			const preview = upsertIntoJsonText(await this.app.vault.read(existing), prepared, opts, altIds, filePath);
+			outcome = preview.outcome;
+			if (preview.text !== null) {
+				let failure: unknown = null;
+				await this.app.vault.process(existing, (data) => {
+					try {
+						const result = upsertIntoJsonText(data, prepared, opts, altIds, filePath);
+						outcome = result.outcome;
+						return result.text ?? data;
+					} catch (error) {
+						failure = error;
+						return data;
+					}
+				});
+				if (failure) throw failure;
+			}
+		} else if (existing) {
+			throw new Error(`「${filePath}」是資料夾，無法寫入 JSON`);
+		} else {
+			const slash = filePath.lastIndexOf("/");
+			if (slash > 0) await this.ensureFolder(filePath.slice(0, slash));
+			if (await this.app.vault.adapter.exists(filePath)) {
+				throw new Error(`「${filePath}」已存在但無法在保險庫中讀取，已略過，不會覆寫`);
+			}
+			const created = upsertIntoJsonText(null, prepared, opts);
+			await this.app.vault.create(filePath, created.text ?? "[]\n");
+			outcome = created.outcome;
+		}
+		this.jsonRecords[scan.id] = { filePath, recordId: prepared.recordId };
+		return outcome;
 	}
 
 	/** The note previously written for this scan, if it still exists. */
@@ -353,6 +431,15 @@ export default class LocalOcrSyncPlugin extends Plugin {
 				changed = true;
 			} else if (file instanceof TFolder && path.startsWith(prefix)) {
 				this.paths[id] = `${file.path}/${path.slice(prefix.length)}`;
+				changed = true;
+			}
+		}
+		for (const ref of Object.values(this.jsonRecords)) {
+			if (ref.filePath === oldPath) {
+				ref.filePath = file.path;
+				changed = true;
+			} else if (file instanceof TFolder && ref.filePath.startsWith(prefix)) {
+				ref.filePath = `${file.path}/${ref.filePath.slice(prefix.length)}`;
 				changed = true;
 			}
 		}

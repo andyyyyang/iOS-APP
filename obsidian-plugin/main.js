@@ -310,8 +310,25 @@ var DEFAULT_SETTINGS = {
   folder: "LocalOCR",
   subfolderPerTemplate: true,
   autoSyncMinutes: 15,
-  includeText: true
+  includeText: true,
+  createNotes: true,
+  jsonMappings: [],
+  jsonPreserveFields: "docNo, done",
+  jsonDoneField: "done"
 };
+function loadSettings(saved) {
+  const settings = { ...DEFAULT_SETTINGS, ...saved != null ? saved : {} };
+  if (typeof settings.autoSyncMinutes !== "number" || !(settings.autoSyncMinutes >= 0)) {
+    settings.autoSyncMinutes = DEFAULT_SETTINGS.autoSyncMinutes;
+  }
+  settings.jsonMappings = Array.isArray(saved == null ? void 0 : saved.jsonMappings) ? saved.jsonMappings.map((m) => ({
+    templateId: typeof (m == null ? void 0 : m.templateId) === "string" ? m.templateId : "",
+    filePath: typeof (m == null ? void 0 : m.filePath) === "string" ? m.filePath : ""
+  })) : [];
+  if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
+  if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
+  return settings;
+}
 var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -347,6 +364,12 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     new import_obsidian.Setting(containerEl).setName("\u7B46\u8A18").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u540C\u6642\u5EFA\u7ACB\u7B46\u8A18").setDesc("\u6BCF\u7B46\u6383\u63CF\u5EFA\u7ACB\u4E00\u5247 Markdown \u7B46\u8A18\u3002\u95DC\u9589\u6642\u53EA\u5BEB\u5165\u4E0B\u65B9\u8A2D\u5B9A\u7684 JSON \u9663\u5217\u6A94\u3002").addToggle(
+      (toggle) => toggle.setValue(settings.createNotes).onChange(async (value) => {
+        settings.createNotes = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian.Setting(containerEl).setName("\u76EE\u6A19\u8CC7\u6599\u593E").setDesc("\u540C\u6B65\u7684\u7B46\u8A18\u6703\u653E\u5728\u9019\u500B\u8CC7\u6599\u593E\uFF08\u76F8\u5C0D\u65BC\u4FDD\u96AA\u5EAB\u6839\u76EE\u9304\uFF09\u3002").addText(
       (text) => text.setPlaceholder(DEFAULT_SETTINGS.folder).setValue(settings.folder).onChange(async (value) => {
         settings.folder = value.trim();
@@ -365,6 +388,7 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    this.displayJsonSection(containerEl);
     new import_obsidian.Setting(containerEl).setName("\u540C\u6B65").setHeading();
     new import_obsidian.Setting(containerEl).setName("\u81EA\u52D5\u540C\u6B65\u9593\u9694\uFF08\u5206\u9418\uFF09").setDesc("\u6BCF\u9694\u5E7E\u5206\u9418\u81EA\u52D5\u540C\u6B65\u4E00\u6B21\uFF1B\u8A2D\u70BA 0 \u8868\u793A\u95DC\u9589\u81EA\u52D5\u540C\u6B65\u3002").addText((text) => {
       text.inputEl.type = "number";
@@ -379,7 +403,7 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
     });
     const progress = this.plugin.progressDescription();
     new import_obsidian.Setting(containerEl).setName("\u91CD\u8A2D\u540C\u6B65\u9032\u5EA6").setDesc(
-      `\u4E0B\u6B21\u540C\u6B65\u6642\u91CD\u65B0\u4E0B\u8F09\u5168\u90E8\u6383\u63CF\uFF1B\u5DF2\u5B58\u5728\u7684\u7B46\u8A18\u6703\u539F\u5730\u66F4\u65B0\uFF0C\u4E0D\u6703\u91CD\u8907\u5EFA\u7ACB\u3002${progress ? `\u76EE\u524D\u9032\u5EA6\uFF1A${progress}` : ""}`
+      `\u4E0B\u6B21\u540C\u6B65\u6642\u91CD\u65B0\u4E0B\u8F09\u5168\u90E8\u6383\u63CF\uFF1B\u5DF2\u5B58\u5728\u7684\u7B46\u8A18\u8207 JSON \u7D00\u9304\u6703\u539F\u5730\u66F4\u65B0\uFF0C\u4E0D\u6703\u91CD\u8907\u5EFA\u7ACB\u3002${progress ? `\u76EE\u524D\u9032\u5EA6\uFF1A${progress}` : ""}`
     ).addButton(
       (button) => button.setButtonText("\u91CD\u8A2D\u540C\u6B65\u9032\u5EA6").setWarning().onClick(async () => {
         await this.plugin.resetProgress();
@@ -387,9 +411,143 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
   }
+  displayJsonSection(containerEl) {
+    const settings = this.plugin.settings;
+    new import_obsidian.Setting(containerEl).setName("JSON \u9663\u5217\u8F38\u51FA").setDesc(
+      "\u628A\u6307\u5B9A\u60C5\u5883\uFF08\u6A23\u677F\uFF09\u6383\u63CF\u7684\u7D50\u69CB\u5316\u8CC7\u6599\uFF0C\u4F9D id \u65B0\u589E\u6216\u66F4\u65B0\u5230\u4FDD\u96AA\u5EAB\u4E2D\u7684 JSON \u9663\u5217\u6A94\uFF08\u6700\u65B0\u7684\u5728\u6700\u524D\u9762\uFF09\u3002\u65B0\u589E\u5C0D\u61C9\u5F8C\uFF0C\u57F7\u884C\u300C\u91CD\u65B0\u540C\u6B65\u5168\u90E8\uFF08\u91CD\u8A2D\u9032\u5EA6\uFF09\u300D\u5373\u53EF\u88DC\u4E0A\u5148\u524D\u7684\u6383\u63CF\u3002"
+    ).setHeading();
+    settings.jsonMappings.forEach((mapping, index) => {
+      new import_obsidian.Setting(containerEl).setName(`\u5C0D\u61C9 ${index + 1}`).setDesc("\u60C5\u5883\u4EE3\u78BC \u2192 JSON \u6A94\u6848\u8DEF\u5F91").addText((text) => {
+        text.inputEl.setAttr("aria-label", "\u60C5\u5883\u4EE3\u78BC");
+        text.setPlaceholder("\u60C5\u5883\u4EE3\u78BC\uFF0C\u4F8B\u5982 fv60_air").setValue(mapping.templateId).onChange(async (value) => {
+          mapping.templateId = value.trim();
+          await this.plugin.saveSettings();
+        });
+      }).addText((text) => {
+        text.inputEl.setAttr("aria-label", "JSON \u6A94\u6848\u8DEF\u5F91");
+        text.setPlaceholder("JSON \u6A94\u6848\u8DEF\u5F91\uFF0C\u4F8B\u5982 11 SOP/\u7D00\u9304.json").setValue(mapping.filePath).onChange(async (value) => {
+          mapping.filePath = value.trim();
+          await this.plugin.saveSettings();
+        });
+      }).addExtraButton(
+        (button) => button.setIcon("trash-2").setTooltip("\u79FB\u9664\u9019\u500B\u5C0D\u61C9").onClick(async () => {
+          settings.jsonMappings.splice(index, 1);
+          await this.plugin.saveSettings();
+          this.display();
+        })
+      );
+    });
+    new import_obsidian.Setting(containerEl).addButton(
+      (button) => button.setButtonText("\u65B0\u589E\u5C0D\u61C9").setCta().onClick(async () => {
+        settings.jsonMappings.push({ templateId: "", filePath: "" });
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u66F4\u65B0\u6642\u4FDD\u7559\u7684\u6B04\u4F4D").setDesc("\u4EE5\u9017\u865F\u5206\u9694\u3002\u66F4\u65B0\u65E2\u6709\u7D00\u9304\u6642\uFF0C\u9019\u4E9B\u6B04\u4F4D\u7DAD\u6301 JSON \u6A94\u4E2D\u7684\u73FE\u6709\u503C\uFF08\u4F8B\u5982\u4F60\u4E4B\u5F8C\u586B\u5165\u7684\u50B3\u7968\u865F\u78BC\uFF09\u3002").addText(
+      (text) => text.setPlaceholder(DEFAULT_SETTINGS.jsonPreserveFields).setValue(settings.jsonPreserveFields).onChange(async (value) => {
+        settings.jsonPreserveFields = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u5DF2\u5B8C\u6210\u6B04\u4F4D").setDesc("\u7D00\u9304\u4E2D\u9019\u500B\u6B04\u4F4D\u70BA\u771F\uFF08\u4F8B\u5982 done: true\uFF09\u6642\uFF0C\u540C\u6B65\u4E0D\u6703\u518D\u4FEE\u6539\u8A72\u7B46\u7D00\u9304\u3002\u7559\u7A7A\u8868\u793A\u4E0D\u6AA2\u67E5\u3002").addText(
+      (text) => text.setPlaceholder(DEFAULT_SETTINGS.jsonDoneField).setValue(settings.jsonDoneField).onChange(async (value) => {
+        settings.jsonDoneField = value.trim();
+        await this.plugin.saveSettings();
+      })
+    );
+  }
 };
 function describeProgress(lastSeenUpdatedAt) {
   return lastSeenUpdatedAt ? `\u5DF2\u540C\u6B65\u5230 ${formatDateTime(lastSeenUpdatedAt)} \u66F4\u65B0\u7684\u6383\u63CF\u3002` : "";
+}
+
+// src/json-export.ts
+var JsonArrayError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "JsonArrayError";
+  }
+};
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseFieldList(value) {
+  const fields = [];
+  for (const part of value.split(/[,，、;；\n]/)) {
+    const field = part.trim();
+    if (field && !fields.includes(field)) fields.push(field);
+  }
+  return fields;
+}
+function findMapping(mappings, templateId) {
+  if (!templateId) return null;
+  for (const mapping of mappings) {
+    if (mapping.templateId.trim() === templateId && mapping.filePath.trim()) return mapping;
+  }
+  return null;
+}
+function recordIdOf(item) {
+  if (!isPlainObject2(item)) return null;
+  const id = item.id;
+  if (typeof id === "string" && id.trim()) return id;
+  if (typeof id === "number" && Number.isFinite(id)) return String(id);
+  return null;
+}
+function prepareRecord(scan) {
+  if (!isPlainObject2(scan.data)) return null;
+  const existingId = recordIdOf(scan.data);
+  if (existingId !== null) return { record: { ...scan.data }, recordId: existingId };
+  const record = "id" in scan.data ? { ...scan.data, id: scan.id } : { id: scan.id, ...scan.data };
+  return { record, recordId: scan.id };
+}
+function parseJsonArray(text, filePath = "JSON \u6A94\u6848") {
+  const trimmed = text.replace(/^\uFEFF/, "").trim();
+  if (!trimmed) return [];
+  let value;
+  try {
+    value = JSON.parse(trimmed);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new JsonArrayError(`\u300C${filePath}\u300D\u4E0D\u662F\u6709\u6548\u7684 JSON\uFF08${reason}\uFF09\uFF0C\u5DF2\u7565\u904E\uFF0C\u4E0D\u6703\u8986\u5BEB`);
+  }
+  if (!Array.isArray(value)) {
+    throw new JsonArrayError(`\u300C${filePath}\u300D\u7684\u5167\u5BB9\u4E0D\u662F JSON \u9663\u5217\uFF0C\u5DF2\u7565\u904E\uFF0C\u4E0D\u6703\u8986\u5BEB`);
+  }
+  return value;
+}
+function serializeJsonArray(array) {
+  return `${JSON.stringify(array, null, 2)}
+`;
+}
+function mergePreserved(existing, incoming, fields) {
+  const merged = { ...incoming };
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(existing, field)) merged[field] = existing[field];
+  }
+  return merged;
+}
+function upsertRecord(array, prepared, opts, altIds = []) {
+  let index = -1;
+  for (const id of [prepared.recordId, ...altIds]) {
+    index = array.findIndex((item) => recordIdOf(item) === id);
+    if (index >= 0) break;
+  }
+  if (index < 0) return { array: [prepared.record, ...array], outcome: "created", index: 0 };
+  const existing = array[index];
+  const doneField = opts.doneField.trim();
+  if (doneField && existing[doneField]) return { array: [...array], outcome: "skipped", index };
+  const merged = mergePreserved(existing, prepared.record, opts.preserveFields);
+  if (JSON.stringify(merged) === JSON.stringify(existing)) return { array: [...array], outcome: "unchanged", index };
+  const next = [...array];
+  next[index] = merged;
+  return { array: next, outcome: "updated", index };
+}
+function upsertIntoJsonText(text, prepared, opts, altIds = [], filePath) {
+  if (text === null) return { text: serializeJsonArray([prepared.record]), outcome: "created" };
+  const result = upsertRecord(parseJsonArray(text, filePath), prepared, opts, altIds);
+  if (result.outcome === "skipped" || result.outcome === "unchanged") return { text: null, outcome: result.outcome };
+  return { text: serializeJsonArray(result.array), outcome: result.outcome };
 }
 
 // src/sync-core.ts
@@ -553,6 +711,21 @@ function advanceCursor(state, page) {
     done: true
   };
 }
+function emptySyncResult() {
+  return {
+    created: 0,
+    updated: 0,
+    unchanged: 0,
+    failed: 0,
+    json: { created: 0, updated: 0, skipped: 0, unchanged: 0, failed: 0 },
+    changed: 0,
+    pages: 0,
+    errors: []
+  };
+}
+function pushError(result, message) {
+  if (result.errors.length < 5 && !result.errors.includes(message)) result.errors.push(message);
+}
 var SyncAbortedError = class extends Error {
   constructor(reason, result) {
     super(describeError(reason));
@@ -567,7 +740,7 @@ function isValidScan(item) {
 }
 async function runSync(deps) {
   var _a, _b, _c, _d, _e;
-  const result = { created: 0, updated: 0, unchanged: 0, failed: 0, pages: 0, errors: [] };
+  const result = emptySyncResult();
   const pageSize = (_a = deps.pageSize) != null ? _a : PAGE_SIZE;
   const maxPages = (_b = deps.maxPages) != null ? _b : 1e4;
   let state = { ...deps.state };
@@ -581,16 +754,33 @@ async function runSync(deps) {
         if ((_d = deps.isCancelled) == null ? void 0 : _d.call(deps)) return result;
         if (!isValidScan(item)) {
           result.failed++;
-          if (result.errors.length < 5) result.errors.push("\u4F3A\u670D\u5668\u56DE\u50B3\u4E86\u683C\u5F0F\u4E0D\u6B63\u78BA\u7684\u6383\u63CF\u7D00\u9304");
+          pushError(result, "\u4F3A\u670D\u5668\u56DE\u50B3\u4E86\u683C\u5F0F\u4E0D\u6B63\u78BA\u7684\u6383\u63CF\u7D00\u9304");
           continue;
         }
-        try {
-          const outcome = await deps.writeScan(item, templates);
-          result[outcome]++;
-        } catch (error) {
-          result.failed++;
-          if (result.errors.length < 5) result.errors.push(`${item.id}\uFF1A${describeError(error)}`);
+        let changed = false;
+        if (deps.writeScan) {
+          try {
+            const outcome = await deps.writeScan(item, templates);
+            result[outcome]++;
+            changed = outcome !== "unchanged";
+          } catch (error) {
+            result.failed++;
+            pushError(result, `${item.id}\uFF1A${describeError(error)}`);
+          }
         }
+        if (deps.exportJson) {
+          try {
+            const outcome = await deps.exportJson(item);
+            if (outcome) {
+              result.json[outcome]++;
+              changed || (changed = outcome === "created" || outcome === "updated");
+            }
+          } catch (error) {
+            result.json.failed++;
+            pushError(result, describeError(error));
+          }
+        }
+        if (changed) result.changed++;
       }
       const advance = advanceCursor(state, page);
       state = advance.state;
@@ -603,11 +793,24 @@ async function runSync(deps) {
   }
   return result;
 }
-function summarize(result) {
-  const parts = [`\u65B0\u589E ${result.created} \u7B46`, `\u66F4\u65B0 ${result.updated} \u7B46`];
-  if (result.unchanged) parts.push(`\u672A\u8B8A\u66F4 ${result.unchanged} \u7B46`);
-  if (result.failed) parts.push(`\u5931\u6557 ${result.failed} \u7B46`);
-  return parts.join("\u3001");
+function summarize(result, opts = {}) {
+  var _a;
+  const notes = (_a = opts.notes) != null ? _a : true;
+  const sections = [];
+  if (notes) {
+    const parts = [`\u65B0\u589E ${result.created} \u7B46`, `\u66F4\u65B0 ${result.updated} \u7B46`];
+    if (result.unchanged) parts.push(`\u672A\u8B8A\u66F4 ${result.unchanged} \u7B46`);
+    if (result.failed) parts.push(`\u5931\u6557 ${result.failed} \u7B46`);
+    sections.push(parts.join("\u3001"));
+  }
+  const j = result.json;
+  if (!notes || j.created + j.updated + j.skipped + j.unchanged + j.failed > 0) {
+    const parts = [`\u65B0\u589E ${j.created} \u7B46`, `\u66F4\u65B0 ${j.updated} \u7B46`, `\u7565\u904E ${j.skipped} \u7B46`];
+    if (j.failed) parts.push(`\u5931\u6557 ${j.failed} \u7B46`);
+    sections.push(`JSON\uFF1A${parts.join("\u3001")}`);
+  }
+  if (!notes && result.failed) sections.push(`\u5931\u6557 ${result.failed} \u7B46`);
+  return sections.join("\uFF1B");
 }
 
 // src/main.ts
@@ -635,6 +838,7 @@ var LocalOcrSyncPlugin = class extends import_obsidian2.Plugin {
     this.syncState = initialCursorState();
     this.meta = { lastSyncAt: null, lastSyncCount: 0 };
     this.paths = {};
+    this.jsonRecords = {};
     this.syncing = false;
     this.unloaded = false;
     this.lastSyncFailed = false;
@@ -688,20 +892,19 @@ var LocalOcrSyncPlugin = class extends import_obsidian2.Plugin {
   async loadPluginData() {
     var _a, _b, _c, _d, _e;
     const raw = (_a = await this.loadData()) != null ? _a : {};
-    this.settings = { ...DEFAULT_SETTINGS, ...(_b = raw.settings) != null ? _b : {} };
-    if (typeof this.settings.autoSyncMinutes !== "number" || !(this.settings.autoSyncMinutes >= 0)) {
-      this.settings.autoSyncMinutes = DEFAULT_SETTINGS.autoSyncMinutes;
-    }
-    this.syncState = { ...initialCursorState(), ...(_c = raw.sync) != null ? _c : {} };
-    this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(_d = raw.meta) != null ? _d : {} };
-    this.paths = { ...(_e = raw.paths) != null ? _e : {} };
+    this.settings = loadSettings(raw.settings);
+    this.syncState = { ...initialCursorState(), ...(_b = raw.sync) != null ? _b : {} };
+    this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(_c = raw.meta) != null ? _c : {} };
+    this.paths = { ...(_d = raw.paths) != null ? _d : {} };
+    this.jsonRecords = { ...(_e = raw.jsonRecords) != null ? _e : {} };
   }
   async savePluginData() {
     const data = {
       settings: this.settings,
       sync: this.syncState,
       meta: this.meta,
-      paths: this.paths
+      paths: this.paths,
+      jsonRecords: this.jsonRecords
     };
     await this.saveData(data);
   }
@@ -784,6 +987,12 @@ ${describeError(error)}`, 1e4);
       if (opts.manual) new import_obsidian2.Notice("LocalOCR\uFF1A\u8ACB\u5148\u5728\u8A2D\u5B9A\u4E2D\u586B\u5165\u4F3A\u670D\u5668\u7DB2\u5740\u8207 API \u91D1\u9470");
       return;
     }
+    const createNotes = this.settings.createNotes;
+    const exportJson = this.hasJsonMappings();
+    if (!createNotes && !exportJson) {
+      if (opts.manual) new import_obsidian2.Notice("LocalOCR\uFF1A\u8ACB\u958B\u555F\u300C\u540C\u6642\u5EFA\u7ACB\u7B46\u8A18\u300D\u6216\u65B0\u589E JSON \u9663\u5217\u8F38\u51FA\u7684\u5C0D\u61C9");
+      return;
+    }
     this.syncing = true;
     this.frontmatterIndex = null;
     this.setStatus("LocalOCR\uFF1A\u540C\u6B65\u4E2D\u2026");
@@ -791,23 +1000,25 @@ ${describeError(error)}`, 1e4);
       const result = await runSync({
         client: this.createClient(),
         state: this.syncState,
-        writeScan: (scan, templates) => this.writeScan(scan, templates),
+        writeScan: createNotes ? (scan, templates) => this.writeScan(scan, templates) : void 0,
+        exportJson: exportJson ? (scan) => this.exportJson(scan) : void 0,
         saveState: async (state) => {
           this.syncState = state;
           await this.savePluginData();
         },
         isCancelled: () => this.unloaded,
-        onProgress: (r) => this.setStatus(`LocalOCR\uFF1A\u540C\u6B65\u4E2D\u2026\uFF08${r.created + r.updated + r.unchanged} \u7B46\uFF09`)
+        onProgress: (r) => this.setStatus(`LocalOCR\uFF1A\u540C\u6B65\u4E2D\u2026\uFF08\u5DF2\u8655\u7406 ${r.pages} \u9801\uFF09`)
       });
       if (this.unloaded) return;
-      this.meta = { lastSyncAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncCount: result.created + result.updated };
+      this.meta = { lastSyncAt: (/* @__PURE__ */ new Date()).toISOString(), lastSyncCount: result.changed };
       await this.savePluginData();
       this.lastSyncFailed = false;
       this.renderIdleStatus();
-      if (opts.manual) new import_obsidian2.Notice(`LocalOCR \u540C\u6B65\u5B8C\u6210\uFF1A${summarize(result)}`);
-      if (result.failed > 0) {
+      if (opts.manual) new import_obsidian2.Notice(`LocalOCR \u540C\u6B65\u5B8C\u6210\uFF1A${summarize(result, { notes: createNotes })}`);
+      const failed = result.failed + result.json.failed;
+      if (failed > 0) {
         console.warn(LOG_PREFIX, "\u90E8\u5206\u6383\u63CF\u7121\u6CD5\u5BEB\u5165\uFF1A", result.errors);
-        new import_obsidian2.Notice(`LocalOCR\uFF1A${result.failed} \u7B46\u6383\u63CF\u7121\u6CD5\u5BEB\u5165
+        new import_obsidian2.Notice(`LocalOCR\uFF1A${failed} \u7B46\u5BEB\u5165\u5931\u6557
 ${result.errors.join("\n")}`, 15e3);
       }
     } catch (error) {
@@ -815,9 +1026,7 @@ ${result.errors.join("\n")}`, 15e3);
       this.setStatus("LocalOCR\uFF1A\u540C\u6B65\u5931\u6557", message);
       if (opts.manual || !this.lastSyncFailed) {
         const partial = error instanceof SyncAbortedError ? error.result : null;
-        const done = partial ? partial.created + partial.updated + partial.unchanged : 0;
-        const extra = done > 0 ? `
-\uFF08\u5DF2\u8655\u7406 ${done} \u7B46\uFF0C\u4E0B\u6B21\u6703\u5F9E\u4E2D\u65B7\u8655\u7E7C\u7E8C\uFF09` : "";
+        const extra = partial && partial.pages > 0 ? "\n\uFF08\u5DF2\u5B8C\u6210\u7684\u9801\u9762\u6703\u4FDD\u7559\uFF0C\u4E0B\u6B21\u6703\u5F9E\u4E2D\u65B7\u8655\u7E7C\u7E8C\uFF09" : "";
         new import_obsidian2.Notice(`LocalOCR \u540C\u6B65\u5931\u6557\uFF1A${message}${extra}`, 1e4);
       }
       this.lastSyncFailed = true;
@@ -853,6 +1062,61 @@ ${result.errors.join("\n")}`, 15e3);
     const file = await this.app.vault.create(path, renderNote(scan, opts));
     this.paths[scan.id] = file.path;
     return "created";
+  }
+  hasJsonMappings() {
+    return this.settings.jsonMappings.some((m) => m.templateId.trim() && m.filePath.trim());
+  }
+  jsonOptions() {
+    return {
+      preserveFields: parseFieldList(this.settings.jsonPreserveFields),
+      doneField: this.settings.jsonDoneField.trim()
+    };
+  }
+  /** Upsert the scan's `data` into the JSON array file mapped to its template. */
+  async exportJson(scan) {
+    var _a;
+    const mapping = findMapping(this.settings.jsonMappings, scan.templateId);
+    if (!mapping) return null;
+    const prepared = prepareRecord(scan);
+    if (!prepared) return null;
+    const filePath = (0, import_obsidian2.normalizePath)(mapping.filePath.trim());
+    const opts = this.jsonOptions();
+    const ref = this.jsonRecords[scan.id];
+    const altIds = ref && ref.filePath === filePath && ref.recordId !== prepared.recordId ? [ref.recordId] : [];
+    let outcome;
+    const existing = this.app.vault.getAbstractFileByPath(filePath);
+    if (existing instanceof import_obsidian2.TFile) {
+      const preview = upsertIntoJsonText(await this.app.vault.read(existing), prepared, opts, altIds, filePath);
+      outcome = preview.outcome;
+      if (preview.text !== null) {
+        let failure = null;
+        await this.app.vault.process(existing, (data) => {
+          var _a2;
+          try {
+            const result = upsertIntoJsonText(data, prepared, opts, altIds, filePath);
+            outcome = result.outcome;
+            return (_a2 = result.text) != null ? _a2 : data;
+          } catch (error) {
+            failure = error;
+            return data;
+          }
+        });
+        if (failure) throw failure;
+      }
+    } else if (existing) {
+      throw new Error(`\u300C${filePath}\u300D\u662F\u8CC7\u6599\u593E\uFF0C\u7121\u6CD5\u5BEB\u5165 JSON`);
+    } else {
+      const slash = filePath.lastIndexOf("/");
+      if (slash > 0) await this.ensureFolder(filePath.slice(0, slash));
+      if (await this.app.vault.adapter.exists(filePath)) {
+        throw new Error(`\u300C${filePath}\u300D\u5DF2\u5B58\u5728\u4F46\u7121\u6CD5\u5728\u4FDD\u96AA\u5EAB\u4E2D\u8B80\u53D6\uFF0C\u5DF2\u7565\u904E\uFF0C\u4E0D\u6703\u8986\u5BEB`);
+      }
+      const created = upsertIntoJsonText(null, prepared, opts);
+      await this.app.vault.create(filePath, (_a = created.text) != null ? _a : "[]\n");
+      outcome = created.outcome;
+    }
+    this.jsonRecords[scan.id] = { filePath, recordId: prepared.recordId };
+    return outcome;
   }
   /** The note previously written for this scan, if it still exists. */
   findNoteFor(scanId) {
@@ -904,6 +1168,15 @@ ${result.errors.join("\n")}`, 15e3);
         changed = true;
       } else if (file instanceof import_obsidian2.TFolder && path.startsWith(prefix)) {
         this.paths[id] = `${file.path}/${path.slice(prefix.length)}`;
+        changed = true;
+      }
+    }
+    for (const ref of Object.values(this.jsonRecords)) {
+      if (ref.filePath === oldPath) {
+        ref.filePath = file.path;
+        changed = true;
+      } else if (file instanceof import_obsidian2.TFolder && ref.filePath.startsWith(prefix)) {
+        ref.filePath = `${file.path}/${ref.filePath.slice(prefix.length)}`;
         changed = true;
       }
     }
