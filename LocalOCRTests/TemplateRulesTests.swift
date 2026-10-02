@@ -28,8 +28,8 @@ final class TemplateRulesTests: XCTestCase {
 
     func testBundledFV60TemplatesLoad() {
         XCTAssertEqual(sea.name, "FV60 海運請款（義佳，三家發票）")
-        XCTAssertEqual(air.rules.count, 13)
-        XCTAssertEqual(sea.rules.count, 15)
+        XCTAssertEqual(air.rules.count, 16)
+        XCTAssertEqual(sea.rules.count, 18)
         XCTAssertEqual(sea.origin, .builtIn)
     }
 
@@ -88,7 +88,7 @@ final class TemplateRulesTests: XCTestCase {
 
     func testRuleTargetsExcludeArrayPaths() {
         let targets = TemplateRules.topLevelTargets(of: sea.rules)
-        XCTAssertTrue(targets.isSuperset(of: ["id", "amount", "invoice", "qty", "price", "text"]))
+        XCTAssertTrue(targets.isSuperset(of: ["id", "amount", "invoice", "qty", "price", "text", "caseNo"]))
         XCTAssertFalse(targets.contains("_declarationQuantities"))
         XCTAssertFalse(targets.contains("taxItems"))
         XCTAssertFalse(targets.contains("osat"))
@@ -103,6 +103,67 @@ final class TemplateRulesTests: XCTestCase {
         let result = TemplateRules.apply(sea.rules, to: JSONValue.merged(pages, sample: sea.sample), now: fixedDate, makeID: { "x" })
         XCTAssertEqual(result["qty"], .number(2000))
         XCTAssertEqual(result["price"], .number(1.575))
+    }
+
+    // MARK: - JT 號、未稅金額、紀錄名稱
+
+    func testCaseNumberIsMatchedFromOCRText() throws {
+        // JT 號直接從 OCR 文字比對，不交給 AI（避免照抄範例）；JT26092401 多一位數不算
+        let text = "義佳有限公司 請款單\n貴司編號：JT 2609240\n另案 JT2609240-1\n備註 JT26092401"
+        let data = try JSONValue.parse(#"{"osat":"ATK","taxItems":[]}"#).conformed(to: sea.sample)
+        let result = TemplateRules.apply(sea.rules, to: data, text: text, now: fixedDate, makeID: { "x" })
+        XCTAssertEqual(result["caseNo"]?.stringValue, "JT2609240,JT2609240-1")
+        XCTAssertEqual(result["text"]?.stringValue, "出口/ATK/JT2609240,JT2609240-1")
+    }
+
+    func testSeaExpenseIsAmountWithoutTax() throws {
+        // 海運：expenseAmount = amount ÷ 1.05；空運不扣稅
+        let extracted = #"{"taxItems":[{"invoice":"FR83150095","taxId":"28006223","taxBase":9660,"taxAmount":483},{"invoice":"ED17531542","taxId":"22368445","taxBase":1000,"taxAmount":50},{"invoice":"ED17316531","taxId":"12762783","taxBase":500,"taxAmount":25}],"_declarationQuantities":[34841]}"#
+        let result = try apply(sea, to: extracted)
+        XCTAssertEqual(result["amount"], .number(11718))
+        XCTAssertEqual(result["expenseAmount"], .number(11160))
+        XCTAssertEqual(result["price"], .number(0.336))
+        let airResult = try apply(air, to: #"{"amount":17086,"_declarationQuantities":[55044]}"#)
+        XCTAssertEqual(airResult["expenseAmount"], .number(17086))
+        XCTAssertEqual(airResult["price"], .number(0.31))
+    }
+
+    func testRecordTitleAndSubtitleFromExtractedData() throws {
+        let result = try apply(air, to: #"{"osat":"SCK","caseNo":"JT2609260","invoice":"FR14077356","amount":13146,"_declarationQuantities":[34841]}"#)
+        let display = TemplateRules.display(rules: air.rules, data: result)
+        XCTAssertEqual(display.title, "JT2609260")
+        XCTAssertEqual(display.subtitle, "總金額 13,146 · 單價 0.377")
+
+        // 還沒有數量時只顯示總金額；沒有 JT 號時沒有名稱（改用預設名稱）
+        let partial = try apply(air, to: #"{"amount":1556}"#)
+        let partialDisplay = TemplateRules.display(rules: air.rules, data: partial)
+        XCTAssertNil(partialDisplay.title)
+        XCTAssertEqual(partialDisplay.subtitle, "總金額 1,556")
+        XCTAssertEqual(TemplateRules.display(rules: [], data: result).title, nil)
+    }
+
+    func testDivideAcceptsNumberAndMatchValidation() throws {
+        let rules = try JSONValue.parse(#"[{"set":"half","divide":["total",2],"round":1}]"#)
+        guard case .array(let list) = rules else { return XCTFail() }
+        XCTAssertEqual(TemplateRules.apply(list, to: try JSONValue.parse(#"{"total":5}"#))["half"], .number(2.5))
+        XCTAssertNotNil(TemplateRules.validate(try JSONValue.parse(#"[{"set":"a","match":"(JT"}]"#)))
+        XCTAssertNil(TemplateRules.validate(try JSONValue.parse(#"[{"set":"a","match":"(JT)(\\d{7})"}]"#)))
+    }
+
+    // MARK: - 防止照抄範例
+
+    func testGroundingDropsValuesNotPrintedOnThePage() throws {
+        let page = "萬泰物流股份有限公司 電子發票證明聯\nFR-14O77356\n2026-09-22\n總計 1,556"
+        let extracted = try JSONValue.parse(
+            #"{"osat":"SCK","invoice":"FR14077356","invDate":"2026-09-22","amount":1556,"caseNo":"JT2609260","_declarationQuantities":[1200]}"#
+        )
+        let grounded = extracted.grounded(in: page)
+        XCTAssertEqual(grounded["invoice"]?.stringValue, "FR14077356", "OCR 的 O 與 0 混淆仍算對得上")
+        XCTAssertEqual(grounded["amount"], .number(1556))
+        XCTAssertEqual(grounded["invDate"]?.stringValue, "2026-09-22")
+        XCTAssertEqual(grounded["osat"]?.stringValue, "SCK")
+        XCTAssertEqual(grounded["caseNo"], .null, "頁面上沒有的 JT 號是照抄範例")
+        XCTAssertEqual(grounded["_declarationQuantities"], .array([]), "發票頁沒有報單數量")
     }
 
     func testOnlyIfEmptyAndValidation() throws {
@@ -130,6 +191,14 @@ final class TemplateRulesTests: XCTestCase {
     }
 
     #if canImport(FoundationModels)
+    func testSchemaHintsShowFormatNotSampleValues() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("需要 iOS 26") }
+        XCTAssertEqual(TemplateSchemaBuilder.hint(for: .string("FR14077356")), "格式如：FR00000000")
+        XCTAssertEqual(TemplateSchemaBuilder.hint(for: .string("2026-09-22")), "日期，格式 YYYY-MM-DD")
+        XCTAssertEqual(TemplateSchemaBuilder.hint(for: .number(1556)), "數字")
+        XCTAssertEqual(TemplateSchemaBuilder.hint(for: .string("全聯福利中心")), "例如：全聯福利中心")
+    }
+
     func testSchemaExcludesRuleTargets() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("需要 iOS 26") }
         XCTAssertNoThrow(try TemplateSchemaBuilder.generationSchema(

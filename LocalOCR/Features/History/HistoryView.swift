@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HistoryView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(TemplateLibrary.self) private var library
     @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
     @State private var searchText = ""
     @State private var confirmsDeleteAll = false
@@ -11,7 +12,9 @@ struct HistoryView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return records }
         return records.filter {
-            $0.text.localizedCaseInsensitiveContains(query) || ($0.jsonText?.localizedCaseInsensitiveContains(query) ?? false)
+            $0.title.localizedCaseInsensitiveContains(query)
+                || $0.text.localizedCaseInsensitiveContains(query)
+                || ($0.jsonText?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 
@@ -34,6 +37,7 @@ struct HistoryView: View {
                 .confirmationDialog("確定要刪除全部紀錄嗎？", isPresented: $confirmsDeleteAll, titleVisibility: .visible) {
                     Button("全部刪除", role: .destructive, action: deleteAll)
                 }
+                .task { fillMissingDisplayNames() }
         }
     }
 
@@ -68,6 +72,20 @@ struct HistoryView: View {
         try? modelContext.save()
     }
 
+    /// 舊紀錄（在樣板加入名稱規則之前分析的）補上名稱與副標。
+    private func fillMissingDisplayNames() {
+        var changed = false
+        for record in records where record.displayTitle == nil && record.displaySubtitle == nil {
+            guard let data = record.dataValue, let template = library.template(id: record.templateID) else { continue }
+            let display = TemplateRules.display(rules: template.rules, data: data)
+            guard display.title != nil || display.subtitle != nil else { continue }
+            record.displayTitle = display.title
+            record.displaySubtitle = display.subtitle
+            changed = true
+        }
+        if changed { try? modelContext.save() }
+    }
+
     private func deleteAll() {
         for record in records {
             modelContext.delete(record)
@@ -91,7 +109,7 @@ struct HistoryRow: View {
                 Text(record.title)
                     .font(.headline)
                     .lineLimit(1)
-                Text(record.text)
+                Text(record.displaySubtitle ?? record.text)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

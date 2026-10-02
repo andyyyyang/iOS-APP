@@ -23,6 +23,9 @@ final class ScanRecord {
     var classificationJSON: String?
     /// 最後一次成功上傳的時間；內容修改後設為 nil 表示需要重新上傳。
     var syncedAt: Date?
+    /// 依樣板 `_title`／`_subtitle` 規則從擷取內容產生的名稱與副標（例如 JT 號；總金額與單價）。
+    var displayTitle: String?
+    var displaySubtitle: String?
 
     init(
         createdAt: Date = .now,
@@ -60,6 +63,9 @@ final class ScanRecord {
         classificationJSON = outcome.classification.jsonValue.compactString
         if let data = outcome.data {
             jsonText = data.prettyPrinted()
+            let display = TemplateRules.display(rules: outcome.template.rules, data: data)
+            displayTitle = display.title
+            displaySubtitle = display.subtitle
         }
         syncedAt = nil
     }
@@ -78,6 +84,9 @@ final class ScanRecord {
     }
 
     var title: String {
+        if let displayTitle, !displayTitle.isEmpty {
+            return displayTitle
+        }
         if let data = dataValue {
             for key in ["title", "store", "name", "company"] {
                 if let value = data[key]?.stringValue?.trimmingCharacters(in: .whitespaces), !value.isEmpty {

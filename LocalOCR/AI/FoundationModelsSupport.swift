@@ -80,12 +80,22 @@ enum TemplateSchemaBuilder {
         }
     }
 
-    /// 以範例值作為欄位提示，例如「例如：全聯福利中心」。
-    private static func hint(for value: JSONValue) -> String? {
+    /// 欄位提示只示範格式，不放範例中的實際號碼與金額，避免模型在本頁沒有該欄位時照抄：
+    /// 含數字的字串把數字換成 0（「FR14077356」→「FR00000000」），日期寫成 YYYY-MM-DD，數字欄位不給範例值。
+    static func hint(for value: JSONValue) -> String? {
         switch value {
-        case .string(let text) where !text.isEmpty: return "例如：\(text)"
-        case .number, .bool: return "例如：\(value.compactString)"
-        default: return nil
+        case .string(let text) where text.range(of: "^\\d{4}-\\d{2}-\\d{2}$", options: .regularExpression) != nil:
+            return "日期，格式 YYYY-MM-DD"
+        case .string(let text) where text.contains(where: { $0.isASCII && $0.isNumber }):
+            return "格式如：\(String(text.map { $0.isASCII && $0.isNumber ? "0" : $0 }))"
+        case .string(let text) where !text.isEmpty:
+            return "例如：\(text)"
+        case .number:
+            return "數字"
+        case .bool:
+            return "true 或 false"
+        default:
+            return nil
         }
     }
 }
@@ -167,7 +177,9 @@ struct FoundationModelsExtractor: StructuredExtractor {
         for (index, page) in pages.enumerated() {
             progress(index + 1, pages.count)
             do {
-                results.append(try await extractPage(page, template: template, schema: schema, pageNumber: index + 1, pageCount: pages.count))
+                let value = try await extractPage(page, template: template, schema: schema, pageNumber: index + 1, pageCount: pages.count)
+                // 本頁文字中找不到的數字與代碼不採用（模型照抄範例或編造）
+                results.append(value.grounded(in: page))
             } catch {
                 // 單頁失敗（例如與情境無關的附件頁）不影響其他頁
                 lastError = error
@@ -177,7 +189,9 @@ struct FoundationModelsExtractor: StructuredExtractor {
             throw StructuredExtractionError.generation(AIErrorDescriber.describe(lastError))
         }
         let merged = JSONValue.merged(results, sample: sample)
-        return TemplateRules.apply(rules, to: merged).conformed(to: sample).removingHelperFields()
+        return TemplateRules.apply(rules, to: merged, text: pages.joined(separator: "\n\n"))
+            .conformed(to: sample)
+            .removingHelperFields()
     }
 
     private func extractPage(
@@ -230,6 +244,7 @@ struct FoundationModelsExtractor: StructuredExtractor {
         var lines = [
             "你是資料擷取助理，負責把 OCR 文字整理成指定結構的 JSON。",
             "只能使用文字中實際出現的資訊，不可臆測或編造；找不到的欄位就省略。",
+            "欄位說明裡的「例如」「格式如」只是示範，不是這份文件的內容，絕對不可照抄；本頁沒有出現的欄位一律省略。",
             "保留原文的語言與寫法，修正明顯的 OCR 錯字即可。",
             "文件情境：\(template.name)（\(template.description)）",
         ]

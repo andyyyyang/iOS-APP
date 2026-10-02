@@ -281,8 +281,10 @@ export function buildOpenApi(serverUrl?: string) {
           description:
             "Deterministic post-processing step applied by clients after AI extraction (stored verbatim, key order kept; " +
             "the server does not execute rules). Besides set, keys are free-form JSON. Supported ops: value, copy, " +
-            'template ("{field}"), sum ([paths]), join (path + separator), divide ([num, den] + round), today: true, ' +
-            'generate: "base36time", lookup (field + table {key: value}), onlyIfEmpty: true.',
+            'template ("{field}", "{field:,}" for thousands separators), sum ([paths]), join (path + separator), ' +
+            'divide ([num, den] as fields or numbers + round), match (regex over the OCR text + separator), today: true, ' +
+            'generate: "base36time", lookup (field + table {key: value}), onlyIfEmpty: true. ' +
+            'Targets _title / _subtitle name the record in the app and are not output.',
           properties: {
             set: {
               type: "string",

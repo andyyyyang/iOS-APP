@@ -49,7 +49,7 @@
       34841
     ]
   },
-  "instructions": "taxItems：每一張統一發票一筆，通常有三家：樂爾幸泛通世（統一編號 28006223）、義佳（22368445）、貳零零（12762783）。每筆填 invoice（兩個英文字母加 8 位數字）、invDate（發票日期 YYYY-MM-DD，民國年換算西元，115 年 = 2026 年）、taxId（賣方統一編號 8 碼）、taxBase（銷售額／未稅金額，數字）、taxAmount（營業稅額，數字）。非發票的頁面（請款單、提單）不要產生 taxItems。billNo：義佳請款單號（例如 E1509008 或 YJ2607400）。caseNo：出口案號，JT 開頭加 7 位數字。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
+  "instructions": "taxItems：每一張統一發票一筆，通常有三家：樂爾幸泛通世（統一編號 28006223）、義佳（22368445）、貳零零（12762783）。每筆填 invoice（兩個英文字母加 8 位數字）、invDate（發票日期 YYYY-MM-DD，民國年換算西元，115 年 = 2026 年）、taxId（賣方統一編號 8 碼）、taxBase（銷售額／未稅金額，數字）、taxAmount（營業稅額，數字）。非發票的頁面（請款單、提單）不要產生 taxItems。billNo：義佳請款單號（例如 E1509008 或 YJ2607400）。taxBase、taxAmount 只能填發票上印的數字，不要自行計算。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
   "rules": [
     {
       "set": "id",
@@ -86,17 +86,19 @@
       "separator": " / "
     },
     {
-      "set": "expenseAmount",
-      "sum": [
-        "taxItems[].taxBase"
-      ]
-    },
-    {
       "set": "amount",
       "sum": [
         "taxItems[].taxBase",
         "taxItems[].taxAmount"
       ]
+    },
+    {
+      "set": "expenseAmount",
+      "divide": [
+        "amount",
+        1.05
+      ],
+      "round": 0
     },
     {
       "set": "invDate",
@@ -117,6 +119,11 @@
       "round": 3
     },
     {
+      "set": "caseNo",
+      "match": "(JT)[ -]?(\\d{7}(?:-\\d{1,2})?)(?!\\d)",
+      "separator": ","
+    },
+    {
       "set": "text",
       "template": "出口/{osat}/{caseNo}"
     },
@@ -127,6 +134,14 @@
     {
       "set": "done",
       "value": false
+    },
+    {
+      "set": "_title",
+      "template": "{caseNo}"
+    },
+    {
+      "set": "_subtitle",
+      "template": "總金額 {amount:,} · 單價 {price}"
     }
   ]
 }

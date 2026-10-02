@@ -6,10 +6,12 @@ import Foundation
 /// 每條規則是一個物件，`set` 為目標欄位（`field` 或 `array[].field`），其餘鍵決定運算：
 /// - `value`：固定值
 /// - `copy`：複製另一個欄位
-/// - `template`：字串樣式，`{field}` 代入欄位值
+/// - `template`：字串樣式，`{field}` 代入欄位值，`{field:,}` 數字加千分位
 /// - `sum`：加總一或多個路徑的數字
 /// - `join` + `separator`：串接路徑上的字串
-/// - `divide`：[分子, 分母]，可加 `round`（小數位數）
+/// - `divide`：[分子, 分母]（路徑或數字），可加 `round`（小數位數）
+/// - `match` + `separator`：以正規表示式從整份 OCR 文字找出所有符合的字串（去除重複、依出現順序串接）；
+///   有括號群組時取各群組串接（例如 `(JT)[ -]?(\d{7})` 把「JT 2609240」整理成「JT2609240」）；找不到時保留原值
 /// - `today`：今天日期（YYYY-MM-DD）
 /// - `generate`："base36time"：時間戳記 id
 /// - `lookup` + `table`：依同一層的欄位值對照設定
@@ -17,6 +19,7 @@ import Foundation
 ///
 /// 路徑可為 `field`、`array[].field` 或純值陣列 `array[]`。以 `_` 開頭的頂層欄位是輔助欄位：
 /// 由 AI 擷取、供規則計算，最後會從輸出移除（例如報單各品項數量 → 加總成 qty）。
+/// `_title`、`_subtitle` 是紀錄列表顯示的名稱與副標（例如 JT 號；總金額與單價），不會輸出。
 enum TemplateRules {
     /// 規則會設定的頂層欄位；這些欄位不需要 AI 產生。
     static func topLevelTargets(of rules: [JSONValue]) -> Set<String> {
@@ -32,13 +35,18 @@ enum TemplateRules {
             guard case .object = item, let target = item["set"]?.stringValue, !target.isEmpty else {
                 return "第 \(index + 1) 條規則缺少 \"set\""
             }
+            if let pattern = item["match"]?.stringValue, (try? NSRegularExpression(pattern: pattern)) == nil {
+                return "第 \(index + 1) 條規則的 match 不是有效的正規表示式"
+            }
         }
         return nil
     }
 
+    /// `text`：整份文件的 OCR 文字，供 `match` 規則使用。
     static func apply(
         _ rules: [JSONValue],
         to data: JSONValue,
+        text: String = "",
         now: Date = Date(),
         makeID: () -> String = TemplateRules.base36TimeID
     ) -> JSONValue {
@@ -46,10 +54,10 @@ enum TemplateRules {
         for rule in rules {
             guard let target = rule["set"]?.stringValue else { continue }
             if let (arrayKey, field) = splitArrayPath(target) {
-                applyToElements(rule, arrayKey: arrayKey, field: field, members: &members)
+                applyToElements(rule, arrayKey: arrayKey, field: field, text: text, members: &members)
             } else {
                 if rule["onlyIfEmpty"] == JSONValue.bool(true), !isEmpty(value(of: target, in: members)) { continue }
-                if let result = evaluate(rule, members: members, now: now, makeID: makeID) {
+                if let result = evaluate(rule, members: members, text: text, now: now, makeID: makeID) {
                     set(target, to: result, in: &members)
                 }
             }
@@ -62,6 +70,7 @@ enum TemplateRules {
     private static func evaluate(
         _ rule: JSONValue,
         members: [(key: String, value: JSONValue)],
+        text documentText: String,
         now: Date,
         makeID: () -> String
     ) -> JSONValue? {
@@ -84,10 +93,9 @@ enum TemplateRules {
             let parts = values(at: path, in: members).compactMap(text).filter { !$0.isEmpty }
             return .string(parts.joined(separator: separator))
         }
-        if case .array(let operands)? = rule["divide"], operands.count == 2,
-           let numeratorPath = operands[0].stringValue, let denominatorPath = operands[1].stringValue {
-            guard let numerator = value(of: numeratorPath, in: members).flatMap(number),
-                  let denominator = value(of: denominatorPath, in: members).flatMap(number),
+        if case .array(let operands)? = rule["divide"], operands.count == 2 {
+            guard let numerator = operand(operands[0], in: members),
+                  let denominator = operand(operands[1], in: members),
                   denominator != 0 else { return .null }
             var digits = 6
             if case .number(let places)? = rule["round"] { digits = Int(places) }
@@ -103,13 +111,42 @@ enum TemplateRules {
             guard let key = value(of: keyField, in: members).flatMap(text) else { return nil }
             return table.first { $0.key == key }?.value
         }
+        if let pattern = rule["match"]?.stringValue {
+            let found = matches(of: pattern, in: documentText)
+            guard !found.isEmpty else { return nil }
+            return .string(found.joined(separator: rule["separator"]?.stringValue ?? ", "))
+        }
         return nil
+    }
+
+    /// 所有符合的字串（去除重複、依出現順序）；有括號群組時取各群組串接。
+    static func matches(of pattern: String, in text: String) -> [String] {
+        guard !text.isEmpty, let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var found: [String] = []
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            let ranges = match.numberOfRanges > 1 ? (1..<match.numberOfRanges).map { match.range(at: $0) } : [match.range]
+            let piece = ranges.compactMap { Range($0, in: text).map { String(text[$0]) } }.joined()
+            if !piece.isEmpty, !found.contains(piece) {
+                found.append(piece)
+            }
+        }
+        return found
+    }
+
+    /// `divide` 的運算元：欄位路徑或數字。
+    private static func operand(_ operand: JSONValue, in members: [(key: String, value: JSONValue)]) -> Double? {
+        switch operand {
+        case .number(let constant): return constant
+        case .string(let path): return value(of: path, in: members).flatMap(number)
+        default: return nil
+        }
     }
 
     private static func applyToElements(
         _ rule: JSONValue,
         arrayKey: String,
         field: String,
+        text documentText: String,
         members: inout [(key: String, value: JSONValue)]
     ) {
         guard case .array(let elements)? = value(of: arrayKey, in: members) else { return }
@@ -120,7 +157,7 @@ enum TemplateRules {
             if let keyField = rule["lookup"]?.stringValue, case .object(let table)? = rule["table"] {
                 result = value(of: keyField, in: fields).flatMap(text).flatMap { key in table.first { $0.key == key }?.value }
             } else {
-                result = evaluate(rule, members: fields, now: Date(), makeID: base36TimeID)
+                result = evaluate(rule, members: fields, text: documentText, now: Date(), makeID: base36TimeID)
             }
             if let result { set(field, to: result, in: &fields) }
             return .object(fields)
@@ -191,9 +228,24 @@ enum TemplateRules {
     private static func render(_ pattern: String, members: [(key: String, value: JSONValue)]) -> String {
         var result = pattern
         for member in members {
+            if result.contains("{\(member.key):,}") {
+                result = result.replacingOccurrences(of: "{\(member.key):,}", with: grouped(member.value) ?? "")
+            }
             result = result.replacingOccurrences(of: "{\(member.key)}", with: text(member.value) ?? "")
         }
         return result
+    }
+
+    /// 數字加千分位（13146 → 13,146）；非數字照原樣。
+    private static func grouped(_ value: JSONValue) -> String? {
+        guard case .number(let number) = value else { return text(value) }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: number))
     }
 
     static func rounded(_ value: Double, digits: Int) -> Double {
@@ -273,5 +325,87 @@ extension JSONValue {
         case .object(let members): return members.allSatisfy { $0.value.isBlank }
         case .number, .bool: return false
         }
+    }
+}
+
+// MARK: - 紀錄名稱與副標
+
+extension TemplateRules {
+    static let titleField = "_title"
+    static let subtitleField = "_subtitle"
+
+    /// 紀錄的名稱與副標：以最終資料計算樣板中 `set` 為 `_title`／`_subtitle` 的規則。
+    /// `template` 以「 · 」分段，欄位沒有值的段落會省略（例如還沒有單價時只顯示總金額）。
+    static func display(rules: [JSONValue], data: JSONValue) -> (title: String?, subtitle: String?) {
+        guard case .object(let members) = data else { return (nil, nil) }
+        func compute(_ field: String) -> String? {
+            guard let rule = rules.last(where: { $0["set"]?.stringValue == field }) else { return nil }
+            let rendered: String?
+            if let pattern = rule["template"]?.stringValue {
+                let segments = pattern.components(separatedBy: " · ").filter { segment in
+                    placeholders(in: segment).allSatisfy { !isEmpty(value(of: $0, in: members)) }
+                }
+                rendered = render(segments.joined(separator: " · "), members: members)
+            } else {
+                rendered = evaluate(rule, members: members, text: "", now: Date(), makeID: { "" }).flatMap(text)
+            }
+            let trimmed = rendered?.trimmingCharacters(in: .whitespaces) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return (compute(titleField), compute(subtitleField))
+    }
+
+    /// 字串樣式中的欄位名稱：「總金額 {amount:,}」→ ["amount"]。
+    private static func placeholders(in pattern: String) -> [String] {
+        matches(of: "\\{([^{}:]+)(?::,)?\\}", in: pattern)
+    }
+}
+
+// MARK: - 防止照抄與編造
+
+extension JSONValue {
+    /// 移除在頁面文字中找不到的數字與代碼（含 6 個以上數字的字串，例如發票號碼、統編），避免模型照抄範例或編造。
+    /// 比對時只看英數字並校正常見 OCR 混淆（O→0、I/l→1），所以「FR-14077356」「1,556」都對得上。
+    /// 日期（可能由民國年換算）與一般文字不檢查。
+    func grounded(in pageText: String) -> JSONValue {
+        grounded(haystack: Self.groundingKey(pageText))
+    }
+
+    private func grounded(haystack: String) -> JSONValue {
+        switch self {
+        case .object(let members):
+            return .object(members.map { (key: $0.key, value: $0.value.grounded(haystack: haystack)) })
+        case .array(let elements):
+            return .array(elements.compactMap { element in
+                let checked = element.grounded(haystack: haystack)
+                switch (element, checked) {
+                case (.number, .null), (.string, .null): return nil
+                default: return checked
+                }
+            })
+        case .number(let number):
+            return haystack.contains(Self.groundingKey(Self.format(number))) ? self : .null
+        case .string(let text):
+            guard Self.needsGrounding(text) else { return self }
+            return haystack.contains(Self.groundingKey(text)) ? self : .null
+        case .bool, .null:
+            return self
+        }
+    }
+
+    private static func needsGrounding(_ text: String) -> Bool {
+        let digits = text.filter { $0.isASCII && $0.isNumber }.count
+        guard digits >= 6 else { return false }
+        return text.range(of: "^\\d{4}-\\d{2}-\\d{2}$", options: .regularExpression) == nil
+    }
+
+    private static func groundingKey(_ text: String) -> String {
+        String(text.uppercased().compactMap { character -> Character? in
+            switch character {
+            case "O": return "0"
+            case "I", "L", "|": return "1"
+            default: return character.isASCII && (character.isLetter || character.isNumber) ? character : nil
+            }
+        })
     }
 }

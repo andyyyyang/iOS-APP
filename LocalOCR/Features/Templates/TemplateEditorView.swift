@@ -103,7 +103,7 @@ struct TemplateEditorView: View {
             } header: {
                 Text("計算規則（進階，選填）")
             } footer: {
-                Text("AI 擷取後由程式計算的欄位，例如 [{\"set\":\"total\",\"sum\":[\"items[].price\"]}]。支援 value、copy、template、sum、join、divide、today、generate、lookup。")
+                Text("AI 擷取後由程式計算的欄位，例如 [{\"set\":\"total\",\"sum\":[\"items[].price\"]}]。支援 value、copy、template、sum、join、divide、match（正規表示式比對 OCR 文字）、today、generate、lookup。set 為 _title／_subtitle 時是紀錄的名稱與副標。")
             }
 
             Section {

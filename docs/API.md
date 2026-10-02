@@ -76,14 +76,19 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | --- | --- | --- |
 | `value` | `{"set":"supplier","value":"800000"}` | 固定值 |
 | `copy` | `{"set":"expenseAmount","copy":"amount"}` | 複製欄位 |
-| `template` | `{"set":"text","template":"出口/{osat}/{caseNo}"}` | 代入欄位的字串 |
+| `template` | `{"set":"text","template":"出口/{osat}/{caseNo}"}` | 代入欄位的字串；`{amount:,}` 數字加千分位 |
 | `sum` | `{"set":"amount","sum":["taxItems[].taxBase","taxItems[].taxAmount"]}` | 加總 |
 | `join` | `{"set":"invoice","join":"taxItems[].invoice","separator":" / "}` | 串接 |
-| `divide` | `{"set":"price","divide":["amount","qty"],"round":3}` | 除法（分母為 0 或空值時為 null） |
+| `divide` | `{"set":"price","divide":["amount","qty"],"round":3}`、`{"set":"expenseAmount","divide":["amount",1.05],"round":0}` | 除法；運算元可為欄位或數字（分母為 0 或空值時為 null） |
+| `match` | `{"set":"caseNo","match":"(JT)[ -]?(\\d{7}(?:-\\d{1,2})?)(?!\\d)","separator":","}` | 以正規表示式從整份 OCR 文字找出所有符合的字串（去除重複、依出現順序以 `separator` 串接）；有括號群組時取各群組串接；找不到時保留原值。適合格式固定的號碼，不經過 AI |
 | `today` | `{"set":"date","today":true}` | 今天（YYYY-MM-DD） |
 | `generate` | `{"set":"id","generate":"base36time"}` | 時間戳記 id（例如 `mum0takt3q2`） |
 | `lookup` | `{"set":"taxItems[].name","lookup":"taxId","table":{"22368445":"義佳"}}` | 依同一層欄位對照 |
 | `onlyIfEmpty` | `{"set":"note","value":"—","onlyIfEmpty":true}` | 已有值時不覆寫 |
+
+**紀錄名稱**：`set` 為 `_title`、`_subtitle` 的規則（通常是 `template`）產生 App 紀錄列表顯示的名稱與副標，不會輸出到 `data`；`template` 以「 · 」分段，欄位沒有值的段落省略。例如 FV60：`{"set":"_title","template":"{caseNo}"}`、`{"set":"_subtitle","template":"總金額 {amount:,} · 單價 {price}"}`。
+
+**防止照抄**：抽取提示只示範欄位格式（號碼的數字以 0 表示），不放範例的實際值；每頁抽出的數字與含 6 個以上數字的代碼必須出現在該頁 OCR 文字中，否則不採用。
 
 多頁文件逐頁抽取後合併：單一值取第一個非空值；物件陣列依頁序串接並去除空白與重複項目；純值陣列只略過整頁重複的結果（同一頁的相同數值都保留）。最後套用規則並移除輔助欄位。
 

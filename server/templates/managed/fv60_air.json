@@ -35,7 +35,7 @@
       1200
     ]
   },
-  "instructions": "invoice：統一發票號碼，兩個英文字母加 8 位數字（例如 FR14077356）。invDate：發票日期 YYYY-MM-DD，民國年請換算成西元（115 年 = 2026 年）。amount：發票總計（含稅）金額，數字。caseNo：出口案號，JT 開頭加 7 位數字（例如 JT2609260），可能有 -1 之類的後綴，多個案號以逗號分隔。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
+  "instructions": "invoice：統一發票號碼，兩個英文字母加 8 位數字（例如 FR14077356）。invDate：發票日期 YYYY-MM-DD，民國年請換算成西元（115 年 = 2026 年）。amount：萬泰物流統一發票上的「總計」（含稅）金額，數字；報單上的 FOB、CIF 等金額不是 amount，報單與其他頁面不要填。osat：客戶代碼，例如 ATK、SCK、HANA、AMD蘇州。_declarationQuantities：只從出口報單（海關報單）頁擷取，填報單上每個品項的「數量」欄數字（例如 34,841 PCE 填 34841），有幾個品項就填幾個；不是總件數（件數／PKG），也不是重量（KGM）。發票、請款單等非報單頁填空陣列 []。",
   "rules": [
     {
       "set": "id",
@@ -84,6 +84,11 @@
       "round": 3
     },
     {
+      "set": "caseNo",
+      "match": "(JT)[ -]?(\\d{7}(?:-\\d{1,2})?)(?!\\d)",
+      "separator": ","
+    },
+    {
       "set": "text",
       "template": "出口/{osat}/{caseNo}"
     },
@@ -94,6 +99,14 @@
     {
       "set": "done",
       "value": false
+    },
+    {
+      "set": "_title",
+      "template": "{caseNo}"
+    },
+    {
+      "set": "_subtitle",
+      "template": "總金額 {amount:,} · 單價 {price}"
     }
   ]
 }

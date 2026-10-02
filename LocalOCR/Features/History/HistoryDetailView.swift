@@ -76,6 +76,10 @@ struct HistoryDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(library.template(id: record.templateID)?.name ?? "未分類")
                     .font(.title3.weight(.semibold))
+                if let subtitle = record.displaySubtitle {
+                    Text(subtitle)
+                        .font(.subheadline.weight(.medium))
+                }
                 Text("\(record.sourceDisplayName) · \(record.createdAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.footnote)
                     .foregroundStyle(.secondary)

@@ -142,13 +142,15 @@ export function createMcpServer(services: Services): McpServer {
       description:
         "新增或更新情境樣板（整筆取代，version 自動加一）。新增情境不需改程式：App、伺服器與 harness 都會立即使用。\n" +
         "rules（選用，最多 100 條）是 App 在 AI 抽取後依序套用的確定性後處理，伺服器只儲存不執行。每條規則必須有 set（目標路徑：field 或 array[].field），" +
-        "其他鍵為操作：value 固定值；copy 複製欄位；template 字串模板 \"{field}\"；sum [路徑...] 加總；join 路徑 + separator；" +
-        "divide [分子, 分母] + round 小數位；today: true 今天日期；generate: \"base36time\" 產生代碼；lookup 欄位 + table {鍵: 值} 對照；onlyIfEmpty: true 僅在目標為空時套用。\n" +
+        "其他鍵為操作：value 固定值；copy 複製欄位；template 字串模板 \"{field}\"（{field:,} 千分位）；sum [路徑...] 加總；join 路徑 + separator；" +
+        "divide [分子, 分母]（欄位或數字）+ round 小數位；match 正規表示式（從整份 OCR 文字找出所有符合者，以 separator 串接）；today: true 今天日期；generate: \"base36time\" 產生代碼；lookup 欄位 + table {鍵: 值} 對照；onlyIfEmpty: true 僅在目標為空時套用。" +
+        "set 為 _title／_subtitle 的規則是 App 紀錄的名稱與副標，不會輸出。\n" +
         "Create or replace a scenario template (version auto-increments). New scenarios need no code changes. " +
         "rules (optional, max 100) are deterministic post-processing steps clients apply in order after AI extraction; the server stores them verbatim. " +
         "Each rule needs set (target path: field or array[].field) plus an op: value (constant), copy (field), template (\"{field}\" string), " +
-        "sum ([paths]), join (path + separator), divide ([num, den] + round), today: true, generate: \"base36time\", " +
-        "lookup (field + table {key: value}); onlyIfEmpty: true applies the rule only when the target is empty.\n" +
+        "sum ([paths]), join (path + separator), divide ([num, den] as fields or numbers + round), match (regex over the whole OCR text; unique matches joined by separator), " +
+        "today: true, generate: \"base36time\", lookup (field + table {key: value}); onlyIfEmpty: true applies the rule only when the target is empty. " +
+        "Rules whose set is _title / _subtitle name the record in the app and are not part of data.\n" +
         'Example: [{"set":"total","sum":["items[].price"]},{"set":"items[].category","lookup":"name","table":{"鮮乳":"飲品"},"onlyIfEmpty":true}]',
       inputSchema: {
         id: templateId.describe("代碼，符合 ^[a-z0-9][a-z0-9_-]{0,63}$ Id matching ^[a-z0-9][a-z0-9_-]{0,63}$"),
