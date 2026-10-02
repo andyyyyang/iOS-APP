@@ -26,6 +26,8 @@ final class ScanRecord {
     /// 依樣板 `_title`／`_subtitle` 規則從擷取內容產生的名稱與副標（例如 JT 號；總金額與單價）。
     var displayTitle: String?
     var displaySubtitle: String?
+    /// 頁面照片的資料夾代碼（見 PageImageStore）；較早的紀錄只有縮圖，此值為 nil。
+    var pagesID: UUID?
 
     init(
         createdAt: Date = .now,

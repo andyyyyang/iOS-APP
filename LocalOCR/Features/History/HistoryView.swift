@@ -67,6 +67,7 @@ struct HistoryView: View {
     private func delete(at offsets: IndexSet) {
         let items = filteredRecords
         for index in offsets {
+            PageImageStore.remove(for: items[index].pagesID)
             modelContext.delete(items[index])
         }
         try? modelContext.save()
@@ -88,6 +89,7 @@ struct HistoryView: View {
 
     private func deleteAll() {
         for record in records {
+            PageImageStore.remove(for: record.pagesID)
             modelContext.delete(record)
         }
         try? modelContext.save()

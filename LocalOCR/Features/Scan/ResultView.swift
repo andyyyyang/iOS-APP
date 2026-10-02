@@ -32,6 +32,8 @@ struct ResultView: View {
     @State private var showsAddPages = false
     @State private var sourceRequest: PageSource?
     @State private var addingPages: (current: Int, total: Int)?
+    /// 已存進紀錄的頁面照片數。
+    @State private var storedPageCount = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -295,6 +297,10 @@ struct ResultView: View {
         }
         record.pageCount = pages.count
         record.lineCount = pages.reduce(0) { $0 + $1.lines.count }
+        if storedPageCount < pages.count {
+            record.storePageImages(pages.dropFirst(storedPageCount).map(\.image))
+            storedPageCount = pages.count
+        }
         record.syncedAt = nil
         if let outcome = smart.outcome { record.apply(outcome) }
         try? modelContext.save()

@@ -13,11 +13,19 @@ struct HistoryDetailView: View {
     @State private var showsAddPages = false
     @State private var sourceRequest: PageSource?
     @State private var addingPages: (current: Int, total: Int)?
+    @State private var pageURLs: [URL] = []
+    @State private var viewerStart: ViewerStart?
+
+    private struct ViewerStart: Identifiable {
+        let index: Int
+        var id: Int { index }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
+                photosCard
                 if let json = record.jsonText {
                     jsonCard(json)
                 }
@@ -45,6 +53,10 @@ struct HistoryDetailView: View {
         .onChange(of: record.text) { _, _ in
             record.syncedAt = nil
         }
+        .task { pageURLs = record.pageImageURLs }
+        .fullScreenCover(item: $viewerStart) { start in
+            PageImageViewer(urls: pageURLs, selection: start.index)
+        }
         .addPagesDialog(isPresented: $showsAddPages, request: $sourceRequest)
         .pageSources(
             request: $sourceRequest,
@@ -67,11 +79,18 @@ struct HistoryDetailView: View {
     private var header: some View {
         HStack(spacing: 14) {
             if let image = record.thumbnail {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                Button {
+                    if !pageURLs.isEmpty { viewerStart = ViewerStart(index: 0) }
+                } label: {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(pageURLs.isEmpty)
+                .accessibilityLabel("查看照片")
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(library.template(id: record.templateID)?.name ?? "未分類")
@@ -90,6 +109,44 @@ struct HistoryDetailView: View {
             }
         }
         .card()
+    }
+
+    /// 這份紀錄的所有頁面照片；點一下全螢幕查看。
+    @ViewBuilder
+    private var photosCard: some View {
+        if !pageURLs.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                CardHeader(title: "照片", systemImage: "photo.on.rectangle", trailing: "\(pageURLs.count) 頁")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(pageURLs.enumerated()), id: \.offset) { index, url in
+                            Button {
+                                viewerStart = ViewerStart(index: index)
+                            } label: {
+                                PageThumbnailView(url: url)
+                                    .overlay(alignment: .bottomLeading) {
+                                        Text("\(index + 1)")
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.black.opacity(0.6), in: Capsule())
+                                            .padding(4)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("查看第 \(index + 1) 頁")
+                        }
+                    }
+                }
+            }
+            .card()
+        } else if record.thumbnail != nil {
+            Label("這筆紀錄是舊版建立的，只保存了縮圖；之後的紀錄都會保存每一頁的照片。", systemImage: "info.circle")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .card()
+        }
     }
 
     private var analyzeButton: some View {
@@ -194,11 +251,14 @@ struct HistoryDetailView: View {
             return
         }
         record.text = record.text.isEmpty ? newText : record.text + "\n\n" + newText
+        let storing = record.storePageImages(added.map(\.image))
         record.pageCount += added.count
         record.lineCount += added.reduce(0) { $0 + $1.lines.count }
         record.syncedAt = nil
         try? modelContext.save()
         showsAnalysis = true
+        await storing.value
+        pageURLs = record.pageImageURLs
     }
 
     private func copy(_ text: String, message: String) {
