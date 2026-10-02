@@ -164,6 +164,15 @@ final class SmartScanTests: XCTestCase {
         guard OnDeviceAIStatus.current.isAvailable else {
             throw XCTSkip("此環境無法使用 Apple Intelligence：\(OnDeviceAIStatus.current)")
         }
+        // 虛擬機（例如 CI）可能回報可用但沒有模型資產；先用最小請求確認模型真的能執行
+        do {
+            let probe = LanguageModelSession(instructions: { "只回答 OK。" })
+            _ = try await probe.respond(options: GenerationOptions(sampling: .greedy, temperature: nil, maximumResponseTokens: nil)) {
+                "OK?"
+            }
+        } catch {
+            throw XCTSkip("模型回報可用但無法執行：\(error.localizedDescription)")
+        }
         let template = ScanTemplate.builtIns[0]
         let text = "全聯福利中心\n2026/10/02 14:30\n鮮乳 1 45\n合計 45\n現金 100 找零 55"
         let data = try await FoundationModelsExtractor().extract(text: text, template: template)
