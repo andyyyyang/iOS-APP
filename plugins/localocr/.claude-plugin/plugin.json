@@ -1,8 +1,8 @@
 {
   "name": "localocr",
   "displayName": "LocalOCR",
-  "version": "1.0.0",
-  "description": "Connect Claude Code to your LocalOCR server: browse scans from the iPhone app, read OCR text and scenario JSON, classify with Jev, and manage scenario templates over MCP.",
+  "version": "1.1.0",
+  "description": "Connect Claude Code to your LocalOCR server: browse scans from the iPhone app, read OCR text and scenario JSON, classify with Jev, manage scenario templates, and read/write your Obsidian vault notes over MCP.",
   "author": {
     "name": "andyyyyang"
   },

@@ -10,8 +10,8 @@
     {
       "name": "localocr",
       "source": "./plugins/localocr",
-      "description": "Remote MCP connection to your LocalOCR server: scans, scenario templates, Jev classification and JSON validation.",
-      "version": "1.0.0",
+      "description": "Remote MCP connection to your LocalOCR server: scans, scenario templates, Jev classification, JSON validation and your Obsidian vault notes.",
+      "version": "1.1.0",
       "category": "productivity"
     }
   ]
