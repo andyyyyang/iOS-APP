@@ -39,7 +39,7 @@ jobs:
           health=$(curl -fsS "$BASE_URL/health")
           echo "health: $health"
           echo "- /health：\`$health\`" >> "$GITHUB_STEP_SUMMARY"
-          for path in /v1/templates /v1/scans; do
+          for path in /v1/templates /v1/scans /v1/vault/status; do
             code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL$path")
             [ "$code" = "401" ] || { echo "::error::$path 未驗證時應回傳 401，實際為 $code"; exit 1; }
           done
@@ -70,4 +70,18 @@ jobs:
 
           code=$(curl -s -o /dev/null -w "%{http_code}" "${auth[@]}" -X DELETE "$BASE_URL/v1/scans/$id")
           [ "$code" = "204" ] || { echo "::error::刪除測試資料失敗：$code"; exit 1; }
+
+          # Obsidian vault：寫入隱藏資料夾的測試檔、讀回、刪除（Remotely Save 與 App 都會略過 . 開頭的資料夾）
+          vault=$(curl -fsS "${auth[@]}" "$BASE_URL/v1/vault/status")
+          echo "vault: $vault"
+          if echo "$vault" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)['configured'] else 1)"; then
+            path=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" ".localocr-smoke/$id.md")
+            url="$BASE_URL/v1/vault/file?path=$path"
+            curl -fsS "${auth[@]}" -X PUT -H "If-None-Match: *" -H "Content-Type: text/markdown" --data-binary "smoke 測試" "$url" > /dev/null
+            content=$(curl -fsS "${auth[@]}" "$url")
+            [ "$content" = "smoke 測試" ] || { echo "::error::vault 讀回內容不符：$content"; exit 1; }
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${auth[@]}" -X DELETE "$url")
+            [ "$code" = "204" ] || { echo "::error::刪除 vault 測試檔失敗：$code"; exit 1; }
+            echo "- 已驗證：Obsidian vault（Railway Bucket）寫入／讀取／刪除" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "- 已驗證：樣板 $count 個、掃描新增／讀取／刪除、MCP initialize 與 tools/list" >> "$GITHUB_STEP_SUMMARY"
