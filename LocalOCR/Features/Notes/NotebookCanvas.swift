@@ -75,8 +75,8 @@ enum PaperRenderer {
     }
 
     /// 一頁的圖片：紙張＋筆跡。筆跡一律以淺色模式算顏色，深色模式下黑色墨水才不會變成白色。
-    static func pageImage(drawing: PKDrawing, page: Int, paper: PaperStyle, scale: CGFloat) -> UIImage {
-        let rect = NotebookLayout.pageRect(page)
+    static func pageImage(drawing: PKDrawing, page: Int, paper: PaperStyle, scale: CGFloat, layout: PageLayout = .notebook) -> UIImage {
+        let rect = layout.pageRect(page)
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
@@ -94,7 +94,7 @@ enum PaperRenderer {
 /// 畫布後面的紙張：每頁一個白色圖層加上向量圖樣（CAShapeLayer 縮放時仍保持清晰）。
 final class PaperUnderlayView: UIView {
     private var pageLayers: [CALayer] = []
-    private var configuration: (pageCount: Int, paper: PaperStyle)?
+    private var configuration: (pageCount: Int, paper: PaperStyle, layout: PageLayout)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -106,13 +106,13 @@ final class PaperUnderlayView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(pageCount: Int, paper: PaperStyle) {
-        if let configuration, configuration.pageCount == pageCount, configuration.paper == paper { return }
-        configuration = (pageCount, paper)
+    func configure(pageCount: Int, paper: PaperStyle, layout: PageLayout) {
+        if let configuration, configuration.pageCount == pageCount, configuration.paper == paper, configuration.layout == layout { return }
+        configuration = (pageCount, paper, layout)
         pageLayers.forEach { $0.removeFromSuperlayer() }
         pageLayers = (0..<pageCount).map { index in
             let page = CALayer()
-            page.frame = NotebookLayout.pageRect(index)
+            page.frame = layout.pageRect(index)
             page.backgroundColor = UIColor.white.cgColor
             page.cornerRadius = 4
             page.shadowColor = UIColor.black.cgColor
@@ -120,7 +120,7 @@ final class PaperUnderlayView: UIView {
             page.shadowRadius = 6
             page.shadowOffset = CGSize(width: 0, height: 2)
             page.shadowPath = UIBezierPath(roundedRect: page.bounds, cornerRadius: 4).cgPath
-            if let path = PaperRenderer.patternPath(for: paper, size: NotebookLayout.pageSize) {
+            if let path = PaperRenderer.patternPath(for: paper, size: layout.pageSize) {
                 let pattern = CAShapeLayer()
                 pattern.frame = page.bounds
                 pattern.path = path
@@ -137,7 +137,7 @@ final class PaperUnderlayView: UIView {
             layer.addSublayer(page)
             return page
         }
-        bounds = CGRect(x: 0, y: 0, width: NotebookLayout.canvasWidth, height: NotebookLayout.canvasHeight(pageCount: pageCount))
+        bounds = CGRect(x: 0, y: 0, width: layout.canvasWidth, height: layout.canvasHeight(pageCount: pageCount))
     }
 }
 
@@ -149,6 +149,7 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
     private let paperView = PaperUnderlayView()
     private let toolPicker = PKToolPicker()
     private(set) var pageCount = 1
+    private(set) var layout = PageLayout.notebook
     private var lastWidth: CGFloat = 0
     private var lastVisiblePage = 0
 
@@ -209,15 +210,21 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
     }
 
     private func fitScale(for width: CGFloat) -> CGFloat {
-        width / NotebookLayout.canvasWidth
+        width / layout.canvasWidth
     }
 
-    func configure(drawing: PKDrawing, pageCount: Int, paper: PaperStyle) {
+    func configure(drawing: PKDrawing, pageCount: Int, paper: PaperStyle, layout: PageLayout) {
         self.pageCount = max(pageCount, 1)
+        let layoutChanged = layout != self.layout
+        self.layout = layout
         if canvasView.drawing != drawing {
             canvasView.drawing = drawing
         }
-        paperView.configure(pageCount: self.pageCount, paper: paper)
+        paperView.configure(pageCount: self.pageCount, paper: paper, layout: layout)
+        if layoutChanged, lastWidth > 0 {
+            lastWidth = 0
+            view.setNeedsLayout()
+        }
         updateLayout()
     }
 
@@ -225,7 +232,7 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
 
     func scrollToPage(_ index: Int, animated: Bool) {
         let zoom = canvasView.zoomScale
-        let y = NotebookLayout.pageRect(index).minY * zoom - NotebookLayout.margin * zoom - canvasView.adjustedContentInset.top
+        let y = layout.pageRect(index).minY * zoom - layout.margin * zoom - canvasView.adjustedContentInset.top
         let maxY = max(canvasView.contentSize.height - canvasView.bounds.height + canvasView.adjustedContentInset.bottom, -canvasView.adjustedContentInset.top)
         canvasView.setContentOffset(CGPoint(x: canvasView.contentOffset.x, y: min(max(y, -canvasView.adjustedContentInset.top), maxY)), animated: animated)
     }
@@ -233,8 +240,8 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
     private func updateLayout() {
         let zoom = canvasView.zoomScale
         canvasView.contentSize = CGSize(
-            width: NotebookLayout.canvasWidth * zoom,
-            height: NotebookLayout.canvasHeight(pageCount: pageCount) * zoom
+            width: layout.canvasWidth * zoom,
+            height: layout.canvasHeight(pageCount: pageCount) * zoom
         )
         paperView.transform = CGAffineTransform(scaleX: zoom, y: zoom)
         paperView.frame.origin = .zero
@@ -253,7 +260,7 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let zoom = max(scrollView.zoomScale, 0.01)
         let middle = (scrollView.contentOffset.y + scrollView.bounds.height / 2) / zoom
-        let page = NotebookLayout.pageIndex(atY: middle, pageCount: pageCount)
+        let page = layout.pageIndex(atY: middle, pageCount: pageCount)
         if page != lastVisiblePage {
             lastVisiblePage = page
             onVisiblePageChange?(page)
@@ -273,18 +280,22 @@ final class NotebookCanvasHandle {
     }
 }
 
-/// SwiftUI 包裝。`revision` 改變時（插入／刪除頁面、從 vault 更新）才把筆記本的筆跡重新載入畫布。
+/// SwiftUI 包裝。`revision` 改變時（插入／刪除頁面、改紙張、重新載入）才把筆跡重新載入畫布；
+/// 書寫時筆跡由畫布回報（`onDrawingChange`），不會反覆重設。
 struct NotebookCanvas: UIViewControllerRepresentable {
-    let notebook: Notebook
+    let drawing: () -> PKDrawing
+    let pageCount: Int
+    let paper: PaperStyle
+    var layout: PageLayout = .notebook
     let handle: NotebookCanvasHandle
     let revision: Int
     var onDrawingChange: (PKDrawing) -> Void
-    var onVisiblePageChange: (Int) -> Void
+    var onVisiblePageChange: (Int) -> Void = { _ in }
 
     func makeUIViewController(context: Context) -> NotebookCanvasController {
         let controller = NotebookCanvasController()
         controller.loadViewIfNeeded()
-        controller.configure(drawing: notebook.drawing, pageCount: notebook.pageCount, paper: notebook.paper)
+        controller.configure(drawing: drawing(), pageCount: pageCount, paper: paper, layout: layout)
         handle.controller = controller
         context.coordinator.revision = revision
         return controller
@@ -295,7 +306,7 @@ struct NotebookCanvas: UIViewControllerRepresentable {
         controller.onVisiblePageChange = onVisiblePageChange
         if context.coordinator.revision != revision {
             context.coordinator.revision = revision
-            controller.configure(drawing: notebook.drawing, pageCount: notebook.pageCount, paper: notebook.paper)
+            controller.configure(drawing: drawing(), pageCount: pageCount, paper: paper, layout: layout)
         }
     }
 

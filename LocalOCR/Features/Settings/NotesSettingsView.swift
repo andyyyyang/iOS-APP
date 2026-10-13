@@ -1,96 +1,122 @@
 import SwiftUI
 
-/// 筆記與 Obsidian vault 的設定：存放資料夾、vault 名稱、自動同步、連線狀態。
+/// 筆記與 Obsidian：配對、同步狀態、這台裝置的 Obsidian 設定、預設資料夾。
 struct NotesSettingsView: View {
-    @AppStorage(NotesSettings.Key.vaultFolder) private var vaultFolder = "iPad 筆記"
+    @AppStorage(NotesSettings.Key.defaultFolder) private var defaultFolder = "iPad 筆記"
     @AppStorage(NotesSettings.Key.vaultName) private var vaultName = ""
-    @AppStorage(NotesSettings.Key.autoSync) private var autoSync = true
+    @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
-    @State private var status: Status = .unknown
-
-    private enum Status: Equatable {
-        case unknown
-        case checking
-        case connected(fileCount: Int)
-        case notConfigured
-        case failed(String)
-    }
+    @State private var sync = VaultSyncCenter.shared
+    @State private var showsPairing = false
+    @State private var obsidianMessage: String?
+    @State private var isOpeningObsidian = false
 
     private static let guideURL = URL(string: "https://github.com/andyyyyang/iOS-APP/blob/claude/ios-local-ocr-dev-pywvch/docs/OBSIDIAN-SYNC.md")!
 
     var body: some View {
         Form {
             Section {
-                TextField("iPad 筆記", text: $vaultFolder)
-                    .textInputAutocapitalization(.never)
-                Toggle("離開筆記本時自動同步", isOn: $autoSync)
+                if sync.isConfigured {
+                    LabeledContent("伺服器", value: ServerSettings.normalizedURL(baseURL)?.host() ?? "—")
+                    if !vaultName.isEmpty {
+                        LabeledContent("Obsidian vault", value: vaultName)
+                    }
+                }
+                Button {
+                    showsPairing = true
+                } label: {
+                    Label(sync.isConfigured ? "重新配對" : "與 Obsidian 配對", systemImage: "qrcode.viewfinder")
+                }
             } header: {
-                Text("手寫筆記")
+                Text("配對")
             } footer: {
-                Text("每本筆記本存成「\(NotesSettings.vaultFolder)/標題.md」，頁面圖片與可再編輯的原始筆跡放在「\(NotesSettings.attachmentsFolder)」。在 Obsidian 修改過的筆記不會被覆蓋，會另存一份。")
-            }
-
-            Section {
-                TextField("例如 andy-jentech", text: $vaultName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            } header: {
-                Text("Obsidian vault 名稱")
-            } footer: {
-                Text("填入後可以從筆記直接「在 Obsidian 開啟」。名稱與 Obsidian 中 vault 的名稱相同。")
+                Text("在 Mac 的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
             }
 
             Section {
                 LabeledContent("狀態") {
-                    switch status {
-                    case .unknown:
-                        Text("—").foregroundStyle(.secondary)
-                    case .checking:
+                    if sync.isSyncing {
                         ProgressView()
-                    case .connected(let count):
-                        Label("已連接（\(count) 個檔案）", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    case .notConfigured:
-                        Text("伺服器尚未設定空間").foregroundStyle(.orange)
-                    case .failed(let message):
-                        Text(message).foregroundStyle(.red).multilineTextAlignment(.trailing)
+                    } else if let error = sync.lastError {
+                        Text(error).foregroundStyle(.orange).multilineTextAlignment(.trailing)
+                    } else if let date = sync.lastSyncedAt {
+                        Text("已同步 \(date.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary)
+                    } else {
+                        Text("尚未同步").foregroundStyle(.secondary)
                     }
                 }
-                Button("檢查連線") { Task { await check() } }
-                    .disabled(status == .checking || !ServerSettings.isConfigured)
+                if let report = sync.lastReport, !report.isEmpty {
+                    Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)（兩份都保留）")")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Button("立即同步") { Task { await sync.syncNow() } }
+                    .disabled(!sync.isConfigured || sync.isSyncing)
+                if sync.lastError?.contains("為了安全已停止") ?? false {
+                    Button("仍要同步（會刪除檔案）", role: .destructive) {
+                        Task { await sync.syncNow(allowMassDeletion: true) }
+                    }
+                }
+            } header: {
+                Text("同步")
+            } footer: {
+                Text("筆記存在這台裝置的「檔案」App →「我的 iPad」→「LocalOCR」→「Obsidian」，離線也能使用；開啟 App、修改後與每 3 分鐘會和 Railway 空間同步，Obsidian 再透過 Remotely Save 同步。兩邊同時修改同一則筆記時會保留兩份。")
+            }
+
+            Section {
+                Button {
+                    Task { await openObsidianSetup() }
+                } label: {
+                    HStack {
+                        Label("設定這台裝置上的 Obsidian", systemImage: "arrow.up.forward.app")
+                        Spacer()
+                        if isOpeningObsidian { ProgressView() }
+                    }
+                }
+                .disabled(!sync.isConfigured || vaultName.isEmpty || isOpeningObsidian)
+                if let obsidianMessage {
+                    Text(obsidianMessage).font(.footnote).foregroundStyle(.orange)
+                }
                 Button {
                     openURL(Self.guideURL)
                 } label: {
-                    Label("在 Obsidian 設定 Remotely Save", systemImage: "book")
+                    Label("Obsidian 同步說明", systemImage: "book")
                 }
             } header: {
-                Text("Railway 空間")
+                Text("Obsidian（Remotely Save）")
             } footer: {
-                if ServerSettings.isConfigured {
-                    Text("Obsidian 端安裝 Remotely Save（S3），填入 Railway Bucket 的 Endpoint、Region auto、金鑰與 Bucket 名稱即可同步；不要開啟端對端加密，否則 App 與 Claude 無法讀取筆記。")
-                } else {
-                    Text("請先在「設定 → 伺服器與同步」連接伺服器。")
-                }
+                Text("先在這台裝置的 Obsidian 安裝並啟用 Remotely Save，再按上面的按鈕，Obsidian 會自動套用同步設定；套用後請完全關閉並重新開啟 Obsidian，自動同步才會開始。")
+            }
+
+            Section {
+                TextField("iPad 筆記", text: $defaultFolder)
+                    .textInputAutocapitalization(.never)
+                TextField("vault 名稱", text: $vaultName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("筆記")
+            } footer: {
+                Text("新筆記預設放在這個資料夾；vault 名稱用來「在 Obsidian 開啟」（配對時會自動填入）。")
             }
         }
         .navigationTitle("筆記與 Obsidian")
-        .task { if ServerSettings.isConfigured { await check() } }
+        .sheet(isPresented: $showsPairing) {
+            NavigationStack { PairingView() }
+        }
     }
 
-    private func check() async {
+    private func openObsidianSetup() async {
         guard let client = VaultClient.configured() else { return }
-        status = .checking
+        isOpeningObsidian = true
+        defer { isOpeningObsidian = false }
         do {
-            let state = try await client.status()
-            guard state.configured else {
-                status = .notConfigured
-                return
+            let uri = try await PairingClient.remotelySaveURI(vaultName: vaultName, client: client)
+            openURL(uri) { accepted in
+                obsidianMessage = accepted ? nil : "無法開啟 Obsidian，請先安裝 Obsidian。"
             }
-            let listing = try await client.list(prefix: "", recursive: true)
-            status = .connected(fileCount: listing.files.count)
-        } catch VaultError.notConfigured {
-            status = .notConfigured
         } catch {
-            status = .failed(error.localizedDescription)
+            obsidianMessage = error.localizedDescription
         }
     }
 }

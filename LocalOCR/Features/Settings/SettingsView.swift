@@ -46,12 +46,12 @@ struct SettingsView: View {
                     NavigationLink {
                         NotesSettingsView()
                     } label: {
-                        LabeledContent("筆記與 Obsidian", value: NotesSettings.vaultFolder)
+                        LabeledContent("筆記與 Obsidian", value: VaultSyncCenter.shared.isConfigured ? "已配對" : "未配對")
                     }
                 } header: {
                     Text("筆記")
                 } footer: {
-                    Text("手寫筆記會連同 AI 摘要、手寫辨識文字與每頁圖片存進 Obsidian vault；vault 存在 Railway 空間，由 Remotely Save 同步到 Mac、iPhone、iPad。")
+                    Text("所有筆記都是 Markdown，存在這台裝置並與 Railway 空間雙向同步；Mac、iPhone、iPad 上的 Obsidian 以 Remotely Save 同步同一份 vault。")
                 }
 
                 Section {

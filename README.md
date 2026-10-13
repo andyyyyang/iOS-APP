@@ -1,24 +1,27 @@
 # 本機 OCR（LocalOCR）
 
-原生 Swift 的 iPhone／iPad App：
+原生 Swift 的 iPhone／iPad **Markdown 筆記本 App**，與你的 **Obsidian vault** 雙向同步：
 
-- **手寫筆記（iPad）**：像 GoodNotes 的分頁筆記本（A4 空白／橫線／方格／點陣紙），使用系統原生 Apple Pencil 工具列；Apple **Foundation Models** 在裝置上辨識手寫並整理出標題、摘要、重點、待辦與標籤，連同每頁圖片存進 **Obsidian vault**。
-- **Obsidian**：vault 存在 Railway 的 S3 空間（Bucket），Mac／iPhone／iPad 的 Obsidian 以 **Remotely Save** 同步；App 內可瀏覽、搜尋、閱讀、編輯所有筆記，Claude 也能透過 MCP 讀寫。
-- **智慧掃描**：用 Apple **Vision** 在裝置上辨識文字，**自動判斷文件情境**（收據、名片、FV60 請款…），再用 Foundation Models 整理成**你指定格式的 JSON**。
+- **筆記都是 Markdown**：每則筆記就是 vault 中的一個 .md 檔，存在裝置上（「檔案」App 看得到、離線可用），與 Railway 空間雙向同步；Mac／iPhone／iPad 上的 Obsidian 以 **Remotely Save** 同步同一份 vault。兩邊同時修改時保留兩份，不會覆蓋。
+- **手寫**：筆記中可插入手寫區塊；也可以建立像 GoodNotes 的分頁手寫筆記本（A4 空白／橫線／方格／點陣）。都使用系統原生 Apple Pencil 工具列，存成 Obsidian 看得到的圖片＋可再編輯的筆跡。
+- **Apple Intelligence**：裝置端 Foundation Models 整理摘要、重點、待辦與標籤，手寫筆記本先以 Vision 辨識手寫；編輯時可用系統「書寫工具」。
+- **配對很簡單**：在 Mac 的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可；「設定 Remotely Save」一鍵套用各裝置 Obsidian 的同步設定。
+- **工具（附加功能）**：智慧掃描——Vision 在裝置上辨識文字、**自動判斷文件情境**（收據、名片、FV60 請款…），再整理成**你指定格式的 JSON**。
 
 ```
-iPhone／iPad App（SwiftUI，iPad 為原生側邊欄）
-  ├─ 筆記：PencilKit 分頁筆記本 → Vision 手寫辨識 → Foundation Models 整理
-  ├─ Obsidian：瀏覽／搜尋／編輯 vault
-  ├─ 掃描：Vision OCR → 情境判斷（Jev → 裝置端模型 → 關鍵字）→ JSON
+iPhone／iPad App（SwiftUI，iPad 為原生側邊欄＋三欄筆記）
+  ├─ 筆記：Markdown（即時樣式編輯、閱讀模式、手寫區塊、手寫筆記本、AI 整理）
+  │    └─ 本機 vault 鏡像 ⇄ 雙向同步（ETag／內容雜湊三方比對、衝突保留兩份）
+  └─ 工具：掃描 → Vision OCR → 情境判斷 → JSON
         │
         ▼
 Railway
   ├─ 伺服器 server/（REST /v1、MCP /mcp、Postgres）
-  │    └─ /v1/vault：讀寫 vault 檔案（Bucket）
+  │    ├─ /v1/vault：讀寫 vault 檔案（Bucket）
+  │    └─ /v1/pairing、/pair：配對碼
   └─ Bucket obsidian-vault（S3）◀── Remotely Save ──▶ Obsidian（Mac／iPhone／iPad）
 
-  ├─ obsidian-plugin/   掃描結果同步成筆記
+  ├─ obsidian-plugin/   配對 QR Code、一鍵設定 Remotely Save、掃描結果同步成筆記
   ├─ plugins/localocr/  Claude Code 插件（遠端 MCP，含 vault 工具）
   └─ 自建 harness       REST + OpenAPI
 ```
@@ -32,7 +35,7 @@ Railway
 | `LocalOCR/` | iOS App（Swift、SwiftUI、Vision、VisionKit、Foundation Models、SwiftData） |
 | `LocalOCRTests/` | 單元測試（JSON、情境分類、樣板、Vision 實際辨識、伺服器格式） |
 | `server/` | Node.js／TypeScript 伺服器：REST、MCP、Postgres、Jev（[說明](server/README.md)） |
-| `obsidian-plugin/` | Obsidian 插件，把掃描同步成筆記（[說明](obsidian-plugin/README.md)） |
+| `obsidian-plugin/` | Obsidian 插件：配對 QR Code、一鍵設定 Remotely Save、把掃描同步成筆記（[說明](obsidian-plugin/README.md)） |
 | `plugins/localocr/` | Claude Code 插件（[說明](plugins/localocr/README.md)） |
 | `docs/` | [API 規格](docs/API.md)、[Obsidian 同步設定](docs/OBSIDIAN-SYNC.md)、[TestFlight 自動上傳](docs/TESTFLIGHT.md) |
 
@@ -40,13 +43,12 @@ Railway
 
 | 畫面 | 說明 |
 | --- | --- |
-| **筆記** | 筆記本書架（封面、搜尋、排序）；分頁紙張、雙指縮放、系統 Apple Pencil 工具列（手指／Pencil 依系統設定）、頁面總覽（插入、刪除、跳頁）、改紙張；檢閱器：Apple Intelligence 整理（手寫辨識、標題、摘要、重點、待辦、標籤）、同步到 Obsidian、在 Obsidian 開啟。其他裝置建立的筆記本會從 vault 匯入，可繼續編輯 |
-| **Obsidian** | iPad 左側資料夾樹、右側筆記；全文搜尋；Markdown 閱讀（屬性、標題、清單、待辦、callout、程式碼、內嵌圖片、[[連結]] 可點）；編輯（支援系統書寫工具）並以 ETag 防止覆蓋 Obsidian 中的修改；Apple Intelligence 整理並插入摘要與標籤；新增筆記 |
-| **掃描** | 相簿（最多 50 張）、拍照、文件掃描（自動裁切、多頁）、貼上圖片；頁面先收進**這份文件**（可混用來源、刪除、調整順序），全部加入後再按「開始分析」；各情境的紀錄數量；右下角**工具選單**（弧形滾輪） |
+| **筆記** | iPad 三欄（資料夾｜筆記清單｜筆記）；所有筆記、手寫筆記本、資料夾、搜尋；**Markdown 編輯**（標題、粗體、清單、待辦、連結、標籤即時樣式；鍵盤上方格式工具列；手寫區塊、照片；書寫工具、Apple Pencil 隨手寫）；**閱讀模式**（點待辦打勾、點 [[連結]] 開啟筆記、點手寫區塊繼續編輯、callout、內嵌圖片）；**手寫筆記本**（分頁紙張、雙指縮放、頁面總覽、改紙張；你在 Obsidian 寫的文字不會被改動）；Apple Intelligence 檢閱器；同步狀態與配對 |
+| **工具：掃描** | 相簿（最多 50 張）、拍照、文件掃描（自動裁切、多頁）、貼上圖片；頁面先收進**這份文件**（可混用來源、刪除、調整順序），全部加入後再按「開始分析」；各情境的紀錄數量；右下角**工具選單**（弧形滾輪） |
 | 結果頁 | **JSON**：判斷出的情境與信心度、依樣板產生的 JSON（可更換情境重跑）、上傳狀態；選單中的「加入頁面」可補上漏掉的頁面並重新分析；**圖片**：文字框標示、點選複製；**文字**：可編輯全文；**逐行**：每行信心度 |
-| **相機** | 連續拍照：按快門一頁一頁加入同一份文件（不需點選文字），全部拍完再按「分析」 |
-| **紀錄** | 名稱與副標取自擷取內容（例如 JT 號；總金額與單價）；保存每一頁照片，可全螢幕查看、縮放、分享；搜尋、編輯、補充頁面後重新分析、上傳 |
-| **設定** | 筆記與 Obsidian（存放資料夾、vault 名稱、自動同步、連線狀態、Remotely Save 設定說明）、情境樣板管理、Apple Intelligence 狀態、Jev 開關、伺服器與同步、OCR 語言與模式 |
+| **工具：相機** | 連續拍照：按快門一頁一頁加入同一份文件（不需點選文字），全部拍完再按「分析」 |
+| **工具：紀錄** | 名稱與副標取自擷取內容（例如 JT 號；總金額與單價）；保存每一頁照片，可全螢幕查看、縮放、分享；搜尋、編輯、補充頁面後重新分析、上傳 |
+| **設定** | 筆記與 Obsidian（配對、同步狀態、設定這台裝置的 Obsidian、預設資料夾、vault 名稱）、情境樣板管理、Apple Intelligence 狀態、Jev 開關、伺服器與同步、OCR 語言與模式 |
 
 ### 情境樣板（照你要的樣式輸出 JSON）
 

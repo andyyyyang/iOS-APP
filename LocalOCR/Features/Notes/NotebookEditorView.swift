@@ -1,48 +1,66 @@
 import PencilKit
-import SwiftData
 import SwiftUI
 
-/// 筆記本編輯畫面：分頁紙張＋原生 Apple Pencil 工具列；右側檢閱器（iPad）或底部面板（iPhone）是 AI 整理與同步。
+/// 手寫筆記本：分頁紙張＋原生 Apple Pencil 工具列；右側檢閱器（iPad）或底部面板（iPhone）是 AI 整理。
+/// 筆記本本身是一個 Markdown 檔（Obsidian 中顯示 AI 摘要、手寫內容與每頁圖片），筆跡存在附件資料夾。
 struct NotebookEditorView: View {
-    @Bindable var notebook: Notebook
+    let initialPath: String
+    let notebookID: String
+    var onPathChange: (String) -> Void = { _ in }
 
-    @Environment(\.modelContext) private var modelContext
-    @AppStorage(NotesSettings.Key.autoSync) private var autoSync = true
+    @State private var path = ""
+    @State private var title = ""
+    @State private var archive: NotebookArchive?
+    @State private var loadFailed = false
     @State private var handle = NotebookCanvasHandle()
     @State private var revision = 0
     @State private var visiblePage = 0
     @State private var showsInspector = false
     @State private var showsPages = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var isPublishing = false
     @State private var toast: String?
-    @State private var sync = NotebookSyncModel()
+    private let store = NotesStore.shared
 
     var body: some View {
-        NotebookCanvas(
-            notebook: notebook,
-            handle: handle,
-            revision: revision,
-            onDrawingChange: scheduleSave,
-            onVisiblePageChange: { visiblePage = $0 }
-        )
-        .ignoresSafeArea(edges: .bottom)
-        .overlay(alignment: .bottom) { pageIndicator }
-        .navigationTitle($notebook.title)
+        Group {
+            if let archive {
+                NotebookCanvas(
+                    drawing: { archive.pkDrawing },
+                    pageCount: archive.pageCount,
+                    paper: archive.paper,
+                    handle: handle,
+                    revision: revision,
+                    onDrawingChange: scheduleSave,
+                    onVisiblePageChange: { visiblePage = $0 }
+                )
+                .ignoresSafeArea(edges: .bottom)
+                .overlay(alignment: .bottom) { pageIndicator(pageCount: archive.pageCount) }
+            } else if loadFailed {
+                ContentUnavailableView("無法開啟筆記本", systemImage: "exclamationmark.triangle", description: Text("找不到筆跡資料（\(notebookID)），可能還沒同步到這台裝置。"))
+            } else {
+                ProgressView()
+            }
+        }
+        .navigationTitle($title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarRole(.editor)
         .toolbar { toolbarContent }
         .inspector(isPresented: $showsInspector) {
-            NotebookInspector(notebook: notebook, sync: sync, currentDrawing: { currentDrawing })
+            NotebookInspector(archive: $archive, currentDrawing: { currentDrawing }, onChange: { saveArchiveNow() }, onPublish: { await publish() })
                 .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
         }
         .sheet(isPresented: $showsPages) {
-            NotebookPagesSheet(notebook: notebook, drawing: currentDrawing, current: visiblePage) { action in
-                handlePageAction(action)
+            if let archive {
+                NotebookPagesSheet(pageCount: archive.pageCount, paper: archive.paper, drawing: currentDrawing, current: visiblePage) { action in
+                    handlePageAction(action)
+                }
             }
         }
         .toast($toast)
-        .onChange(of: notebook.title) { _, _ in notebook.touch() }
-        .onDisappear(perform: finishEditing)
+        .onChange(of: title) { _, newTitle in rename(to: newTitle) }
+        .task { await load() }
+        .onDisappear { Task { await publish() } }
     }
 
     // MARK: - Toolbar
@@ -55,6 +73,7 @@ struct NotebookEditorView: View {
             } label: {
                 Label("頁面", systemImage: "square.grid.2x2")
             }
+            .disabled(archive == nil)
 
             Menu {
                 Button {
@@ -67,7 +86,7 @@ struct NotebookEditorView: View {
                 } label: {
                     Label("加到最後", systemImage: "plus.rectangle.on.rectangle")
                 }
-                Picker(selection: Binding(get: { notebook.paper }, set: { changePaper($0) })) {
+                Picker(selection: Binding(get: { archive?.paper ?? .lined }, set: { changePaper($0) })) {
                     ForEach(PaperStyle.allCases) { style in
                         Label(style.title, systemImage: style.systemImage).tag(style)
                     }
@@ -80,21 +99,26 @@ struct NotebookEditorView: View {
                 } label: {
                     Label("刪除這一頁", systemImage: "trash")
                 }
-                .disabled(notebook.pageCount <= 1)
+                .disabled((archive?.pageCount ?? 1) <= 1)
             } label: {
                 Label("新增頁面", systemImage: "plus")
             }
+            .disabled(archive == nil)
 
             Button {
-                Task { await syncNow() }
+                Task {
+                    await publish()
+                    await VaultSyncCenter.shared.syncNow()
+                    toast = VaultSyncCenter.shared.lastError ?? "已同步"
+                }
             } label: {
-                if sync.isSyncing {
+                if isPublishing || VaultSyncCenter.shared.isSyncing {
                     ProgressView()
                 } else {
-                    Label("同步到 Obsidian", systemImage: notebook.needsSync ? "arrow.triangle.2.circlepath.icloud" : "checkmark.icloud")
+                    Label("同步", systemImage: "arrow.triangle.2.circlepath.icloud")
                 }
             }
-            .disabled(sync.isSyncing || !ServerSettings.isConfigured)
+            .disabled(archive == nil || isPublishing)
 
             Button {
                 showsInspector.toggle()
@@ -104,8 +128,8 @@ struct NotebookEditorView: View {
         }
     }
 
-    private var pageIndicator: some View {
-        Text("\(visiblePage + 1) / \(notebook.pageCount)")
+    private func pageIndicator(pageCount: Int) -> some View {
+        Text("\(visiblePage + 1) / \(pageCount)")
             .font(.footnote.monospacedDigit().weight(.medium))
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -115,76 +139,103 @@ struct NotebookEditorView: View {
     }
 
     private var currentDrawing: PKDrawing {
-        handle.currentDrawing ?? notebook.drawing
+        handle.currentDrawing ?? archive?.pkDrawing ?? PKDrawing()
     }
 
-    // MARK: - Saving
+    // MARK: - 載入與儲存
+
+    private func load() async {
+        guard archive == nil, !loadFailed else { return }
+        path = initialPath
+        title = ((initialPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        if let loaded = await NotebookFiles.load(notePath: initialPath, id: notebookID) {
+            archive = loaded
+        } else {
+            loadFailed = true
+        }
+    }
 
     private func scheduleSave(_ drawing: PKDrawing) {
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
-            notebook.drawing = drawing
-            notebook.touch()
+            archive?.pkDrawing = drawing
+            saveArchiveNow()
         }
     }
 
-    private func flushSave() {
+    private func captureDrawing() {
         saveTask?.cancel()
         saveTask = nil
-        if let drawing = handle.currentDrawing, drawing != notebook.drawing {
-            notebook.drawing = drawing
-            notebook.touch()
+        if let drawing = handle.currentDrawing, var current = archive, drawing != current.pkDrawing {
+            current.pkDrawing = drawing
+            archive = current
         }
     }
 
-    private func finishEditing() {
-        flushSave()
-        NotebookCovers.update(notebook)
-        try? modelContext.save()
-        if autoSync, notebook.needsSync, let client = VaultClient.configured() {
-            let notebook = notebook
-            Task { try? await NotebookVaultSync.push(notebook, client: client) }
+    private func saveArchiveNow() {
+        guard var current = archive else { return }
+        current.updatedAt = Date()
+        archive = current
+        try? NotebookFiles.saveArchive(current, notePath: path)
+    }
+
+    /// 更新每頁圖片與 Markdown（離開、同步、AI 整理後）。
+    private func publish() async {
+        captureDrawing()
+        guard let current = archive, !isPublishing else { return }
+        isPublishing = true
+        defer { isPublishing = false }
+        do {
+            try await NotebookFiles.publish(current, notePath: path, store: store)
+        } catch {
+            toast = "儲存失敗：\(error.localizedDescription)"
         }
     }
 
-    private func syncNow() async {
-        flushSave()
-        guard let client = VaultClient.configured() else { return }
-        toast = await sync.push(notebook, client: client)
-        try? modelContext.save()
+    private func rename(to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard archive != nil, !trimmed.isEmpty else { return }
+        if let newPath = try? store.rename(path, to: trimmed), newPath != path {
+            path = newPath
+            onPathChange(newPath)
+        }
     }
 
     // MARK: - Pages
 
     private func handlePageAction(_ action: NotebookPageAction) {
-        flushSave()
-        let count = notebook.pageCount
+        captureDrawing()
+        guard var current = archive else { return }
+        let count = current.pageCount
         switch action {
         case .append:
-            notebook.pageCount = count + 1
+            current.pageCount = count + 1
+            archive = current
             reload(scrollTo: count)
         case .insert(let after):
-            notebook.drawing = notebook.drawing.insertingPage(at: after + 1, pageCount: count)
-            notebook.pageCount = count + 1
+            current.pkDrawing = current.pkDrawing.insertingPage(at: after + 1, pageCount: count)
+            current.pageCount = count + 1
+            archive = current
             reload(scrollTo: after + 1)
         case .delete(let index):
             guard count > 1 else { return }
-            notebook.drawing = notebook.drawing.removingPage(index, pageCount: count)
-            notebook.pageCount = count - 1
+            current.pkDrawing = current.pkDrawing.removingPage(index, pageCount: count)
+            current.pageCount = count - 1
+            archive = current
             reload(scrollTo: min(index, count - 2))
         case .go(let index):
             handle.scrollToPage(index)
             return
         }
-        notebook.touch()
+        saveArchiveNow()
     }
 
     private func changePaper(_ style: PaperStyle) {
-        flushSave()
-        notebook.paper = style
-        notebook.touch()
+        captureDrawing()
+        archive?.paper = style
+        saveArchiveNow()
         reload(scrollTo: nil)
     }
 
@@ -206,32 +257,11 @@ enum NotebookPageAction {
     case go(Int)
 }
 
-/// 同步狀態（工具列與檢閱器共用）。
-@MainActor
-@Observable
-final class NotebookSyncModel {
-    var isSyncing = false
-    var lastMessage: String?
-
-    func push(_ notebook: Notebook, client: VaultClient) async -> String {
-        isSyncing = true
-        defer { isSyncing = false }
-        do {
-            let message = try await NotebookVaultSync.push(notebook, client: client)
-            lastMessage = message
-            return message
-        } catch {
-            let message = "同步失敗：\(error.localizedDescription)"
-            lastMessage = message
-            return message
-        }
-    }
-}
-
 // MARK: - 頁面總覽
 
 private struct NotebookPagesSheet: View {
-    let notebook: Notebook
+    let pageCount: Int
+    let paper: PaperStyle
     let drawing: PKDrawing
     let current: Int
     var onAction: (NotebookPageAction) -> Void
@@ -243,7 +273,7 @@ private struct NotebookPagesSheet: View {
         NavigationStack {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130, maximum: 180), spacing: 20)], spacing: 24) {
-                    ForEach(0..<notebook.pageCount, id: \.self) { index in
+                    ForEach(0..<pageCount, id: \.self) { index in
                         Button {
                             onAction(.go(index))
                             dismiss()
@@ -269,7 +299,7 @@ private struct NotebookPagesSheet: View {
                             } label: {
                                 Label("刪除這一頁", systemImage: "trash")
                             }
-                            .disabled(notebook.pageCount <= 1)
+                            .disabled(pageCount <= 1)
                         }
                     }
                 }
@@ -314,8 +344,8 @@ private struct NotebookPagesSheet: View {
 
     private func renderThumbnails() async {
         let drawing = drawing
-        let paper = notebook.paper
-        for index in 0..<notebook.pageCount {
+        let paper = paper
+        for index in 0..<pageCount {
             let image = await Task.detached(priority: .userInitiated) {
                 PaperRenderer.pageImage(drawing: drawing, page: index, paper: paper, scale: 0.35)
             }.value
@@ -324,15 +354,14 @@ private struct NotebookPagesSheet: View {
     }
 }
 
-// MARK: - 檢閱器：Apple Intelligence 與 Obsidian
+// MARK: - 檢閱器：Apple Intelligence
 
 private struct NotebookInspector: View {
-    @Bindable var notebook: Notebook
-    let sync: NotebookSyncModel
+    @Binding var archive: NotebookArchive?
     var currentDrawing: () -> PKDrawing
+    var onChange: () -> Void
+    var onPublish: () async -> Void
 
-    @Environment(\.modelContext) private var modelContext
-    @Environment(\.openURL) private var openURL
     @State private var phase: Phase = .idle
 
     enum Phase: Equatable {
@@ -356,12 +385,12 @@ private struct NotebookInspector: View {
                     Task { await analyze() }
                 } label: {
                     HStack {
-                        Label(notebook.insights == nil ? "整理這份筆記" : "重新整理", systemImage: "sparkles")
+                        Label(archive?.insights == nil ? "整理這份筆記" : "重新整理", systemImage: "sparkles")
                         Spacer()
                         if isWorking { ProgressView() }
                     }
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || archive == nil)
                 switch phase {
                 case .recognizing(let page, let total):
                     Text("正在辨識手寫（第 \(page)／\(total) 頁）…").foregroundStyle(.secondary)
@@ -375,55 +404,18 @@ private struct NotebookInspector: View {
             } header: {
                 Text("Apple Intelligence")
             } footer: {
-                Text("手寫辨識與整理都在裝置上完成，筆記不會上傳到 AI 服務。")
+                Text("手寫辨識與整理都在裝置上完成。結果會寫進這份筆記的 Markdown（Obsidian 中可以看到與搜尋），你在 Obsidian 寫的其他文字不會被改動。")
             }
 
-            if let insights = notebook.insights {
+            if let insights = archive?.insights {
                 insightsSections(insights)
             }
 
-            if let text = notebook.recognizedText, !text.isEmpty {
+            if let text = archive?.recognizedText, !text.isEmpty {
                 Section("手寫內容") {
                     Text(text)
                         .font(.callout)
                         .textSelection(.enabled)
-                }
-            }
-
-            Section {
-                if let path = notebook.vaultPath {
-                    LabeledContent("位置", value: path)
-                        .font(.footnote)
-                }
-                if let syncedAt = notebook.syncedAt {
-                    LabeledContent("上次同步", value: syncedAt.formatted(date: .abbreviated, time: .shortened))
-                }
-                if let message = sync.lastMessage {
-                    Text(message).font(.footnote).foregroundStyle(.secondary)
-                }
-                Button {
-                    Task {
-                        guard let client = VaultClient.configured() else { return }
-                        notebook.drawing = currentDrawing()
-                        _ = await sync.push(notebook, client: client)
-                        try? modelContext.save()
-                    }
-                } label: {
-                    Label("同步到 Obsidian", systemImage: "arrow.triangle.2.circlepath.icloud")
-                }
-                .disabled(sync.isSyncing || !ServerSettings.isConfigured)
-                if let path = notebook.vaultPath, let url = NotesSettings.obsidianURL(for: path) {
-                    Button {
-                        openURL(url)
-                    } label: {
-                        Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app")
-                    }
-                }
-            } header: {
-                Text("Obsidian")
-            } footer: {
-                if !ServerSettings.isConfigured {
-                    Text("在「設定」連接伺服器後即可同步到 Obsidian。")
                 }
             }
         }
@@ -432,14 +424,6 @@ private struct NotebookInspector: View {
     @ViewBuilder
     private func insightsSections(_ insights: NoteInsights) -> some View {
         Section("摘要") {
-            if !insights.title.isEmpty, insights.title != notebook.title {
-                Button {
-                    notebook.title = insights.title
-                    notebook.touch()
-                } label: {
-                    Label("使用標題「\(insights.title)」", systemImage: "character.cursor.ibeam")
-                }
-            }
             Text(insights.summary)
                 .font(.callout)
                 .textSelection(.enabled)
@@ -468,22 +452,23 @@ private struct NotebookInspector: View {
     }
 
     private func analyze() async {
+        guard let current = archive else { return }
         let drawing = currentDrawing()
-        notebook.drawing = drawing
         do {
-            phase = .recognizing(0, notebook.pageCount)
-            let text = try await NoteIntelligence.recognizeHandwriting(drawing: drawing, pageCount: notebook.pageCount) { page, total in
+            phase = .recognizing(0, current.pageCount)
+            let text = try await NoteIntelligence.recognizeHandwriting(drawing: drawing, pageCount: current.pageCount) { page, total in
                 phase = .recognizing(page, total)
             }
-            notebook.recognizedText = text
+            archive?.pkDrawing = drawing
+            archive?.recognizedText = text
             phase = .thinking
-            notebook.insights = try await NoteIntelligence.insights(for: text)
-            notebook.touch()
-            try? modelContext.save()
+            archive?.insights = try await NoteIntelligence.insights(for: text)
+            onChange()
+            await onPublish()
             phase = .idle
         } catch {
             phase = .failed(error.localizedDescription)
-            notebook.touch()
+            onChange()
         }
     }
 }

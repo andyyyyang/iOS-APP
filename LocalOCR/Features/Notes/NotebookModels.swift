@@ -1,6 +1,5 @@
 import Foundation
 import PencilKit
-import SwiftData
 import SwiftUI
 
 /// 紙張樣式。
@@ -56,22 +55,29 @@ enum NotebookColor: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// 筆記本的頁面配置（邏輯座標，與裝置尺寸無關，iPad 與 iPhone 上的筆跡位置一致）。
+/// 頁面配置（邏輯座標，與裝置尺寸無關，iPad 與 iPhone 上的筆跡位置一致）。
 /// 所有頁面由上而下排在同一張畫布上，頁面之間留一段間隔。
-enum NotebookLayout {
-    /// A4 比例（1 : 1.414）。
-    static let pageSize = CGSize(width: 820, height: 1160)
-    static let margin: CGFloat = 28
-    static let pageGap: CGFloat = 28
+struct PageLayout: Equatable {
+    var pageSize: CGSize
+    var margin: CGFloat
+    var pageGap: CGFloat
 
-    static var canvasWidth: CGFloat { pageSize.width + margin * 2 }
+    /// 筆記本：A4 比例（1 : 1.414）。
+    static let notebook = PageLayout(pageSize: CGSize(width: 820, height: 1160), margin: 28, pageGap: 28)
 
-    static func canvasHeight(pageCount: Int) -> CGFloat {
+    /// 筆記中的手寫區塊。
+    static func inkBlock(height: CGFloat) -> PageLayout {
+        PageLayout(pageSize: CGSize(width: 820, height: height), margin: 16, pageGap: 0)
+    }
+
+    var canvasWidth: CGFloat { pageSize.width + margin * 2 }
+
+    func canvasHeight(pageCount: Int) -> CGFloat {
         let count = CGFloat(max(pageCount, 1))
         return margin * 2 + count * pageSize.height + (count - 1) * pageGap
     }
 
-    static func pageRect(_ index: Int) -> CGRect {
+    func pageRect(_ index: Int) -> CGRect {
         CGRect(
             x: margin,
             y: margin + CGFloat(index) * (pageSize.height + pageGap),
@@ -81,92 +87,31 @@ enum NotebookLayout {
     }
 
     /// 某個 y 座標落在第幾頁（落在頁間空白時歸到上一頁）。
-    static func pageIndex(atY y: CGFloat, pageCount: Int) -> Int {
+    func pageIndex(atY y: CGFloat, pageCount: Int) -> Int {
         let index = Int(floor((y - margin + pageGap / 2) / (pageSize.height + pageGap)))
         return min(max(index, 0), max(pageCount - 1, 0))
     }
 }
 
-/// AI 整理的結果（標題、摘要、重點、待辦、標籤）。以 JSON 存在筆記本上，所有系統版本都能顯示。
+/// 筆記本的頁面配置。
+enum NotebookLayout {
+    static var pageSize: CGSize { PageLayout.notebook.pageSize }
+    static var margin: CGFloat { PageLayout.notebook.margin }
+    static var pageGap: CGFloat { PageLayout.notebook.pageGap }
+    static var canvasWidth: CGFloat { PageLayout.notebook.canvasWidth }
+
+    static func canvasHeight(pageCount: Int) -> CGFloat { PageLayout.notebook.canvasHeight(pageCount: pageCount) }
+    static func pageRect(_ index: Int) -> CGRect { PageLayout.notebook.pageRect(index) }
+    static func pageIndex(atY y: CGFloat, pageCount: Int) -> Int { PageLayout.notebook.pageIndex(atY: y, pageCount: pageCount) }
+}
+
+/// AI 整理的結果（標題、摘要、重點、待辦、標籤）。
 struct NoteInsights: Codable, Equatable {
     var title: String
     var summary: String
     var keyPoints: [String]
     var actionItems: [String]
     var tags: [String]
-}
-
-/// 手寫筆記本：所有頁面的筆跡存成一份 PKDrawing（`drawingData`），以 `pageCount` 決定頁數。
-@Model
-final class Notebook {
-    var id: UUID
-    var title: String
-    var createdAt: Date
-    var updatedAt: Date
-    var paperRaw: String
-    var colorRaw: String
-    var pageCount: Int
-    @Attribute(.externalStorage) var drawingData: Data
-    /// 第一頁的縮圖（封面）。
-    @Attribute(.externalStorage) var coverData: Data?
-
-    // Apple Intelligence
-    /// 手寫辨識出的文字，各頁以空白行分隔。
-    var recognizedText: String?
-    var insightsJSON: String?
-
-    // Obsidian vault 同步
-    /// 筆記在 vault 中的 Markdown 路徑。
-    var vaultPath: String?
-    /// 上次寫入 Markdown 時伺服器回傳的 ETag，用來偵測在 Obsidian 中被修改。
-    var vaultETag: String?
-    var syncedAt: Date?
-
-    init(title: String, paper: PaperStyle = .lined, color: NotebookColor = .blue) {
-        id = UUID()
-        self.title = title
-        createdAt = .now
-        updatedAt = .now
-        paperRaw = paper.rawValue
-        colorRaw = color.rawValue
-        pageCount = 1
-        drawingData = PKDrawing().dataRepresentation()
-    }
-
-    var paper: PaperStyle {
-        get { PaperStyle(rawValue: paperRaw) ?? .lined }
-        set { paperRaw = newValue.rawValue }
-    }
-
-    var color: NotebookColor {
-        get { NotebookColor(rawValue: colorRaw) ?? .blue }
-        set { colorRaw = newValue.rawValue }
-    }
-
-    var drawing: PKDrawing {
-        get { (try? PKDrawing(data: drawingData)) ?? PKDrawing() }
-        set { drawingData = newValue.dataRepresentation() }
-    }
-
-    var insights: NoteInsights? {
-        get { insightsJSON.flatMap { try? JSONDecoder().decode(NoteInsights.self, from: Data($0.utf8)) } }
-        set { insightsJSON = newValue.flatMap { try? String(decoding: JSONEncoder().encode($0), as: UTF8.self) } }
-    }
-
-    var cover: UIImage? { coverData.flatMap(UIImage.init(data:)) }
-
-    /// 修改後尚未寫入 vault。
-    var needsSync: Bool {
-        guard let syncedAt else { return true }
-        return updatedAt > syncedAt
-    }
-
-    /// 檔名用的短代碼，例如 nb-1a2b3c4d。
-    var shortID: String { "nb-" + id.uuidString.prefix(8).lowercased() }
-
-    func touch() {
-        updatedAt = .now
-    }
 }
 
 // MARK: - 頁面編輯（插入、刪除時移動筆跡）

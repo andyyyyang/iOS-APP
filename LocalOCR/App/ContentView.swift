@@ -3,18 +3,17 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(TemplateLibrary.self) private var library
-    @State private var selectedTab: AppTab = UIDevice.current.userInterfaceIdiom == .pad ? .notes : .scan
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedTab: AppTab = .notes
+    @State private var pairingLink: PairingLinkItem?
 
     var body: some View {
-        // iPad 顯示為側邊欄（可收合成上方分頁列），iPhone 顯示為底部分頁列
+        // 筆記是主要功能；掃描、相機、紀錄是附加的工具。iPad 顯示為側邊欄，iPhone 為底部分頁列。
         TabView(selection: $selectedTab) {
-            Tab("筆記", systemImage: "pencil.and.scribble", value: AppTab.notes) {
-                NotesLibraryView()
+            Tab("筆記", systemImage: "note.text", value: AppTab.notes) {
+                NotesHomeView()
             }
-            Tab("Obsidian", systemImage: "books.vertical", value: AppTab.vault) {
-                VaultBrowserView()
-            }
-            TabSection("掃描") {
+            TabSection("工具") {
                 Tab("掃描", systemImage: "doc.text.viewfinder", value: AppTab.scan) {
                     ScanView(selectedTab: $selectedTab)
                 }
@@ -33,6 +32,22 @@ struct ContentView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .task { await refreshServerTemplates() }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            switch phase {
+            case .active: VaultSyncCenter.shared.startPeriodicSync()
+            case .background: VaultSyncCenter.shared.stopPeriodicSync()
+            default: break
+            }
+        }
+        // localocr://pair?server=…&code=…（點配對連結或用相機掃描 QR Code）
+        .onOpenURL { url in
+            if let link = PairingClient.parse(url) {
+                pairingLink = PairingLinkItem(link: link)
+            }
+        }
+        .sheet(item: $pairingLink) { item in
+            NavigationStack { PairingView(link: item.link) }
+        }
     }
 
     /// 啟動時從伺服器更新情境樣板（失敗時沿用上次的快取）。
@@ -47,5 +62,10 @@ struct ContentView: View {
     ContentView()
         .environment(TemplateLibrary.shared)
         .environment(ScanDraft())
-        .modelContainer(for: [ScanRecord.self, Notebook.self], inMemory: true)
+        .modelContainer(for: ScanRecord.self, inMemory: true)
+}
+
+private struct PairingLinkItem: Identifiable {
+    let link: PairingClient.Link
+    var id: String { link.code }
 }

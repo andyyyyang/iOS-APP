@@ -81,6 +81,12 @@ enum MarkdownParser {
                 index += 1
                 continue
             }
+            // HTML 註解（例如 App 管理區段的標記）在 Obsidian 中不顯示
+            if trimmed.hasPrefix("<!--"), trimmed.hasSuffix("-->") {
+                flushParagraph()
+                index += 1
+                continue
+            }
             if let heading = heading(trimmed) {
                 flushParagraph()
                 blocks.append(heading)
@@ -247,22 +253,44 @@ enum MarkdownInline {
     }
 }
 
-/// 顯示 Markdown 筆記。`loadEmbed` 依檔名載入內嵌的圖片；點 [[連結]] 時呼叫 `onOpenLink`。
+/// 顯示 Markdown 筆記。`loadEmbed` 依檔名載入內嵌的圖片；點 [[連結]] 時呼叫 `onOpenLink`；
+/// 點待辦方框時呼叫 `onToggleTask`（第幾個待辦）；點內嵌圖片時呼叫 `onTapEmbed`（例如編輯手寫區塊）。
 struct MarkdownView: View {
     let blocks: [MarkdownBlock]
+    /// 區塊序號 → 第幾個待辦。
+    private let taskIndices: [Int: Int]
     var loadEmbed: (String) async -> UIImage? = { _ in nil }
     var onOpenLink: (String) -> Void = { _ in }
+    var onToggleTask: ((Int) -> Void)?
+    var onTapEmbed: ((String) -> Void)?
 
-    init(text: String, loadEmbed: @escaping (String) async -> UIImage? = { _ in nil }, onOpenLink: @escaping (String) -> Void = { _ in }) {
+    init(
+        text: String,
+        loadEmbed: @escaping (String) async -> UIImage? = { _ in nil },
+        onOpenLink: @escaping (String) -> Void = { _ in },
+        onToggleTask: ((Int) -> Void)? = nil,
+        onTapEmbed: ((String) -> Void)? = nil
+    ) {
         blocks = MarkdownParser.blocks(from: text)
+        var indices: [Int: Int] = [:]
+        var count = 0
+        for (offset, block) in blocks.enumerated() {
+            if case .listItem(.task, _, _) = block {
+                indices[offset] = count
+                count += 1
+            }
+        }
+        taskIndices = indices
         self.loadEmbed = loadEmbed
         self.onOpenLink = onOpenLink
+        self.onToggleTask = onToggleTask
+        self.onTapEmbed = onTapEmbed
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                view(for: block)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { offset, block in
+                view(for: block, at: offset)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -276,7 +304,7 @@ struct MarkdownView: View {
     }
 
     @ViewBuilder
-    private func view(for block: MarkdownBlock) -> some View {
+    private func view(for block: MarkdownBlock, at offset: Int) -> some View {
         switch block {
         case .properties(let items):
             VStack(alignment: .leading, spacing: 6) {
@@ -309,8 +337,15 @@ struct MarkdownView: View {
                 case .number(let number):
                     Text("\(number).").monospacedDigit().foregroundStyle(.secondary)
                 case .task(let done):
-                    Image(systemName: done ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(done ? Color.accentColor : .secondary)
+                    Button {
+                        if let index = taskIndices[offset] { onToggleTask?(index) }
+                    } label: {
+                        Image(systemName: done ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(done ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(onToggleTask == nil)
+                    .accessibilityLabel(done ? "標為未完成" : "標為完成")
                 }
                 Text(MarkdownInline.attributed(text))
                     .strikethrough(marker == .task(true))
@@ -334,7 +369,25 @@ struct MarkdownView: View {
             }
             .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         case .embed(let name):
-            EmbeddedImage(name: name, load: loadEmbed)
+            if let onTapEmbed {
+                Button {
+                    onTapEmbed(name)
+                } label: {
+                    EmbeddedImage(name: name, load: loadEmbed)
+                        .overlay(alignment: .topTrailing) {
+                            if InkFiles.blockName(fromEmbed: name) != nil {
+                                Image(systemName: "pencil.tip.crop.circle.fill")
+                                    .font(.title2)
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, Color.accentColor)
+                                    .padding(8)
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            } else {
+                EmbeddedImage(name: name, load: loadEmbed)
+            }
         case .rule:
             Divider()
         case .table(let rows):

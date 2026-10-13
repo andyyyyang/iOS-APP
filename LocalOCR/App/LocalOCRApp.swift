@@ -20,6 +20,6 @@ struct LocalOCRApp: App {
                 .environment(library)
                 .environment(draft)
         }
-        .modelContainer(for: [ScanRecord.self, Notebook.self])
+        .modelContainer(for: ScanRecord.self)
     }
 }
