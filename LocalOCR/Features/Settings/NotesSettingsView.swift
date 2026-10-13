@@ -30,7 +30,7 @@ struct NotesSettingsView: View {
             } header: {
                 Text("配對")
             } footer: {
-                Text("在 Mac 的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
+                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
             }
 
             Section {
