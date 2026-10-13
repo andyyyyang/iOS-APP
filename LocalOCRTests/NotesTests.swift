@@ -184,6 +184,31 @@ final class NotesTests: XCTestCase {
         XCTAssertEqual(VaultSyncEngine.normalizeETag("W/\"abc\""), "abc")
         XCTAssertEqual(NoteIntelligence.cleanTag(" #產品 規劃 "), "產品-規劃")
     }
+
+    // MARK: - 整個 vault
+
+    func testFolderContainment() {
+        XCTAssertTrue(NotesStore.isInside("", ""), "最上層屬於整個 vault")
+        XCTAssertTrue(NotesStore.isInside("工作/會議", ""))
+        XCTAssertTrue(NotesStore.isInside("工作/會議", "工作"))
+        XCTAssertTrue(NotesStore.isInside("工作", "工作"))
+        XCTAssertFalse(NotesStore.isInside("工作室", "工作"))
+        XCTAssertFalse(NotesStore.isInside("", "工作"))
+    }
+
+    func testDefaultFolderIsVaultRootAndOldFixedFolderIsDropped() throws {
+        let suite = "notes-settings-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("iPad 筆記", forKey: NotesSettings.Key.defaultFolder)
+        NotesSettings.registerDefaults(in: defaults)
+        XCTAssertEqual(defaults.string(forKey: NotesSettings.Key.defaultFolder), "", "2.0 配對時固定的「iPad 筆記」改回最上層")
+        XCTAssertTrue(defaults.bool(forKey: NotesSettings.Key.downloadAllFiles), "預設下載所有檔案")
+
+        defaults.set("iPad 筆記", forKey: NotesSettings.Key.defaultFolder)
+        NotesSettings.registerDefaults(in: defaults)
+        XCTAssertEqual(defaults.string(forKey: NotesSettings.Key.defaultFolder), "iPad 筆記", "只轉換一次，之後使用者自己設定的會保留")
+    }
 }
 
 // MARK: - 同步引擎
@@ -192,13 +217,16 @@ final class NotesTests: XCTestCase {
 final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
     private let lock = NSLock()
     private var files: [String: (data: Data, etag: String)] = [:]
+    /// 清單中回報的大小（模擬很大的檔案）。
+    private var reportedSizes: [String: Int] = [:]
     private var counter = 0
     private(set) var writes: [String] = []
 
-    func put(_ path: String, _ text: String) {
+    func put(_ path: String, _ text: String, reportedSize: Int? = nil) {
         lock.withLock {
             counter += 1
             files[path] = (Data(text.utf8), "e\(counter)")
+            reportedSizes[path] = reportedSize
         }
     }
 
@@ -215,7 +243,7 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
     func list(prefix: String, recursive: Bool) async throws -> VaultListing {
         lock.withLock {
             VaultListing(
-                files: files.map { VaultEntry(path: $0.key, size: $0.value.data.count, mtime: Date(), etag: $0.value.etag) },
+                files: files.map { VaultEntry(path: $0.key, size: reportedSizes[$0.key] ?? $0.value.data.count, mtime: Date(), etag: $0.value.etag) },
                 folders: []
             )
         }
@@ -275,20 +303,89 @@ final class VaultSyncEngineTests: XCTestCase {
         VaultSyncEngine(vault: vault, stateURL: root.appending(path: "state.json"), now: { Date(timeIntervalSince1970: 1_760_000_000) })
     }
 
-    func testFirstSyncDownloadsNotesButNotImages() async throws {
+    func testFirstSyncDownloadsWholeVault() async throws {
         remote.put("工作/會議.md", "# 會議")
         remote.put("工作/附件/photo.png", "PNG")
+        remote.put("Inbox.md", "最上層")
+        remote.put("專案/2026/規格.pdf", "PDF")
+        remote.put("白板.canvas", "{}")
         remote.put(".obsidian/app.json", "{}")
         let report = try await engine.sync(remote: remote)
-        XCTAssertEqual(report.downloaded, 1)
+        XCTAssertEqual(report.downloaded, 5)
         XCTAssertEqual(vault.readText("工作/會議.md"), "# 會議")
-        XCTAssertFalse(vault.exists("工作/附件/photo.png"), "圖片需要時才下載")
+        XCTAssertEqual(vault.readText("Inbox.md"), "最上層")
+        XCTAssertEqual(vault.readText("工作/附件/photo.png"), "PNG", "圖片等所有檔案都會下載")
+        XCTAssertEqual(vault.readText("專案/2026/規格.pdf"), "PDF")
         XCTAssertFalse(vault.exists(".obsidian/app.json"), "隱藏資料夾不同步")
+        let pending = await engine.pendingRemoteFiles()
+        XCTAssertTrue(pending.isEmpty)
+        let again = try await engine.sync(remote: remote)
+        XCTAssertTrue(again.isEmpty, "沒有變動時不做任何事")
+    }
+
+    func testNotesOnlyModeDownloadsAttachmentsOnDemand() async throws {
+        remote.put("工作/會議.md", "# 會議")
+        remote.put("工作/附件/photo.png", "PNG")
+        let report = try await engine.sync(remote: remote, downloadAll: false)
+        XCTAssertEqual(report.downloaded, 1)
+        XCTAssertFalse(vault.exists("工作/附件/photo.png"), "只下載筆記時，圖片打開才下載")
+        let pending = await engine.pendingRemoteFiles()
+        XCTAssertEqual(pending.map(\.path), ["工作/附件/photo.png"])
 
         _ = try await engine.ensureLocal("工作/附件/photo.png", remote: remote)
         XCTAssertEqual(vault.readText("工作/附件/photo.png"), "PNG")
-        let again = try await engine.sync(remote: remote)
-        XCTAssertTrue(again.isEmpty, "沒有變動時不做任何事")
+        let again = try await engine.sync(remote: remote, downloadAll: false)
+        XCTAssertTrue(again.isEmpty)
+
+        // 之後開啟「下載所有檔案」：補下載先前略過的檔案
+        remote.put("工作/附件/scan.jpg", "JPG")
+        _ = try await engine.sync(remote: remote, downloadAll: false)
+        XCTAssertFalse(vault.exists("工作/附件/scan.jpg"))
+        let all = try await engine.sync(remote: remote)
+        XCTAssertEqual(all.downloaded, 1)
+        XCTAssertEqual(vault.readText("工作/附件/scan.jpg"), "JPG")
+    }
+
+    func testVeryLargeFilesDownloadOnlyWhenOpened() async throws {
+        remote.put("影片/錄影.mov", "MOV", reportedSize: VaultSyncEngine.autoDownloadLimit + 1)
+        remote.put("a.md", "a")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.downloaded, 1)
+        XCTAssertFalse(vault.exists("影片/錄影.mov"))
+        let pending = await engine.pendingRemoteFiles()
+        XCTAssertEqual(pending.map(\.path), ["影片/錄影.mov"])
+    }
+
+    func testUnchangedTimestampAndSizeSkipReadingFiles() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        let url = vault.url(for: "a.md")
+        let original = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false))[.modificationDate] as? Date)
+
+        // 同樣大小、修改時間也還原：視為沒改（不重新讀取與計算雜湊）
+        try vault.writeText("v9", to: "a.md")
+        try FileManager.default.setAttributes([.modificationDate: original], ofItemAtPath: url.path(percentEncoded: false))
+        let skipped = try await engine.sync(remote: remote)
+        XCTAssertEqual(skipped.uploaded, 0)
+
+        // 修改時間不同：比對內容後上傳
+        try FileManager.default.setAttributes([.modificationDate: original.addingTimeInterval(5)], ofItemAtPath: url.path(percentEncoded: false))
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.uploaded, 1)
+        XCTAssertEqual(remote.text("a.md"), "v9")
+    }
+
+    func testStateFromOlderVersionWithoutTimestamps() async throws {
+        remote.put("a.md", "v1")
+        try vault.writeText("v1", to: "a.md")
+        let old = ["a.md": ["etag": "e1", "hash": LocalVault.hash(Data("v1".utf8))]]
+        try JSONSerialization.data(withJSONObject: old).write(to: root.appending(path: "state.json"))
+        engine = makeEngine()
+        let unchanged = try await engine.sync(remote: remote)
+        XCTAssertTrue(unchanged.isEmpty, "舊版的同步紀錄仍可使用")
+        try vault.writeText("v2", to: "a.md")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.uploaded, 1)
     }
 
     func testLocalAndRemoteEditsFlowBothWays() async throws {

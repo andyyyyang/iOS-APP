@@ -32,16 +32,53 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     var isNotebook: Bool { notebookID != nil }
 }
 
-/// 筆記的索引與操作。檔案是唯一的資料來源（本機 vault 鏡像中的 .md），這裡只是方便查詢的快取。
+/// vault 中筆記以外的檔案（圖片、PDF、Canvas…）。
+struct VaultItem: Identifiable, Hashable, Sendable {
+    let path: String
+    let size: Int
+    let mtime: Date
+    /// false：還在 Railway 空間，尚未下載到這台裝置（打開時下載）。
+    let isLocal: Bool
+
+    var id: String { path }
+    var name: String { (path as NSString).lastPathComponent }
+    var folder: String { (path as NSString).deletingLastPathComponent }
+    var pathExtension: String { (path as NSString).pathExtension.lowercased() }
+
+    var systemImage: String {
+        switch pathExtension {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "svg": return "photo"
+        case "pdf": return "doc.richtext"
+        case "canvas": return "rectangle.3.group"
+        case "mp3", "m4a", "wav", "ogg", "flac", "webm": return "waveform"
+        case "mp4", "mov", "mkv", "ogv": return "film"
+        case "zip": return "doc.zipper"
+        case "csv", "xlsx", "xls": return "tablecells"
+        default: return "doc"
+        }
+    }
+
+    /// App 自己的筆跡資料（手寫筆記本、手寫區塊）：會同步，但不在檔案清單中顯示。
+    var isInternal: Bool {
+        pathExtension == NotebookArchive.fileExtension || pathExtension == InkFiles.fileExtension
+    }
+}
+
+/// 筆記的索引與操作。檔案是唯一的資料來源（本機 vault 鏡像），這裡只是方便查詢的快取。
+/// 筆記可以放在 vault 的任何資料夾；筆記以外的檔案也會列在資料夾中。
 @MainActor
 @Observable
 final class NotesStore {
     static let shared = NotesStore()
 
     private(set) var notes: [NoteSummary] = []
+    /// 筆記以外的檔案（本機的，加上尚未下載的雲端檔案）。
+    private(set) var files: [VaultItem] = []
     private(set) var folders: [String] = []
     private(set) var isLoading = false
     private var cache: [String: NoteSummary] = [:]
+    /// 每則筆記的內容（搜尋用，不必每次輸入都讀檔）。
+    private var contents: [String: String] = [:]
 
     let vault: LocalVault
 
@@ -49,23 +86,51 @@ final class NotesStore {
         self.vault = vault
     }
 
-    /// 重新掃描本機 vault（只重新讀取修改過的檔案）。
+    /// 重新掃描本機 vault（只重新讀取修改過的筆記）。
     func reload() async {
         isLoading = true
         defer { isLoading = false }
         let vault = vault
         let previous = cache
-        let (summaries, folders) = await Task.detached(priority: .userInitiated) {
-            let files = vault.allFiles().filter { $0.path.lowercased().hasSuffix(".md") }
-            let summaries = files.map { file -> NoteSummary in
-                if let cached = previous[file.path], cached.mtime == file.mtime { return cached }
-                return NotesStore.summarize(path: file.path, mtime: file.mtime, text: vault.readText(file.path) ?? "")
+        let previousContents = contents
+        let (summaries, contents, localFiles, localFolders) = await Task.detached(priority: .userInitiated) {
+            var summaries: [NoteSummary] = []
+            var contents: [String: String] = [:]
+            var others: [VaultItem] = []
+            for file in vault.allFiles() {
+                guard file.path.lowercased().hasSuffix(".md") else {
+                    others.append(VaultItem(path: file.path, size: file.size, mtime: file.mtime, isLocal: true))
+                    continue
+                }
+                if let cached = previous[file.path], cached.mtime == file.mtime, let text = previousContents[file.path] {
+                    summaries.append(cached)
+                    contents[file.path] = text
+                } else {
+                    let text = vault.readText(file.path) ?? ""
+                    summaries.append(NotesStore.summarize(path: file.path, mtime: file.mtime, text: text))
+                    contents[file.path] = text
+                }
             }
-            return (summaries, vault.allFolders())
+            return (summaries, contents, others, vault.allFolders())
         }.value
         cache = Dictionary(summaries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        self.contents = contents
         notes = summaries.sorted { $0.mtime > $1.mtime }
-        self.folders = folders.filter { !LocalVault.isHidden($0) && !$0.hasSuffix("附件") && !$0.contains("/附件/") }
+
+        // 尚未下載的雲端檔案也列出來（以及它們所在的資料夾）
+        let localPaths = Set(localFiles.map(\.path))
+        let pending = VaultSyncCenter.shared.pendingFiles
+            .filter { !localPaths.contains($0.path) && !$0.path.lowercased().hasSuffix(".md") }
+            .map { VaultItem(path: $0.path, size: $0.size, mtime: $0.mtime, isLocal: false) }
+        files = (localFiles + pending).filter { !$0.isInternal }
+        var allFolders = Set(localFolders)
+        for item in pending {
+            var folder = item.folder
+            while !folder.isEmpty && allFolders.insert(folder).inserted {
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+        }
+        folders = allFolders.filter { !LocalVault.isHidden($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     nonisolated static func summarize(path: String, mtime: Date, text: String) -> NoteSummary {
@@ -125,12 +190,33 @@ final class NotesStore {
 
     var editedTodayCount: Int { notes.filter { Calendar.current.isDateInToday($0.mtime) }.count }
 
-    /// 資料夾（含子資料夾）中的筆記數。
+    /// 資料夾（含子資料夾）中的筆記數；空字串是整個 vault。
     func noteCount(inFolder folder: String) -> Int {
-        notes.filter { $0.folder == folder || $0.folder.hasPrefix(folder + "/") }.count
+        notes.filter { Self.isInside($0.folder, folder) }.count
     }
 
-    /// 直接的子資料夾；`parent` 為空字串時是最上層。
+    /// 資料夾（含子資料夾）中的檔案數（筆記加上其他檔案）。
+    func fileCount(inFolder folder: String) -> Int {
+        noteCount(inFolder: folder) + files.filter { Self.isInside($0.folder, folder) }.count
+    }
+
+    /// 資料夾本身（不含子資料夾）中筆記以外的檔案，依名稱排序。
+    func files(inFolder folder: String) -> [VaultItem] {
+        files.filter { $0.folder == folder }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// `folder` 是否在 `ancestor` 之中（或就是它）；`ancestor` 為空字串時是整個 vault。
+    nonisolated static func isInside(_ folder: String, _ ancestor: String) -> Bool {
+        ancestor.isEmpty || folder == ancestor || folder.hasPrefix(ancestor + "/")
+    }
+
+    /// 資料夾的顯示名稱；最上層（空字串）顯示 vault 名稱。
+    static func folderTitle(_ folder: String) -> String {
+        guard !folder.isEmpty else { return NotesSettings.vaultName.isEmpty ? "Vault" : NotesSettings.vaultName }
+        return (folder as NSString).lastPathComponent
+    }
+
+    /// 直接的子資料夾（依名稱排序）；`parent` 為空字串時是最上層。
     func childFolders(of parent: String) -> [String] {
         folders.filter { folder in
             let folderParent = (folder as NSString).deletingLastPathComponent
@@ -161,7 +247,7 @@ final class NotesStore {
             if let tag, !note.tags.contains(tag) { return false }
             if let folder {
                 if recursive {
-                    if note.folder != folder && !note.folder.hasPrefix(folder + "/") { return false }
+                    if !Self.isInside(note.folder, folder) { return false }
                 } else if note.folder != folder {
                     return false
                 }
@@ -170,7 +256,7 @@ final class NotesStore {
             if note.title.localizedCaseInsensitiveContains(query) || note.tags.contains(where: { $0.localizedCaseInsensitiveContains(query) }) {
                 return true
             }
-            return vault.readText(note.path)?.localizedCaseInsensitiveContains(query) ?? false
+            return (contents[note.path] ?? vault.readText(note.path))?.localizedCaseInsensitiveContains(query) ?? false
         }
     }
 

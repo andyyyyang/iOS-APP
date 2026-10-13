@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 筆記與 Obsidian：配對、同步狀態、這台裝置的 Obsidian 設定、預設資料夾。
+/// 筆記與 Obsidian：配對、同步狀態、這台裝置的 Obsidian 設定、新筆記的位置。
 struct NotesSettingsView: View {
-    @AppStorage(NotesSettings.Key.defaultFolder) private var defaultFolder = "iPad 筆記"
+    @AppStorage(NotesSettings.Key.defaultFolder) private var defaultFolder = ""
+    @AppStorage(NotesSettings.Key.downloadAllFiles) private var downloadAllFiles = true
     @AppStorage(NotesSettings.Key.vaultName) private var vaultName = ""
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
@@ -45,6 +46,10 @@ struct NotesSettingsView: View {
                         Text("尚未同步").foregroundStyle(.secondary)
                     }
                 }
+                if let progress = sync.progress {
+                    ProgressView("下載中 \(progress.done)/\(progress.total)", value: Double(progress.done), total: Double(max(progress.total, 1)))
+                        .font(.footnote)
+                }
                 if let report = sync.lastReport, !report.isEmpty {
                     Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)（兩份都保留）")")
                         .font(.footnote)
@@ -57,10 +62,17 @@ struct NotesSettingsView: View {
                         Task { await sync.syncNow(allowMassDeletion: true) }
                     }
                 }
+                Toggle("下載所有檔案", isOn: $downloadAllFiles)
+                    .onChange(of: downloadAllFiles) { _, isOn in
+                        if isOn { Task { await sync.syncNow() } }
+                    }
+                if !sync.pendingFiles.isEmpty {
+                    LabeledContent("尚未下載", value: "\(sync.pendingFiles.count) 個檔案")
+                }
             } header: {
                 Text("同步")
             } footer: {
-                Text("筆記存在這台裝置的「檔案」App →「我的 iPad」→「LocalOCR」→「Obsidian」，離線也能使用；開啟 App、修改後與每 3 分鐘會和 Railway 空間同步，Obsidian 再透過 Remotely Save 同步。兩邊同時修改同一則筆記時會保留兩份。")
+                Text("整個 vault 的所有資料夾與檔案都會同步（.obsidian 設定資料夾除外），存在這台裝置的「檔案」App →「我的 iPad」→「LocalOCR」→「Obsidian」，離線也能使用。開啟 App、修改後與每 3 分鐘會和 Railway 空間同步，電腦的 Obsidian 再透過 Remotely Save 同步；兩邊同時修改同一個檔案時會保留兩份。關閉「下載所有檔案」可節省空間：筆記照常下載，圖片、PDF 等打開時才下載；超過 100 MB 的檔案一律打開時才下載。")
             }
 
             Section {
@@ -89,15 +101,22 @@ struct NotesSettingsView: View {
             }
 
             Section {
-                TextField("iPad 筆記", text: $defaultFolder)
-                    .textInputAutocapitalization(.never)
-                TextField("vault 名稱", text: $vaultName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                LabeledContent("新筆記位置") {
+                    TextField("vault 最上層", text: $defaultFolder)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                LabeledContent("vault 名稱") {
+                    TextField("配對時自動填入", text: $vaultName)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
             } header: {
                 Text("筆記")
             } footer: {
-                Text("新筆記預設放在這個資料夾；vault 名稱用來「在 Obsidian 開啟」（配對時會自動填入）。")
+                Text("筆記可以放在 vault 的任何資料夾：在資料夾中新增的筆記就放在那個資料夾；從首頁新增的放在「新筆記位置」（空白代表 vault 最上層，也可以填「日記/2026」這樣的路徑）。vault 名稱用來「在 Obsidian 開啟」。")
             }
         }
         .navigationTitle("筆記與 Obsidian")

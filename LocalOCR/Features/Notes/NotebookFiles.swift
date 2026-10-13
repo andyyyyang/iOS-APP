@@ -7,20 +7,34 @@ enum NotesSettings {
     enum Key {
         static let defaultFolder = "notes.vaultFolder"
         static let vaultName = "notes.vaultName"
+        static let downloadAllFiles = "notes.downloadAllFiles"
+        static let migratedDefaultFolder = "notes.migratedDefaultFolder"
     }
 
     static func registerDefaults(in defaults: UserDefaults = .standard) {
         defaults.register(defaults: [
-            Key.defaultFolder: "iPad 筆記",
+            Key.defaultFolder: "",
             Key.vaultName: "",
+            Key.downloadAllFiles: true,
         ])
+        // 2.0 配對時會把新筆記固定放到「iPad 筆記」；筆記可以在 vault 任何地方，改回最上層
+        if !defaults.bool(forKey: Key.migratedDefaultFolder) {
+            if defaults.string(forKey: Key.defaultFolder) == "iPad 筆記" {
+                defaults.removeObject(forKey: Key.defaultFolder)
+            }
+            defaults.set(true, forKey: Key.migratedDefaultFolder)
+        }
     }
 
-    /// 新筆記預設放的資料夾（不含結尾斜線）。
+    /// 從首頁新增筆記時放的資料夾（不含結尾斜線）；空字串代表 vault 最上層。在資料夾中新增時放在那個資料夾。
     static var defaultFolder: String {
         let raw = UserDefaults.standard.string(forKey: Key.defaultFolder) ?? ""
-        let cleaned = raw.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "/")
-        return cleaned.isEmpty ? "iPad 筆記" : cleaned
+        return raw.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "/")
+    }
+
+    /// 同步時下載 vault 中的所有檔案（關閉時只下載筆記，圖片等附件打開時才下載）。
+    static var downloadAllFiles: Bool {
+        UserDefaults.standard.object(forKey: Key.downloadAllFiles) as? Bool ?? true
     }
 
     static var vaultName: String {

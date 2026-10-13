@@ -2942,7 +2942,6 @@ function summarize(result, opts = {}) {
 
 // src/device-setup.ts
 var REMOTELY_SAVE_PLUGIN_ID = "remotely-save";
-var PAIRING_NOTES_FOLDER = "iPad \u7B46\u8A18";
 var isObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 function parsePairingCode(body) {
   if (!isObject(body) || typeof body.code !== "string" || typeof body.pairUrl !== "string" || typeof body.expiresAt !== "string" || Number.isNaN(Date.parse(body.expiresAt))) {
@@ -2956,8 +2955,8 @@ function parseRemotelySaveSetup(body) {
   }
   return { settings: body.settings, uri: body.uri };
 }
-async function createPairingCode(client, vaultName, notesFolder = PAIRING_NOTES_FOLDER) {
-  const body = await client.requestJson("/v1/pairing", { method: "POST", body: { vaultName, notesFolder } });
+async function createPairingCode(client, vaultName) {
+  const body = await client.requestJson("/v1/pairing", { method: "POST", body: { vaultName } });
   return parsePairingCode(body);
 }
 async function fetchRemotelySaveSetup(client, vaultName) {
@@ -3074,7 +3073,7 @@ var PairingModal = class extends import_obsidian2.Modal {
     tick();
     if (remainingMs(this.pairing.expiresAt, Date.now()) > 0) this.timer = window.setInterval(tick, 1e3);
     contentEl.createEl("p", {
-      text: "\u914D\u5C0D\u5F8C\uFF0CApp \u6703\u53D6\u5F97\u4F3A\u670D\u5668\u7DB2\u5740\u8207\u9019\u53F0\u88DD\u7F6E\u4F7F\u7528\u7684 API \u91D1\u9470\uFF0C\u4E26\u628A iPad \u7B46\u8A18\u5B58\u5230\u9019\u500B\u4FDD\u96AA\u5EAB\u3002",
+      text: "\u914D\u5C0D\u5F8C\uFF0CApp \u6703\u53D6\u5F97\u4F3A\u670D\u5668\u7DB2\u5740\u8207\u9019\u53F0\u88DD\u7F6E\u4F7F\u7528\u7684 API \u91D1\u9470\uFF0C\u4E26\u540C\u6B65\u6574\u500B\u4FDD\u96AA\u5EAB\uFF08\u6240\u6709\u8CC7\u6599\u593E\u7684\u7B46\u8A18\u8207\u6A94\u6848\uFF09\u3002",
       cls: "setting-item-description"
     });
     const buttons = contentEl.createDiv({ cls: "modal-button-container" });

@@ -67,13 +67,13 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 
 ## 配對 iPhone／iPad
 
-指令或設定頁按鈕「配對 iPhone／iPad」會以目前的伺服器網址與 API 金鑰呼叫 `POST /v1/pairing`（`{"vaultName":"<目前保險庫名稱>","notesFolder":"iPad 筆記"}`），然後顯示：
+指令或設定頁按鈕「配對 iPhone／iPad」會以目前的伺服器網址與 API 金鑰呼叫 `POST /v1/pairing`（`{"vaultName":"<目前保險庫名稱>"}`），然後顯示：
 
 - 配對連結 `localocr://pair?server=…&code=…` 的 QR Code；
 - 配對碼（例如 `K7QM-3XPA`，大字等寬顯示）與倒數計時（10 分鐘內有效、只能使用一次，過期後 QR Code 變淡）；
 - 說明「在 iPhone／iPad 的 LocalOCR App 開啟『設定 → 配對』掃描 QR Code，或輸入配對碼」，以及「產生新的配對碼」按鈕。
 
-App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**、保險庫名稱與 iPad 筆記資料夾。想讓 iPhone／iPad 使用另一把金鑰（方便之後單獨撤銷），先在插件設定換成那把金鑰再配對。
+App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**與保險庫名稱，之後同步整個保險庫（所有資料夾的筆記與檔案；筆記可以放在任何資料夾）。想讓 iPhone／iPad 使用另一把金鑰（方便之後單獨撤銷），先在插件設定換成那把金鑰再配對。
 
 ## 設定 Remotely Save
 

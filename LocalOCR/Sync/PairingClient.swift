@@ -11,7 +11,6 @@ enum PairingClient {
     struct Result: Equatable {
         let apiKey: String
         let vaultName: String?
-        let notesFolder: String?
     }
 
     static let defaultServer = URL(string: "https://localocr-server-production.up.railway.app")!
@@ -54,7 +53,7 @@ enum PairingClient {
             guard let apiKey = value["apiKey"]?.stringValue, !apiKey.isEmpty else {
                 throw ServerError(status: 0, code: "invalid_response", message: "伺服器回傳格式不正確")
             }
-            return Result(apiKey: apiKey, vaultName: value["vaultName"]?.stringValue, notesFolder: value["notesFolder"]?.stringValue)
+            return Result(apiKey: apiKey, vaultName: value["vaultName"]?.stringValue)
         case 404:
             throw ServerError(status: 0, code: "invalid_code", message: "配對碼不正確或已過期，請在 Obsidian 重新產生。")
         case 429:
@@ -68,16 +67,14 @@ enum PairingClient {
         }
     }
 
-    /// 儲存配對結果：伺服器網址、金鑰（鑰匙圈）、vault 名稱與筆記資料夾。
+    /// 儲存配對結果：伺服器網址、金鑰（鑰匙圈）與 vault 名稱。
+    /// 舊版插件會傳 notesFolder（固定的筆記資料夾）；筆記可以放在 vault 任何地方，所以不使用。
     @MainActor
     static func apply(_ result: Result, server: URL) {
         UserDefaults.standard.set(server.absoluteString, forKey: ServerSettings.Key.baseURL)
         ServerSettings.apiKey = result.apiKey
         if let vault = result.vaultName, !vault.isEmpty {
             UserDefaults.standard.set(vault, forKey: NotesSettings.Key.vaultName)
-        }
-        if let folder = result.notesFolder, !folder.isEmpty {
-            UserDefaults.standard.set(folder, forKey: NotesSettings.Key.defaultFolder)
         }
     }
 

@@ -297,7 +297,7 @@ struct PairingPromptCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("與 Obsidian 配對")
                     .font(.headline)
-                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code，筆記就會雙向同步。")
+                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code，整個 vault 就會雙向同步。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

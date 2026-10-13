@@ -161,13 +161,13 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 請求本文選用：
 
 ```json
-{ "vaultName": "我的筆記", "notesFolder": "iPad 筆記" }
+{ "vaultName": "我的筆記" }
 ```
 
 | 欄位 | 說明 |
 | --- | --- |
 | `vaultName` | 選用，1–200 字（或 `null`）：新裝置應使用的 Obsidian 保險庫名稱 |
-| `notesFolder` | 選用，1–200 字（或 `null`）：App 存放 iPad 筆記的資料夾 |
+| `notesFolder` | 選用，1–200 字（或 `null`）：舊版插件（1.1.0）會傳「iPad 筆記」；App 2.1 起忽略（筆記可以放在 vault 任何資料夾，整個 vault 都會同步） |
 
 回傳 **201**：
 
@@ -194,7 +194,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 配對碼不分大小寫，空白與 `-` 會被忽略。成功回傳 **200** 並使配對碼失效：
 
 ```json
-{ "apiKey": "<API 金鑰>", "vaultName": "我的筆記", "notesFolder": "iPad 筆記" }
+{ "apiKey": "<API 金鑰>", "vaultName": "我的筆記", "notesFolder": null }
 ```
 
 `vaultName`、`notesFolder` 建立時沒有提供則為 `null`。之後所有請求帶 `Authorization: Bearer <apiKey>`。
@@ -329,14 +329,15 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
     "autoRunEveryMilliseconds": 300000,
     "initRunAfterMilliseconds": 10000,
     "syncOnSaveAfterMilliseconds": 1000,
-    "agreeToUseSyncV3": true
+    "agreeToUseSyncV3": true,
+    "syncUnderscoreItems": true
   },
   "uri": "obsidian://remotely-save?func=settings&version=localocr&vault=%E6%88%91%E7%9A%84%E7%AD%86%E8%A8%98&data=%7B%22serviceType%22..."
 }
 ```
 
 - `s3` 來自伺服器的 `VAULT_S3_*` 與 `VAULT_PREFIX`。Remotely Save 匯入時是淺層合併（`Object.assign({}, 目前設定, 匯入的設定)`），所以 `s3` 一律完整提供，會整個取代裝置上原本的 S3 設定；沒有列出的設定（例如加密密碼）維持不變。
-- 同步排程取 Remotely Save 設定選單中的值：每 5 分鐘自動同步（`300000`）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。
+- 同步排程取 Remotely Save 設定選單中的值：每 5 分鐘自動同步（`300000`）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。`syncUnderscoreItems: true` 讓 `_` 開頭的檔案與資料夾（例如 `_attachments/`）也同步（Remotely Save 預設略過）：整個 vault 都會同步，只有 `.obsidian` 等 `.` 開頭的項目留在各裝置。
 - `uri` 與 Remotely Save 自己的「匯出 QR Code」相同格式：`obsidian://remotely-save?func=settings&version=localocr&vault=<encodeURIComponent(vault)>&data=<encodeURIComponent(JSON.stringify(settings))>`。Remotely Save 只接受與目前保險庫同名的 `vault`；沒有帶 `vault` 參數時 `uri` 為 `null`。
 - 匯入後要重新啟動 Obsidian，自動同步排程才會生效（Remotely Save 只在啟動時建立排程）。
 

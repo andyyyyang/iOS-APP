@@ -42,14 +42,14 @@ struct NotesHomeView: View {
         var id: Self { self }
     }
 
-    /// 新筆記放的位置：目前所在的資料夾，否則是預設資料夾。
+    /// 新筆記放的位置：目前所在的資料夾，否則是設定中的位置（預設是 vault 最上層）。
     private var currentFolder: String {
         if case .folder(let folder) = section { return folder }
         return NotesSettings.defaultFolder
     }
 
     private var newFolderLocation: String {
-        if case .folder(let folder) = section { return "建立在「\(folder)」中" }
+        if case .folder(let folder) = section, !folder.isEmpty { return "建立在「\(folder)」中" }
         return "建立在最上層"
     }
 
@@ -105,6 +105,7 @@ struct NotesHomeView: View {
             withAnimation { columnVisibility = isEmpty ? .all : .detailOnly }
         }
         .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
+        .onChange(of: sync.pendingFiles) { _, _ in Task { await store.reload() } }
         .task {
             await store.reload()
             if sync.isConfigured { await sync.syncNow() }
@@ -134,11 +135,11 @@ struct NotesHomeView: View {
 
                 switch sidebarMode {
                 case .folders:
+                    // 整個 vault（最上層的筆記與檔案），下面是資料夾樹
+                    sidebarRow(NotesStore.folderTitle(""), systemImage: "books.vertical", count: store.fileCount(inFolder: ""))
+                        .tag(NotesSection.folder(""))
                     ForEach(store.childFolders(of: ""), id: \.self) { folder in
                         FolderTreeRow(folder: folder, store: store, rowBuilder: folderRow)
-                    }
-                    if store.folders.isEmpty {
-                        Text("還沒有資料夾").font(.footnote).foregroundStyle(.tertiary)
                     }
                 case .tags:
                     ForEach(store.tagCounts, id: \.tag) { item in
@@ -186,7 +187,7 @@ struct NotesHomeView: View {
 
     private func folderRow(_ folder: String) -> AnyView {
         AnyView(
-            sidebarRow((folder as NSString).lastPathComponent, systemImage: "folder", count: store.noteCount(inFolder: folder))
+            sidebarRow(NotesStore.folderTitle(folder), systemImage: "folder", count: store.fileCount(inFolder: folder))
                 .tag(NotesSection.folder(folder))
         )
     }
@@ -200,8 +201,13 @@ struct NotesHomeView: View {
                 Label("與 Obsidian 配對", systemImage: "qrcode.viewfinder")
             }
         } else if sync.isSyncing {
-            Label("同步中…", systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Label(sync.progress.map { "下載中 \($0.done)/\($0.total)" } ?? "同步中…", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.secondary)
+                if let progress = sync.progress, progress.total > 0 {
+                    ProgressView(value: Double(progress.done), total: Double(progress.total))
+                }
+            }
         } else if let error = sync.lastError {
             Button {
                 Task { await sync.syncNow() }
@@ -315,7 +321,7 @@ struct NotesHomeView: View {
         guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         let name = NotebookMarkdown.fileName(for: newFolderName)
         let parent: String
-        if case .folder(let folder) = section { parent = folder + "/" } else { parent = "" }
+        if case .folder(let folder) = section, !folder.isEmpty { parent = folder + "/" } else { parent = "" }
         try? store.createFolder(parent + name)
         section = .folder(parent + name)
     }

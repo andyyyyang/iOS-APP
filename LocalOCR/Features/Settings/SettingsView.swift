@@ -51,7 +51,7 @@ struct SettingsView: View {
                 } header: {
                     Text("筆記")
                 } footer: {
-                    Text("所有筆記都是 Markdown，存在這台裝置並與 Railway 空間雙向同步；Mac、iPhone、iPad 上的 Obsidian 以 Remotely Save 同步同一份 vault。")
+                    Text("整個 Obsidian vault（所有資料夾的筆記、圖片與檔案）都存在這台裝置並與 Railway 空間雙向同步；電腦（Windows／Mac）與其他裝置上的 Obsidian 以 Remotely Save 同步同一份 vault。")
                 }
 
                 Section {

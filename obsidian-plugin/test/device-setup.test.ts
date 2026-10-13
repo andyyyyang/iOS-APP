@@ -1,7 +1,6 @@
 import QRCode from "qrcode";
 import { describe, expect, it } from "vitest";
 import {
-	PAIRING_NOTES_FOLDER,
 	createPairingCode,
 	describeSetupError,
 	fetchRemotelySaveSetup,
@@ -51,13 +50,14 @@ const SETTINGS = {
 	initRunAfterMilliseconds: 10000,
 	syncOnSaveAfterMilliseconds: 1000,
 	agreeToUseSyncV3: true,
+	syncUnderscoreItems: true,
 };
 
 const uriFor = (vault: string) =>
 	`obsidian://remotely-save?func=settings&version=localocr&vault=${encodeURIComponent(vault)}&data=${encodeURIComponent(JSON.stringify(SETTINGS))}`;
 
 describe("createPairingCode", () => {
-	it("POSTs the vault name and notes folder as JSON with the bearer token", async () => {
+	it("POSTs the vault name (no notes folder: the whole vault syncs) as JSON with the bearer token", async () => {
 		const { client, requests } = recordingClient(() => ({ status: 201, body: PAIRING }));
 		expect(await createPairingCode(client, "我的筆記")).toEqual(PAIRING);
 		expect(requests).toHaveLength(1);
@@ -66,8 +66,7 @@ describe("createPairingCode", () => {
 		expect(req.method).toBe("POST");
 		expect(req.headers.Authorization).toBe(`Bearer ${KEY}`);
 		expect(req.headers["Content-Type"]).toBe("application/json");
-		expect(JSON.parse(req.body!)).toEqual({ vaultName: "我的筆記", notesFolder: "iPad 筆記" });
-		expect(PAIRING_NOTES_FOLDER).toBe("iPad 筆記");
+		expect(JSON.parse(req.body!)).toEqual({ vaultName: "我的筆記" });
 	});
 
 	it("sends no body or Content-Type on GET requests", async () => {

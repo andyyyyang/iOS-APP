@@ -409,6 +409,7 @@ describe("GET /v1/vault/remotely-save", () => {
       initRunAfterMilliseconds: 10_000,
       syncOnSaveAfterMilliseconds: 1000,
       agreeToUseSyncV3: true,
+      syncUnderscoreItems: true,
     });
 
     // exactly how Remotely Save's exportQrCodeUri builds it

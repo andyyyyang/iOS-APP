@@ -5,8 +5,6 @@
 import { ApiError, describeError, type LocalOcrClient } from "./sync-core";
 
 export const REMOTELY_SAVE_PLUGIN_ID = "remotely-save";
-/** Folder the paired app writes its iPad notes to. */
-export const PAIRING_NOTES_FOLDER = "iPad 筆記";
 
 type JsonClient = Pick<LocalOcrClient, "requestJson">;
 
@@ -55,13 +53,12 @@ export function parseRemotelySaveSetup(body: unknown): RemotelySaveSetup {
 	return { settings: body.settings, uri: body.uri };
 }
 
-/** Creates a single-use pairing code that hands this plugin's API key to the LocalOCR app. */
-export async function createPairingCode(
-	client: JsonClient,
-	vaultName: string,
-	notesFolder = PAIRING_NOTES_FOLDER,
-): Promise<PairingCode> {
-	const body = await client.requestJson("/v1/pairing", { method: "POST", body: { vaultName, notesFolder } });
+/**
+ * Creates a single-use pairing code that hands this plugin's API key to the LocalOCR app.
+ * No notes folder: the app syncs the whole vault and notes can live in any folder.
+ */
+export async function createPairingCode(client: JsonClient, vaultName: string): Promise<PairingCode> {
+	const body = await client.requestJson("/v1/pairing", { method: "POST", body: { vaultName } });
 	return parsePairingCode(body);
 }
 

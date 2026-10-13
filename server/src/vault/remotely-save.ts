@@ -37,6 +37,8 @@ export interface RemotelySaveSettings {
   syncOnSaveAfterMilliseconds: number;
   /** Without it Remotely Save shows its "new sync algorithm" dialog and starts no automatic sync on launch. */
   agreeToUseSyncV3: true;
+  /** "Sync _ files or folders": off by default, which would leave `_attachments/`-style folders out of the shared vault. */
+  syncUnderscoreItems: true;
 }
 
 /**
@@ -65,6 +67,7 @@ export function remotelySaveSettings(config: VaultConfig): RemotelySaveSettings 
     initRunAfterMilliseconds: REMOTELY_SAVE_INIT_RUN_MS,
     syncOnSaveAfterMilliseconds: REMOTELY_SAVE_SYNC_ON_SAVE_MS,
     agreeToUseSyncV3: true,
+    syncUnderscoreItems: true, // the whole vault syncs (the app reads every folder); only . items stay local
   };
 }
 

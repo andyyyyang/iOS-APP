@@ -100,7 +100,7 @@ export class PairingModal extends Modal {
 		if (remainingMs(this.pairing.expiresAt, Date.now()) > 0) this.timer = window.setInterval(tick, 1000);
 
 		contentEl.createEl("p", {
-			text: "配對後，App 會取得伺服器網址與這台裝置使用的 API 金鑰，並把 iPad 筆記存到這個保險庫。",
+			text: "配對後，App 會取得伺服器網址與這台裝置使用的 API 金鑰，並同步整個保險庫（所有資料夾的筆記與檔案）。",
 			cls: "setting-item-description",
 		});
 
