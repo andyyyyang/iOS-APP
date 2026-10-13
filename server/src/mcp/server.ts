@@ -5,6 +5,8 @@ import { AppError, toErrorBody } from "../errors.js";
 import { MAX_TEMPLATE_RULES } from "../schemas.js";
 import type { Services } from "../services/index.js";
 import type { Scan } from "../types.js";
+import { contentTypeFor } from "../vault/paths.js";
+import type { VaultFile } from "../vault/types.js";
 import { VERSION } from "../version.js";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -24,6 +26,41 @@ async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   } catch (error) {
     return fail(error);
   }
+}
+
+/** Like run, for tools that build their own content blocks. */
+async function runRaw(fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
+  try {
+    return await fn();
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+/** Larger text files are described instead of returned, so an agent never edits a truncated copy. */
+const MAX_TEXT_BYTES = 1024 * 1024;
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+/** The file as text, or null for binary content (images, PDF, NUL bytes, invalid UTF-8). */
+function asText(file: VaultFile): string | null {
+  const type = contentTypeFor(file.path);
+  if (type.startsWith("image/") || type === "application/pdf" || file.body.includes(0)) return null;
+  try {
+    return utf8.decode(file.body);
+  } catch {
+    return null;
+  }
+}
+
+/** vault_read: JSON metadata, then the raw text as a second block (no JSON escaping of the note). */
+function vaultReadResult(file: VaultFile): CallToolResult {
+  const meta = { path: file.path, size: file.size, mtime: file.mtime, etag: file.etag, contentType: contentTypeFor(file.path) };
+  if (file.size > MAX_TEXT_BYTES) {
+    return ok({ ...meta, tooLarge: true, note: "Over 1 MB; content not returned. 超過 1 MB，不回傳內容。" });
+  }
+  const text = asText(file);
+  if (text === null) return ok({ ...meta, binary: true, note: "Binary file; content not returned. 二進位檔，不回傳內容。" });
+  return { content: [{ type: "text", text: json(meta) }, { type: "text", text }] };
 }
 
 /** Compact view for list_scans; get_scan returns everything. */
@@ -46,6 +83,8 @@ function summarize(scan: Scan) {
 const templateId = z.string().describe("樣板代碼 Template id, e.g. receipt / business_card / event / document");
 const scanId = z.string().describe("掃描 UUID Scan id (UUID)");
 const jsonObject = z.record(z.string(), z.unknown());
+const vaultPath = z.string().describe("相對於 vault 根目錄的檔案路徑 File path relative to the vault root, e.g. Inbox/想法.md");
+const vaultPrefix = z.string().describe("資料夾，例如 Daily/；省略代表根目錄 Folder such as Daily/ (default: vault root)");
 
 export function createMcpServer(services: Services): McpServer {
   const server = new McpServer(
@@ -55,7 +94,10 @@ export function createMcpServer(services: Services): McpServer {
         "LocalOCR：iPhone 裝置端 OCR 的掃描紀錄與情境樣板。先用 list_scans 找掃描，get_scan 取全文，依 get_template 的 sample 結構抽取 JSON，" +
         "以 validate_data 檢查後用 update_scan_data 回寫。\n" +
         "LocalOCR: scans from on-device OCR plus scenario templates. Find scans with list_scans, read full text with get_scan, " +
-        "extract JSON shaped like the template sample, check it with validate_data, then write it back with update_scan_data.",
+        "extract JSON shaped like the template sample, check it with validate_data, then write it back with update_scan_data.\n" +
+        "vault_* 工具讀寫使用者的 Obsidian 筆記庫（Markdown，經 Remotely Save 同步到所有裝置）：修改前先 vault_read，保留 frontmatter 與既有內容，寫入時帶 ifMatch=etag。\n" +
+        "vault_* tools read and write the user's Obsidian vault (Markdown notes synced to all devices by Remotely Save): " +
+        "vault_read before editing, keep the frontmatter and existing content, and pass ifMatch with the etag when writing.",
     },
   );
 
@@ -220,6 +262,91 @@ export function createMcpServer(services: Services): McpServer {
       annotations: { readOnlyHint: true },
     },
     (args) => run(() => services.validate.validate(args)),
+  );
+
+  server.registerTool(
+    "vault_list",
+    {
+      title: "List vault files",
+      description:
+        "列出使用者 Obsidian 筆記庫（vault）的檔案。筆記是 Markdown（.md），由 Obsidian 的 Remotely Save 插件同步到 S3 儲存桶，" +
+        "iPad App 與 Claude 讀寫的是同一份檔案。預設只列出該資料夾這一層（folders 為子資料夾）；recursive=true 列出底下全部檔案。" +
+        "回傳 { items: [{ path, size, mtime（毫秒）, etag }], folders }。\n" +
+        "List files in the user's Obsidian vault: Markdown notes synced by the Remotely Save plugin to an S3 bucket that the iPad app and Claude share. " +
+        "Lists one folder level by default (folders = child folders); recursive=true lists every file below prefix. " +
+        "Returns { items: [{ path, size, mtime (ms), etag }], folders }.",
+      inputSchema: {
+        prefix: vaultPrefix.optional(),
+        recursive: z.boolean().optional().describe("列出所有子資料夾的檔案（預設 false） List files in all subfolders (default false)"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ prefix, recursive }) => run(() => services.vault.list({ prefix, recursive })),
+  );
+
+  server.registerTool(
+    "vault_read",
+    {
+      title: "Read vault file",
+      description:
+        "讀取 Obsidian vault 中的一個檔案。文字檔回傳兩段內容：第一段是 JSON（path、size、mtime、etag），第二段是檔案原文；" +
+        "圖片、PDF 等二進位檔或超過 1 MB 的檔案只回傳描述。要修改筆記時先讀取，再把 etag 當作 vault_write 的 ifMatch。\n" +
+        "Read one file from the Obsidian vault. Text files return two blocks: JSON metadata (path, size, mtime, etag), then the raw content. " +
+        "Binary files (images, PDF) and files over 1 MB return only a description. Read before editing and pass the etag to vault_write as ifMatch.",
+      inputSchema: { path: vaultPath },
+      annotations: { readOnlyHint: true },
+    },
+    ({ path }) => runRaw(async () => vaultReadResult(await services.vault.read(path))),
+  );
+
+  server.registerTool(
+    "vault_write",
+    {
+      title: "Write vault file",
+      description:
+        "寫入（新增或整檔取代）Obsidian vault 中的文字檔，例如 Markdown 筆記；下次 Remotely Save 同步時就會出現在使用者的所有裝置上。" +
+        "修改既有筆記：先 vault_read，保留原有的 frontmatter（開頭的 --- 區塊）與其他內容，只改需要改的部分，並帶 ifMatch=讀取時的 etag；" +
+        "若檔案在這之間被改過會回傳 precondition_failed（含 currentEtag），請重新讀取、合併後再寫。新增筆記請用 createOnly=true，避免覆寫既有檔案。" +
+        "回傳 { path, size, mtime, etag, created }。\n" +
+        "Write (create or fully replace) a text file in the Obsidian vault, e.g. a Markdown note; it reaches all of the user's devices on the next Remotely Save sync. " +
+        "To edit an existing note: vault_read it first, preserve its frontmatter (the leading --- block) and all other content, change only what is needed, " +
+        "and pass ifMatch with the etag from the read. If the file changed in between you get precondition_failed (with currentEtag): re-read, merge and write again. " +
+        "For a new note use createOnly=true so an existing file is never overwritten. Returns { path, size, mtime, etag, created }.",
+      inputSchema: {
+        path: vaultPath,
+        content: z.string().describe("完整的新檔案內容（UTF-8） The complete new file content (UTF-8)"),
+        ifMatch: z.string().optional().describe("vault_read 取得的 etag；不符時不寫入 Etag from vault_read; the write fails if the file changed"),
+        createOnly: z.boolean().optional().describe("只新增：檔案已存在時失敗 Only create; fail if the file already exists"),
+      },
+      annotations: { idempotentHint: true },
+    },
+    ({ path, content, ifMatch, createOnly }) =>
+      run(async () => {
+        const { value, created } = await services.vault.write(path, Buffer.from(content, "utf8"), {
+          ifMatch,
+          ifNoneMatch: createOnly ? "*" : undefined,
+        });
+        return { ...value, created };
+      }),
+  );
+
+  server.registerTool(
+    "vault_search",
+    {
+      title: "Search vault",
+      description:
+        "在 Obsidian vault 的 .md／.txt／.json／.canvas 檔案中搜尋檔名與內容（不分大小寫），依修改時間由新到舊，" +
+        "回傳 { items: [{ path, mtime, snippet }] }（snippet 是符合處前後約 120 字）。\n" +
+        "Search the names and contents of .md/.txt/.json/.canvas files in the Obsidian vault (case-insensitive), newest first. " +
+        "Returns { items: [{ path, mtime, snippet }] } where snippet is ~120 characters around the match.",
+      inputSchema: {
+        query: z.string().describe("搜尋文字 Text to find"),
+        prefix: vaultPrefix.optional(),
+        limit: z.number().int().min(1).max(100).optional().describe("筆數 Max results (default 20, max 100)"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ query, prefix, limit }) => run(() => services.vault.search(query, { prefix, limit })),
   );
 
   return server;

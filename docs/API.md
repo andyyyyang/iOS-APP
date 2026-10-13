@@ -13,7 +13,8 @@ iPhone App ──(OCR：Vision，裝置端)──▶ 文字
 Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
    ├── Obsidian 插件：增量同步成筆記
    ├── Claude Code 插件／任何 MCP 客戶端：MCP 工具
-   └── 自建 harness：REST + OpenAPI（/v1/openapi.json）
+   ├── 自建 harness：REST + OpenAPI（/v1/openapi.json）
+   └── Vault（/v1/vault、vault_* 工具）⇄ Railway Storage Bucket ⇄ Remotely Save ⇄ 各裝置的 Obsidian
 ```
 
 ## 驗證
@@ -146,6 +147,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `DELETE /v1/templates/{id}` | 刪除，回傳 204 |
 | `POST /v1/classify` | 請求 `{"text":"...","templateIds":["receipt","document"]}`（`templateIds` 選用，預設全部樣板）。回傳 `{"templateId":"receipt","confidence":0.93,"probabilities":{...},"provider":"jev"}`。文字命中唯一情境的強特徵（`!` 關鍵字）時直接回傳該情境，`provider` 為 `keywords`，不需要 Jev。其他情況若未設定 Jev 金鑰則回傳 503 `jev_not_configured`，客戶端應改用其他分類器 |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
+| `/v1/vault/*` | Obsidian 筆記檔案，見下方「Vault（Obsidian 筆記）」 |
 
 `nextCursor` 是不透明字串，客戶端原樣帶回即可。
 
@@ -164,6 +166,126 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `delete_template` | `id` | 刪除情境 |
 | `classify_text` | `text`, `templateIds?` | 判斷情境：先比對強特徵，再用 Jev |
 | `validate_data` | `templateId`, `data` | 檢查 JSON 是否符合樣板結構，回傳問題清單 |
+| `vault_list`、`vault_read`、`vault_write`、`vault_search` | 見下方 | Obsidian 筆記，見「Vault（Obsidian 筆記）」 |
+
+## Vault（Obsidian 筆記）
+
+使用者的 Obsidian 筆記庫（vault）由社群插件 **Remotely Save**（S3 模式）同步到 Railway Storage Bucket（S3 相容，底層為 Tigris）。
+伺服器直接讀寫同一個儲存桶裡的**一般檔案**：iPad App 與 Claude（MCP）寫入的檔案，會在 Remotely Save 下一次同步時出現在所有裝置上，反之亦然。
+裝置端設定步驟見 [OBSIDIAN-SYNC.md](OBSIDIAN-SYNC.md)。
+
+- 物件鍵 = `VAULT_PREFIX` + vault 內路徑。`VAULT_PREFIX` 預設空白，必須與 Remotely Save 的 Remote prefix 一致。
+- 寫入時與 Remotely Save 一樣設定物件中繼資料 `MTime`、`CTime`（秒，字串浮點數，例如 `"1760000000.123"`）；讀取時優先使用 `MTime`（相容舊版以毫秒儲存的值），沒有時用 `LastModified`。
+- 伺服器未設定 `VAULT_S3_*` 時，除了 `GET /v1/vault/status` 之外的端點與 `vault_*` 工具都回傳 503 `vault_not_configured`。
+- Remotely Save **不可**開啟端對端加密，否則儲存桶裡只有加密檔，App 與 Claude 無法讀取。
+- 儲存桶沒有版本控制，覆寫與刪除都無法復原。
+
+### 路徑
+
+`path` 是相對於 vault 根目錄的檔案路徑，例如 `Daily/2026-10-13.md`、`Inbox/想法.md`。伺服器先做 Unicode NFC 正規化（找不到檔案時再試 NFD 寫法，相容 macOS 上傳的檔名），下列情況回傳 400 `invalid_path`：
+
+- 空字串或未提供
+- 以 `/` 開頭，或（檔案路徑）以 `/` 結尾
+- 含 `.` 或 `..` 段落、空段落（`//`）
+- 反斜線 `\`、控制字元（U+0000–U+001F、U+007F）
+- UTF-8 超過 1024 位元組
+
+`prefix`（資料夾）可省略或空白（根目錄），或是資料夾路徑，例如 `Daily/`；沒有結尾 `/` 時自動補上，其餘規則同上。
+
+### VaultEntry
+
+```json
+{ "path": "Daily/2026-10-13.md", "size": 1834, "mtime": 1760000000123, "etag": "5d41402abc4b2a76b9719d911017c592" }
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `path` | 相對於 vault 根目錄 |
+| `size` | 位元組數 |
+| `mtime` | 毫秒（Unix epoch）。**列表**中是儲存桶的上傳時間（`LastModified`，ListObjects 不含中繼資料）；`GET /v1/vault/file` 的 `X-Vault-Mtime` 與寫入回應則是 `MTime` 中繼資料 |
+| `etag` | 不含引號的 etag；寫入或刪除時放在 `If-Match` 做樂觀鎖 |
+
+### 端點
+
+所有端點都需要 API 金鑰（同其他 `/v1` 端點）。
+
+| 方法與路徑 | 說明 |
+| --- | --- |
+| `GET /v1/vault/status` | `{"configured":true,"prefix":""}`；一律 200（未設定時 `configured` 為 `false`） |
+| `GET /v1/vault/files?prefix=&recursive=` | 列出檔案，`items` 依 `path` 排序。`recursive=false`（預設）只列出這一層，並回傳子資料夾 `folders`（相對於根目錄、以 `/` 結尾，例如 `["Daily/","Inbox/"]`）；`recursive=true` 列出底下所有檔案，回傳中**沒有** `folders`。`recursive` 接受 `true`／`false`／`1`／`0`。資料夾標記物件（以 `/` 結尾的鍵）不會出現在 `items`。回傳 `{"items":[VaultEntry...],"folders":[...]}` |
+| `GET /v1/vault/file?path=` | 下載原始位元組。回應標頭：`Content-Type`（依副檔名）、`ETag`（含引號，例如 `"5d41…"`）、`Last-Modified`、`X-Vault-Mtime`（毫秒）。不存在時 404 `not_found` |
+| `PUT /v1/vault/file?path=` | 以請求本文（原始位元組，任何 Content-Type 都原樣儲存，最多 25 MB）新增或整檔取代。選用標頭：`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`（毫秒，預設為現在）。新增回傳 **201**、覆寫回傳 **200**，本文為 `{"path","size","mtime","etag"}`，並附 `ETag` 標頭 |
+| `DELETE /v1/vault/file?path=` | 刪除，回傳 204；選用 `If-Match`。不存在時 404 `not_found`（不論是否帶 `If-Match`） |
+| `GET /v1/vault/search?q=&prefix=&limit=` | 在 `.md`、`.txt`、`.json`、`.canvas` 檔案中比對檔名與內容（不分大小寫，`q` 為一般文字而非正規表示式），略過 `.obsidian` 等以 `.` 開頭的資料夾與檔案。依 `mtime` 由新到舊，最多檢查最新的 3000 個檔案，超過 1 MB 的檔案只比對檔名。`limit` 預設 20、上限 100。回傳 `{"items":[{"path","mtime","snippet"}]}`，`snippet` 是第一個內容符合處前後約 120 字（只有檔名符合時為檔案開頭；空白會合併、截斷處加 `…`） |
+
+`Content-Type` 對照（`GET` 回應與寫入儲存桶時使用）：
+
+| 副檔名 | Content-Type |
+| --- | --- |
+| `.md` | `text/markdown; charset=utf-8` |
+| `.txt` | `text/plain; charset=utf-8` |
+| `.json`、`.canvas` | `application/json` |
+| `.png`、`.jpg`／`.jpeg`、`.gif`、`.webp`、`.heic` | `image/png`、`image/jpeg`、`image/gif`、`image/webp`、`image/heic` |
+| `.pdf` | `application/pdf` |
+| 其他 | `application/octet-stream` |
+
+`ETag`、`Last-Modified`、`X-Vault-Mtime` 已列在 CORS `Access-Control-Expose-Headers`。
+
+### 樂觀鎖（避免覆寫其他裝置的修改）
+
+1. `GET /v1/vault/file?path=…`，記下 `ETag`。
+2. 修改後 `PUT` 並帶 `If-Match: "<etag>"`。如果檔案在這之間被 Remotely Save 或其他客戶端更新（或已被刪除），回傳 412：
+
+   ```json
+   { "error": { "code": "precondition_failed", "message": "File has changed since it was read (etag mismatch)", "currentEtag": "9a0364b9e99bb480dd25e1f0284c8555" } }
+   ```
+
+   `currentEtag` 是目前的 etag（檔案不存在時為 `null`）。客戶端應重新讀取、合併後再寫入。
+3. 只想新增、不想覆寫既有檔案時帶 `If-None-Match: *`：檔案已存在就回傳 412（同樣附 `currentEtag`）。
+
+- `If-Match` 接受 `"etag"`、`etag`、`W/"etag"`、逗號分隔的清單，或 `*`（檔案必須存在）。
+- 儲存桶不支援條件式寫入，伺服器是「先 HEAD 比對、再 PUT」，兩者之間仍有極短的競爭窗口。
+- Remotely Save 本身不檢查 etag；同一份筆記同時在 Obsidian 與 App 修改時，由 Remotely Save 的衝突處理設定決定保留哪一份。
+
+### 錯誤碼
+
+錯誤格式同其他端點：`{"error":{"code","message"}}`（412 另含 `currentEtag`）。
+
+| HTTP | `code` | 說明 |
+| --- | --- | --- |
+| 400 | `invalid_path` | `path` 或 `prefix` 不合法（見「路徑」） |
+| 400 | `invalid_request` | `recursive`、`q`、`limit` 或 `X-Vault-Mtime`（須為正整數毫秒）格式錯誤 |
+| 401 | `unauthorized` | 缺少或錯誤的 API 金鑰 |
+| 404 | `not_found` | 檔案不存在 |
+| 412 | `precondition_failed` | `If-Match`／`If-None-Match` 不成立；含 `currentEtag` |
+| 413 | `payload_too_large` | 上傳超過 25 MB |
+| 502 | `vault_storage_error` | 儲存桶請求失敗（金鑰、bucket 名稱、網路），訊息含 S3 錯誤名稱，例如 `AccessDenied`、`SignatureDoesNotMatch` |
+| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*` |
+
+### MCP 工具
+
+| 工具 | 參數 | 說明 |
+| --- | --- | --- |
+| `vault_list` | `prefix?`, `recursive?`（預設 `false`） | 同 `GET /v1/vault/files` |
+| `vault_read` | `path` | 文字檔回傳兩段內容：第一段 JSON `{"path","size","mtime","etag","contentType"}`，第二段是檔案原文。圖片、PDF、含 NUL 或非 UTF-8 的檔案回傳 `{…, "binary": true}`，超過 1 MB 回傳 `{…, "tooLarge": true}`，都不含內容 |
+| `vault_write` | `path`, `content`, `ifMatch?`, `createOnly?` | 以 UTF-8 文字整檔寫入（`mtime` 為現在）；`ifMatch` 同 `If-Match`，`createOnly: true` 同 `If-None-Match: *`。回傳 VaultEntry 加上 `created` |
+| `vault_search` | `query`, `prefix?`, `limit?` | 同 `GET /v1/vault/search` |
+
+刻意**不提供刪除工具**，避免代理誤刪筆記。工具說明要求 Claude：這些是使用者經 Remotely Save 同步的 Markdown 筆記；修改前先 `vault_read`，保留 frontmatter 與既有內容，寫入時帶 `ifMatch`（讀取時的 etag），新增筆記用 `createOnly`。
+
+### 伺服器環境變數
+
+`VAULT_S3_ENDPOINT`、`VAULT_S3_BUCKET`、`VAULT_S3_ACCESS_KEY_ID`、`VAULT_S3_SECRET_ACCESS_KEY` 四個都有值時才啟用 Vault；只設定部分時伺服器會記錄缺少的變數名稱（不會記錄值）。金鑰不會出現在任何回應或紀錄中。
+
+| 變數 | 預設 | Railway 參照（儲存桶名為 `obsidian-vault` 時） |
+| --- | --- | --- |
+| `VAULT_S3_ENDPOINT` | — | `${{obsidian-vault.ENDPOINT}}`（例如 `https://t3.storageapi.dev`） |
+| `VAULT_S3_BUCKET` | — | `${{obsidian-vault.BUCKET}}`（顯示名稱加雜湊，例如 `obsidian-vault-jdhhd8oe18xi`） |
+| `VAULT_S3_REGION` | `auto` | `${{obsidian-vault.REGION}}` |
+| `VAULT_S3_ACCESS_KEY_ID` | — | `${{obsidian-vault.ACCESS_KEY_ID}}` |
+| `VAULT_S3_SECRET_ACCESS_KEY` | — | `${{obsidian-vault.SECRET_ACCESS_KEY}}` |
+| `VAULT_S3_FORCE_PATH_STYLE` | `false` | 只有儲存桶 Credentials 分頁註明使用 path-style 時才設為 `true` |
+| `VAULT_PREFIX` | 空白 | 與 Remotely Save 的 Remote prefix 相同；有值時必須以 `/` 結尾（例如 `vault/`），否則伺服器拒絕啟動 |
 
 ## Jev 分類
 

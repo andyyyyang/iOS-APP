@@ -11,6 +11,8 @@ interface HttpLikeError {
   type?: string;
   expose?: boolean;
   message?: string;
+  /** body-parser's limit in bytes (entity.too.large). */
+  limit?: number;
 }
 
 export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next) => {
@@ -28,7 +30,9 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, _req, res, next)
     return;
   }
   if (httpError.type === "entity.too.large") {
-    res.status(413).json(toErrorBody(new AppError(413, "payload_too_large", "Request body exceeds 5mb")));
+    // JSON bodies allow 5mb; vault file uploads allow 25mb
+    const limit = typeof httpError.limit === "number" ? `${Math.round(httpError.limit / 1024 / 1024)}mb` : "the size limit";
+    res.status(413).json(toErrorBody(new AppError(413, "payload_too_large", `Request body exceeds ${limit}`)));
     return;
   }
   if (typeof status === "number" && status >= 400 && status < 500) {

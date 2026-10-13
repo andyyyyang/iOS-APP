@@ -122,3 +122,31 @@ export const validateRequestSchema = z.object({
   templateId: templateIdSchema,
   data: jsonValueSchema,
 });
+
+/** Query-string booleans ("true"/"false"/"1"/"0") or a real boolean from MCP. */
+const booleanParam = z.union([
+  z.boolean(),
+  z.enum(["true", "false", "1", "0"]).transform((value) => value === "true" || value === "1"),
+]);
+
+export const vaultListQuerySchema = z.object({
+  recursive: queryParam(booleanParam).transform((value) => value ?? false),
+});
+
+export const MAX_VAULT_SEARCH_LIMIT = 100;
+
+export const vaultSearchQuerySchema = z.object({
+  q: z.string().trim().min(1, "must not be empty").max(500),
+  limit: z.preprocess(
+    (value) => (value === "" || value === undefined ? undefined : value),
+    z.coerce
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .transform((value) => Math.min(value ?? 20, MAX_VAULT_SEARCH_LIMIT)),
+  ),
+});
+
+/** File mtime in milliseconds since the epoch (X-Vault-Mtime). */
+export const vaultMtimeSchema = queryParam(z.coerce.number().int().min(1).max(8_640_000_000_000_000));

@@ -3,6 +3,7 @@ import { createClassifier } from "./classifier/index.js";
 import { loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
 import { createStore } from "./store/index.js";
+import { createVaultStore } from "./vault/index.js";
 import { VERSION } from "./version.js";
 
 async function main() {
@@ -14,12 +15,13 @@ async function main() {
   await bootstrapStore(store);
 
   const classifier = createClassifier(config);
-  const app = createApp({ store, classifier, apiKeys: config.apiKeys });
+  const vault = createVaultStore(config.vault);
+  const app = createApp({ store, classifier, apiKeys: config.apiKeys, vault });
 
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
       `[startup] LocalOCR server ${VERSION} listening on 0.0.0.0:${config.port} ` +
-        `(database=${store.kind}, classifier=${classifier?.provider ?? "none"})`,
+        `(database=${store.kind}, classifier=${classifier?.provider ?? "none"}, vault=${vault?.kind ?? "none"})`,
     );
   });
 

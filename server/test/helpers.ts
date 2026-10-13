@@ -7,6 +7,7 @@ import { createApp } from "../src/http/app.js";
 import { MemoryStore } from "../src/store/memory.js";
 import { PostgresStore } from "../src/store/postgres.js";
 import type { Store } from "../src/store/types.js";
+import type { VaultStore } from "../src/vault/types.js";
 
 /** Set TEST_DATABASE_URL to run the whole suite against a real (disposable!) Postgres database. */
 export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -51,7 +52,13 @@ export class FakeClassifier implements Classifier {
 }
 
 export async function setup(
-  options: { classifier?: Classifier | null; apiKeys?: string[]; managedTemplatesDir?: string | null } = {},
+  options: {
+    classifier?: Classifier | null;
+    apiKeys?: string[];
+    managedTemplatesDir?: string | null;
+    /** Vault storage (e.g. a MemoryVaultStore); default null = not configured. */
+    vault?: VaultStore | null;
+  } = {},
 ): Promise<{
   app: Express;
   store: Store;
@@ -63,6 +70,7 @@ export async function setup(
     store,
     classifier: options.classifier ?? null,
     apiKeys: options.apiKeys ?? [API_KEY],
+    vault: options.vault ?? null,
   });
   return { app, store };
 }

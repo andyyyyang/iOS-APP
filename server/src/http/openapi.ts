@@ -1,5 +1,6 @@
-import { MAX_TEMPLATE_RULES, RULE_TARGET_PATTERN } from "../schemas.js";
+import { MAX_TEMPLATE_RULES, MAX_VAULT_SEARCH_LIMIT, RULE_TARGET_PATTERN } from "../schemas.js";
 import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES } from "../types.js";
+import { MAX_PATH_BYTES } from "../vault/paths.js";
 import { VERSION } from "../version.js";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -27,6 +28,31 @@ const commonErrors = {
   "401": errorResponse("Missing or invalid API key"),
 };
 
+const binary = { type: "string", format: "binary" };
+const vaultPathParam = {
+  name: "path",
+  in: "query",
+  required: true,
+  description:
+    "File path relative to the vault root, e.g. Daily/2026-10-13.md (NFC-normalized). Rejected with invalid_path: empty, " +
+    'leading or trailing "/", "." or ".." segments, "//", backslashes, control characters, more than 1024 UTF-8 bytes.',
+  schema: { type: "string", maxLength: MAX_PATH_BYTES },
+};
+const vaultPrefixParam = {
+  name: "prefix",
+  in: "query",
+  description: 'Folder relative to the vault root, e.g. Daily/ (a missing trailing "/" is added). Default: the vault root.',
+  schema: { type: "string" },
+};
+const ifMatchHeader = (description: string) => ({ name: "If-Match", in: "header", description, schema: { type: "string" } });
+const vaultErrors = {
+  "400": errorResponse("Invalid path (invalid_path) or parameter (invalid_request)"),
+  "401": commonErrors["401"],
+  "502": errorResponse("The storage bucket failed (vault_storage_error)"),
+  "503": errorResponse("Vault storage is not configured (vault_not_configured)"),
+};
+const preconditionFailed = response(ref("PreconditionFailed"), "Precondition failed (precondition_failed)");
+
 /** Hand-written OpenAPI 3.1 description of the REST API. */
 export function buildOpenApi(serverUrl?: string) {
   return {
@@ -35,7 +61,8 @@ export function buildOpenApi(serverUrl?: string) {
       title: "LocalOCR API",
       version: VERSION,
       description:
-        "Scans from the LocalOCR iOS app, scenario templates, and server-side classification. " +
+        "Scans from the LocalOCR iOS app, scenario templates, server-side classification, and the user's Obsidian vault " +
+        "(plain files in an S3-compatible bucket synced by Remotely Save). " +
         "MCP (Streamable HTTP, stateless) is served at /mcp with the same API keys.",
     },
     ...(serverUrl ? { servers: [{ url: serverUrl }] } : {}),
@@ -144,6 +171,103 @@ export function buildOpenApi(serverUrl?: string) {
           summary: "Validate JSON against a template sample's structure",
           requestBody: requestBody(ref("ValidateRequest")),
           responses: { "200": response(ref("ValidationResult")), ...commonErrors, "404": errorResponse("Template not found") },
+        },
+      },
+      "/v1/vault/status": {
+        get: {
+          operationId: "getVaultStatus",
+          summary: "Whether Obsidian vault storage is configured",
+          responses: { "200": response(ref("VaultStatus")), "401": commonErrors["401"] },
+        },
+      },
+      "/v1/vault/files": {
+        get: {
+          operationId: "listVaultFiles",
+          summary: "List vault files",
+          description:
+            "Files sorted by path. recursive=false (default) lists one folder level and also returns child folders; " +
+            "recursive=true lists every file below prefix and omits folders. Folder marker objects are never listed as files. " +
+            "mtime here is the bucket's upload time (LastModified); GET /v1/vault/file reports Remotely Save's MTime when present.",
+          parameters: [
+            vaultPrefixParam,
+            { name: "recursive", in: "query", schema: { type: "string", enum: ["true", "false", "1", "0"], default: "false" } },
+          ],
+          responses: { "200": response(ref("VaultList")), ...vaultErrors },
+        },
+      },
+      "/v1/vault/file": {
+        parameters: [vaultPathParam],
+        get: {
+          operationId: "getVaultFile",
+          summary: "Download a vault file (raw bytes)",
+          responses: {
+            "200": {
+              description: "Raw file content; Content-Type is guessed from the extension",
+              headers: {
+                ETag: { description: "Quoted etag; send it back as If-Match", schema: { type: "string" } },
+                "Last-Modified": { description: "HTTP date of the file mtime", schema: { type: "string" } },
+                "X-Vault-Mtime": {
+                  description: "File mtime in ms (Remotely Save MTime metadata when present, else the upload time)",
+                  schema: { type: "integer" },
+                },
+              },
+              content: { "*/*": { schema: binary } },
+            },
+            ...vaultErrors,
+            "404": errorResponse("File not found (not_found)"),
+          },
+        },
+        put: {
+          operationId: "putVaultFile",
+          summary: "Create or replace a vault file (raw bytes)",
+          description:
+            "The body is stored byte-for-byte whatever its Content-Type (max 25mb). MTime/CTime metadata are set like Remotely Save " +
+            "so its next sync picks the file up. Concurrency: If-Match fails with 412 when the file changed or is missing; " +
+            "If-None-Match: * fails with 412 when it already exists.",
+          parameters: [
+            ifMatchHeader("Etag from a previous read; 412 if the file no longer matches (or is missing)"),
+            { name: "If-None-Match", in: "header", description: "* = only create; 412 if the file exists", schema: { type: "string" } },
+            {
+              name: "X-Vault-Mtime",
+              in: "header",
+              description: "File mtime in ms since the epoch (default: now)",
+              schema: { type: "integer", minimum: 1 },
+            },
+          ],
+          requestBody: { required: false, description: "Raw file bytes", content: { "*/*": { schema: binary } } },
+          responses: {
+            "200": response(ref("VaultEntry"), "Replaced"),
+            "201": response(ref("VaultEntry"), "Created"),
+            ...vaultErrors,
+            "412": preconditionFailed,
+            "413": errorResponse("Body exceeds 25mb (payload_too_large)"),
+          },
+        },
+        delete: {
+          operationId: "deleteVaultFile",
+          summary: "Delete a vault file",
+          parameters: [ifMatchHeader("Etag from a previous read; 412 if the file no longer matches")],
+          responses: {
+            "204": { description: "Deleted" },
+            ...vaultErrors,
+            "404": errorResponse("File not found (not_found)"),
+            "412": preconditionFailed,
+          },
+        },
+      },
+      "/v1/vault/search": {
+        get: {
+          operationId: "searchVault",
+          summary: "Search vault notes by name and content",
+          description:
+            "Case-insensitive match against file names and contents of .md/.txt/.json/.canvas files (dot folders such as .obsidian are skipped), " +
+            "newest first. Scans at most the 3000 most recent files; contents of files over 1 MB are not searched.",
+          parameters: [
+            { name: "q", in: "query", required: true, schema: { type: "string", minLength: 1, maxLength: 500 } },
+            vaultPrefixParam,
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: MAX_VAULT_SEARCH_LIMIT, default: 20 } },
+          ],
+          responses: { "200": response(ref("VaultSearchResult")), ...vaultErrors },
         },
       },
       "/v1/openapi.json": {
@@ -322,6 +446,69 @@ export function buildOpenApi(serverUrl?: string) {
           type: "object",
           required: ["templateId", "data"],
           properties: { templateId: { type: "string" }, data: { description: "JSON to check" } },
+        },
+        PreconditionFailed: {
+          type: "object",
+          required: ["error"],
+          properties: {
+            error: {
+              type: "object",
+              required: ["code", "message", "currentEtag"],
+              properties: {
+                code: { type: "string", const: "precondition_failed" },
+                message: { type: "string" },
+                currentEtag: { type: ["string", "null"], description: "The file's current etag, or null when it does not exist" },
+              },
+            },
+          },
+        },
+        VaultStatus: {
+          type: "object",
+          required: ["configured", "prefix"],
+          properties: {
+            configured: { type: "boolean", description: "Whether VAULT_S3_* is set; otherwise other vault endpoints return 503" },
+            prefix: { type: "string", description: 'Key prefix in the bucket ("" or ending with "/")' },
+          },
+        },
+        VaultEntry: {
+          type: "object",
+          required: ["path", "size", "mtime", "etag"],
+          properties: {
+            path: { type: "string", description: "Relative to the vault root", examples: ["Daily/2026-10-13.md"] },
+            size: { type: "integer", description: "Bytes" },
+            mtime: { type: "integer", description: "Milliseconds since the epoch" },
+            etag: { type: "string", description: "Unquoted etag; send it as If-Match" },
+          },
+        },
+        VaultList: {
+          type: "object",
+          required: ["items"],
+          properties: {
+            items: { type: "array", items: ref("VaultEntry") },
+            folders: {
+              type: "array",
+              items: { type: "string", examples: ["Daily/"] },
+              description: 'Child folders relative to the vault root, ending with "/" (only when recursive=false)',
+            },
+          },
+        },
+        VaultSearchResult: {
+          type: "object",
+          required: ["items"],
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["path", "mtime", "snippet"],
+                properties: {
+                  path: { type: "string" },
+                  mtime: { type: "integer" },
+                  snippet: { type: "string", description: "About 120 characters around the first content match (or the start of the file)" },
+                },
+              },
+            },
+          },
         },
         ValidationResult: {
           type: "object",

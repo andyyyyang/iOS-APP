@@ -28,6 +28,10 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `POST /v1/classify` | `{"text":"...","templateIds":[...]}` → `{"templateId","confidence","probabilities","provider"}`；未設定 Jev 時回傳 503 `jev_not_configured` |
 | `POST /v1/validate` | `{"templateId":"receipt","data":{...}}` → `{"valid":false,"issues":[{"path":"$.items[0].price","message":"..."}]}`（REST 版的 `validate_data`） |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
+| `GET /v1/vault/status` | `{"configured":true,"prefix":""}`：Obsidian 筆記庫（儲存桶）是否已設定 |
+| `GET /v1/vault/files?prefix=&recursive=` | 列出 vault 檔案 `{"items":[{"path","size","mtime","etag"}],"folders":[...]}`（`folders` 只在非遞迴時回傳） |
+| `GET`／`PUT`／`DELETE /v1/vault/file?path=` | 下載／上傳（原始位元組，最多 25 MB；`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`）／刪除單一檔案 |
+| `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
 | `POST /mcp` | MCP Streamable HTTP（無狀態；`GET`／`DELETE /mcp` 回傳 405） |
 
 ### 增量同步（Obsidian 插件、harness）
@@ -40,9 +44,12 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 不帶 `updatedAfter`／`cursor` 時依 `createdAt` 由新到舊排序，`nextCursor` 也可用來翻頁。
 注意：刪除不會出現在增量同步中。
 
+Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../docs/API.md`](../docs/API.md) 的「Vault（Obsidian 筆記）」；裝置端的 Remotely Save 設定見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
+
 ### MCP 工具
 
-`list_scans`、`get_scan`、`update_scan_data`、`list_templates`、`get_template`、`upsert_template`、`delete_template`、`classify_text`、`validate_data`。
+`list_scans`、`get_scan`、`update_scan_data`、`list_templates`、`get_template`、`upsert_template`、`delete_template`、`classify_text`、`validate_data`，
+以及 Obsidian 筆記的 `vault_list`、`vault_read`、`vault_write`、`vault_search`（沒有刪除工具）。
 工具結果是格式化的 JSON 文字；失敗時 `isError: true`，內容為 `{"error":{"code","message"}}`。
 `list_scans` 另外接受選用的 `cursor` 參數以翻頁；`upsert_template` 接受選用的 `rules`（工具說明中列出支援的操作）。
 
@@ -55,6 +62,10 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `JEV_API_KEY` | 否 | Jev（TypeSafe AI）金鑰；亦接受 `TYPESAFE_API_KEY`。未設定時 `/v1/classify` 回傳 503，App 應改用裝置端分類 |
 | `JEV_MODEL` | 否 | Jev 模型，預設 `jev-latest` |
 | `PORT` | 否 | 監聽埠，預設 `3000`（Railway 自動注入）；監聽 `0.0.0.0` |
+| `VAULT_S3_ENDPOINT`、`VAULT_S3_BUCKET`、`VAULT_S3_ACCESS_KEY_ID`、`VAULT_S3_SECRET_ACCESS_KEY` | 否 | Obsidian 筆記庫所在的 S3 相容儲存桶（Railway：`${{obsidian-vault.ENDPOINT}}`、`${{obsidian-vault.BUCKET}}`、`${{obsidian-vault.ACCESS_KEY_ID}}`、`${{obsidian-vault.SECRET_ACCESS_KEY}}`）。四個都有值才啟用，否則 vault 端點回傳 503 `vault_not_configured` |
+| `VAULT_S3_REGION` | 否 | 預設 `auto` |
+| `VAULT_S3_FORCE_PATH_STYLE` | 否 | 預設 `false`（virtual-hosted URL）；只有儲存桶註明 path-style 時才設 `true` |
+| `VAULT_PREFIX` | 否 | 物件鍵前綴，需與 Remotely Save 的 Remote prefix 相同；預設空白，有值時必須以 `/` 結尾 |
 
 參考 [`.env.example`](.env.example)。
 
@@ -215,8 +226,9 @@ src/
   validate.ts         依樣板 sample 檢查 JSON 結構
   cursor.ts           不透明分頁游標
   store/              Store 介面、PostgresStore（含 migrations.ts）、MemoryStore
-  services/           商業邏輯：scans、templates、classify、validate
+  services/           商業邏輯：scans、templates、classify、validate、vault
   classifier/         Classifier 介面與 Jev 實作
+  vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證
   templates/builtin.ts 內建樣板
   templates/managed.ts 讀取並同步 templates/managed/*.json
   http/               createApp、驗證、錯誤處理、路由、OpenAPI

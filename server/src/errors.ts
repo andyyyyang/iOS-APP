@@ -1,11 +1,15 @@
 import type { ZodError } from "zod";
 
-/** A failure with a stable machine-readable code, rendered as `{"error":{"code","message"}}`. */
+/**
+ * A failure with a stable machine-readable code, rendered as `{"error":{"code","message"}}`.
+ * `details` adds extra fields to the error object (e.g. `currentEtag` on 412 precondition_failed).
+ */
 export class AppError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
@@ -29,5 +33,5 @@ export function fromZodError(error: ZodError, prefix = ""): AppError {
 }
 
 export function toErrorBody(error: AppError) {
-  return { error: { code: error.code, message: error.message } };
+  return { error: { code: error.code, message: error.message, ...error.details } };
 }
