@@ -108,7 +108,7 @@ final class VaultBrowserModel {
         throw VaultError.conflict(currentETag: nil)
     }
 
-    static func isHidden(_ path: String) -> Bool {
+    nonisolated static func isHidden(_ path: String) -> Bool {
         path.split(separator: "/").contains { $0.hasPrefix(".") }
     }
 }
