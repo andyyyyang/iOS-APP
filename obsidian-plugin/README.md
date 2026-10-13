@@ -17,26 +17,33 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 - **自動同步**：預設每 15 分鐘一次，也可以用指令、左側功能區圖示或點狀態列手動同步。
 - **一鍵配對 iPhone／iPad**：產生配對碼與 QR Code，LocalOCR App 掃描後就取得伺服器網址與 API 金鑰，不必手動輸入。
 - **一鍵設定 Remotely Save**：從伺服器取得 Obsidian 儲存桶的設定，套用到這台裝置的 Remotely Save，或用 QR Code 套用到 iPhone／iPad 的 Obsidian。
+- **線上更新**：自動從 GitHub 下載、驗證並安裝新版本，不必手動複製檔案。
 - 使用 Obsidian 的 `requestUrl` 連線，沒有 CORS 問題，**桌面版與行動版（iOS／Android）都能用**。
 
 ## 安裝
 
-### 手動安裝
+### 手動安裝（只需要一次）
 
 1. 在保險庫中建立資料夾 `<保險庫>/.obsidian/plugins/localocr-sync/`（`.obsidian` 是隱藏資料夾）。
-2. 把本資料夾中的 **`main.js`** 與 **`manifest.json`** 複製進去（`main.js` 已建置好並納入版本控制，不需要自己編譯）。
+2. 從 [GitHub Releases](https://github.com/andyyyyang/iOS-APP/releases)（`obsidian-plugin-<版本>`）下載 **`main.js`** 與 **`manifest.json`** 放進去（本資料夾中的 `main.js` 也是建置好的同一份）。
 3. 開啟 Obsidian →「設定」→「第三方外掛」（社群外掛），關閉「限制模式」，按重新整理後啟用 **LocalOCR Sync**。
 4. 到插件設定填入伺服器網址與 API 金鑰，按「測試連線」。
 
-行動版可以先在電腦上安裝，再用 Obsidian Sync、iCloud 等方式同步 `.obsidian/plugins/localocr-sync/` 資料夾到手機。
+安裝 1.2.0 以後的版本後，之後的更新都會自動完成（見下方「線上更新」）。
+
+### 線上更新
+
+- 每次版本號（`manifest.json` 的 `version`）改變並推送後，CI（`.github/workflows/obsidian-plugin-release.yml`）會測試、建置，並發佈 GitHub Release `obsidian-plugin-<版本>`，附上 `main.js` 與 `manifest.json`，更新內容取自 [`CHANGELOG.md`](CHANGELOG.md)。
+- 插件在 Obsidian 啟動 20 秒後（之後每 6 小時）查詢這些 Release；有新版本時下載檔案，比對 GitHub 提供的 SHA-256、確認 `manifest.json` 的插件代碼與版本、確認 `main.js` 是插件程式，再寫入插件資料夾（先 `main.js`、最後 `manifest.json`，寫入失敗時還原舊檔），然後重新載入插件並顯示更新內容。
+- 新版本需要較新的 Obsidian（`minAppVersion`）時不會安裝，只會提示更新 Obsidian。
+- 同步進行中不會更新，等同步結束才安裝。
+- 插件設定的「更新」區塊：目前版本、上次檢查結果、「檢查並更新」按鈕與「自動更新」開關（關閉時只通知）。也可以執行指令「**檢查並更新插件**」。
 
 ### 用 BRAT 安裝
 
-[BRAT](https://github.com/TfTHacker/obsidian42-brat) 會讀取 GitHub 儲存庫**根目錄**的 `manifest.json`，再從對應版本號的 GitHub Release 下載 `main.js` 與 `manifest.json`。本插件放在 monorepo 的子資料夾中，因此要用 BRAT 時：
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) 會從 GitHub Release 下載 `main.js` 與 `manifest.json`，可以直接使用本儲存庫：在 Obsidian 安裝並啟用 BRAT →「Add Beta plugin」→ 輸入 `andyyyyang/iOS-APP`。
 
-1. 把本資料夾的內容（至少 `main.js`、`manifest.json`、`versions.json`、`README.md`）放到一個獨立儲存庫的根目錄。
-2. 建立標籤為 `1.0.0`（與 `manifest.json` 的 `version` 相同）的 GitHub Release，並把 `main.js` 與 `manifest.json` 上傳為附件。
-3. 在 Obsidian 安裝並啟用 BRAT →「Add Beta plugin」→ 輸入該儲存庫（例如 `你的帳號/obsidian-localocr-sync`）。
+只在一台電腦上安裝本插件即可：掃描筆記會透過 Remotely Save 同步到其他裝置；iPhone／iPad 的 Obsidian 只需要 Remotely Save。
 
 ## 設定
 
@@ -62,6 +69,7 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 - 指令「**立即同步 LocalOCR**」：手動同步，完成後顯示「新增 N 筆、更新 M 筆」；有 JSON 陣列輸出時再加上「JSON：新增 a 筆、更新 b 筆、略過 c 筆」。
 - 指令「**重新同步全部（重設進度）**」：重設進度後立刻同步全部掃描。
 - 指令「**配對 iPhone／iPad**」、「**設定 Remotely Save（同步 vault）**」：與設定頁「裝置設定」中的按鈕相同。
+- 指令「**檢查並更新插件**」：有新版本就立即下載並安裝（與設定頁「更新」中的按鈕相同）。
 - 左側功能區的 `scan-text` 圖示：立即同步。
 - 狀態列（桌面版）：`LocalOCR：同步中…`、`LocalOCR：HH:mm 已同步 N 筆` 或 `LocalOCR：同步失敗`（滑鼠移上去可看錯誤原因）；點一下即可同步。
 

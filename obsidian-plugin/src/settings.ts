@@ -19,6 +19,8 @@ export interface LocalOcrSettings {
 	jsonPreserveFields: string;
 	/** Field that marks a JSON record as finished (never touched again). */
 	jsonDoneField: string;
+	/** Install new plugin versions from GitHub automatically (otherwise only notify). */
+	autoUpdate: boolean;
 }
 
 export const DEFAULT_SETTINGS: LocalOcrSettings = {
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: LocalOcrSettings = {
 	jsonMappings: [],
 	jsonPreserveFields: "docNo, done",
 	jsonDoneField: "done",
+	autoUpdate: true,
 };
 
 /** Merge saved settings over the defaults (never sharing the defaults' arrays). */
@@ -48,6 +51,7 @@ export function loadSettings(saved: Partial<LocalOcrSettings> | undefined): Loca
 		: [];
 	if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
 	if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
+	if (typeof settings.autoUpdate !== "boolean") settings.autoUpdate = DEFAULT_SETTINGS.autoUpdate;
 	return settings;
 }
 
@@ -139,6 +143,35 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 					} finally {
 						button.setDisabled(false);
 					}
+				}),
+			);
+
+		new Setting(containerEl).setName("更新").setHeading();
+
+		new Setting(containerEl)
+			.setName(`版本 ${this.plugin.manifest.version}`)
+			.setDesc(this.plugin.updateStatusText())
+			.addButton((button) =>
+				button.setButtonText("檢查並更新").onClick(async () => {
+					button.setDisabled(true);
+					button.setButtonText("檢查中…");
+					try {
+						await this.plugin.checkForUpdates({ manual: true });
+					} finally {
+						this.display();
+					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("自動更新")
+			.setDesc(
+				"啟動 Obsidian 時（之後每 6 小時）檢查 GitHub 上的新版本，有新版本就自動下載、驗證並安裝，不必再手動複製檔案。關閉時只會通知。",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.autoUpdate).onChange(async (value) => {
+					settings.autoUpdate = value;
+					await this.plugin.saveSettings();
 				}),
 			);
 

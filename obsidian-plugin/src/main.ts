@@ -1,4 +1,4 @@
-import { Notice, Plugin, TAbstractFile, TFile, TFolder, debounce, normalizePath, requestUrl } from "obsidian";
+import { Notice, Plugin, TAbstractFile, TFile, TFolder, debounce, normalizePath, requestUrl, requireApiVersion } from "obsidian";
 import { DEFAULT_SETTINGS, LocalOcrSettingTab, describeProgress, loadSettings, type LocalOcrSettings } from "./settings";
 import {
 	buildNotePath,
@@ -32,14 +32,33 @@ import {
 import type { Scan, SyncCursorState, WriteOutcome } from "./types";
 import { createPairingCode, describeSetupError, fetchRemotelySaveSetup } from "./device-setup";
 import { PairingModal, RemotelySaveModal } from "./setup-modals";
+import {
+	UPDATE_CHECK_INTERVAL_MS,
+	UPDATE_FILES,
+	checkForUpdate,
+	describeUpdateError,
+	downloadRelease,
+	isCheckDue,
+	type DownloadFn,
+	type PluginRelease,
+	type UpdateCheck,
+	type UpdateFileName,
+} from "./updater";
 
 interface SyncMeta {
 	lastSyncAt: string | null;
 	lastSyncCount: number;
 }
 
+interface UpdateMeta {
+	lastCheckAt: string | null;
+	/** Version already announced (so a notice is not repeated on every check). */
+	notifiedVersion: string | null;
+}
+
 interface PluginData {
 	settings: LocalOcrSettings;
+	update: UpdateMeta;
 	sync: SyncCursorState;
 	meta: SyncMeta;
 	/** scan id → vault path of its note */
@@ -50,6 +69,32 @@ interface PluginData {
 
 const LOG_PREFIX = "[LocalOCR Sync]";
 const STARTUP_SYNC_DELAY_MS = 5_000;
+const UPDATE_STARTUP_DELAY_MS = 20_000;
+
+/** Obsidian's plugin manager (internal API: the same calls BRAT uses to reload an updated plugin). */
+interface PluginManager {
+	loadManifests(): Promise<void>;
+	disablePlugin(id: string): Promise<void>;
+	enablePlugin(id: string): Promise<boolean>;
+}
+
+/** Downloads over requestUrl (follows GitHub's redirects, no CORS, works on mobile). */
+const obsidianDownload: DownloadFn = async ({ url, headers }) => {
+	const response = await requestUrl({ url, headers, throw: false });
+	let text = "";
+	let bytes = new ArrayBuffer(0);
+	try {
+		text = response.text;
+	} catch {
+		// not text: the caller rejects it
+	}
+	try {
+		bytes = response.arrayBuffer;
+	} catch {
+		// no body: a digest check fails
+	}
+	return { status: response.status, text, bytes };
+};
 
 /** HTTP transport over Obsidian's requestUrl (no CORS, works on mobile). */
 const obsidianHttp: HttpFn = async (request) => {
@@ -75,6 +120,13 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	private meta: SyncMeta = { lastSyncAt: null, lastSyncCount: 0 };
 	private paths: Record<string, string> = {};
 	private jsonRecords: Record<string, JsonRecordRef> = {};
+	private updateMeta: UpdateMeta = { lastCheckAt: null, notifiedVersion: null };
+	/** Result of the latest update check (shown in the settings tab). */
+	private lastUpdateCheck: UpdateCheck | null = null;
+	/** An update found during a sync: installed when the sync ends. */
+	private pendingUpdate: PluginRelease | null = null;
+	private updating = false;
+	private updateTimer: number | null = null;
 
 	private syncing = false;
 	private unloaded = false;
@@ -120,11 +172,21 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			name: "設定 Remotely Save（同步 vault）",
 			callback: () => void this.openRemotelySaveSetup(),
 		});
+		this.addCommand({
+			id: "update-plugin",
+			name: "檢查並更新插件",
+			callback: () => void this.checkForUpdates({ manual: true }),
+		});
 
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onFileRenamed(file, oldPath)));
 		this.registerEvent(this.app.vault.on("delete", (file) => this.onFileDeleted(file)));
 
 		this.app.workspace.onLayoutReady(() => {
+			this.updateTimer = window.setTimeout(() => {
+				this.updateTimer = null;
+				void this.checkForUpdates({ manual: false });
+			}, UPDATE_STARTUP_DELAY_MS);
+			this.registerInterval(window.setInterval(() => void this.checkForUpdates({ manual: false }), UPDATE_CHECK_INTERVAL_MS));
 			this.scheduleAutoSync();
 			if (this.settings.autoSyncMinutes > 0 && this.isConfigured()) {
 				// Give the metadata cache a moment to index existing notes.
@@ -140,6 +202,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		this.unloaded = true;
 		this.requestSave.run();
 		if (this.startupTimer !== null) window.clearTimeout(this.startupTimer);
+		if (this.updateTimer !== null) window.clearTimeout(this.updateTimer);
 		if (this.autoSyncTimer !== null) window.clearInterval(this.autoSyncTimer);
 	}
 
@@ -149,6 +212,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	private async loadPluginData(): Promise<void> {
 		const raw = ((await this.loadData()) ?? {}) as Partial<PluginData>;
 		this.settings = loadSettings(raw.settings);
+		this.updateMeta = { lastCheckAt: null, notifiedVersion: null, ...(raw.update ?? {}) };
 		this.syncState = { ...initialCursorState(), ...(raw.sync ?? {}) };
 		this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(raw.meta ?? {}) };
 		this.paths = { ...(raw.paths ?? {}) };
@@ -158,6 +222,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	private async savePluginData(): Promise<void> {
 		const data: PluginData = {
 			settings: this.settings,
+			update: this.updateMeta,
 			sync: this.syncState,
 			meta: this.meta,
 			paths: this.paths,
@@ -239,6 +304,134 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		} catch (error) {
 			new Notice(`LocalOCR：伺服器可連線，但讀取樣板失敗\n${describeError(error)}`, 10_000);
 		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Online updates (GitHub releases, see updater.ts)
+
+	/**
+	 * Checks GitHub for a newer version. Manual checks (command, settings button) install it right away;
+	 * automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
+	 */
+	async checkForUpdates(opts: { manual: boolean }): Promise<void> {
+		if (this.updating) return;
+		if (!opts.manual && !isCheckDue(this.updateMeta.lastCheckAt, Date.now())) return;
+		let result: UpdateCheck;
+		try {
+			result = await checkForUpdate(obsidianDownload, this.manifest.version, (version) => requireApiVersion(version));
+		} catch (error) {
+			if (opts.manual) new Notice(`LocalOCR：無法檢查更新\n${describeUpdateError(error)}`, 10_000);
+			else console.warn(LOG_PREFIX, "檢查更新失敗：", describeUpdateError(error));
+			return;
+		}
+		if (this.unloaded) return;
+		this.lastUpdateCheck = result;
+		this.updateMeta.lastCheckAt = new Date().toISOString();
+		this.requestSave();
+
+		if (result.status === "up-to-date") {
+			if (opts.manual) new Notice(`LocalOCR Sync 已是最新版本（${this.manifest.version}）`);
+			return;
+		}
+		const { version } = result.release;
+		if (result.status === "needs-newer-obsidian") {
+			if (opts.manual || this.updateMeta.notifiedVersion !== version) {
+				new Notice(`LocalOCR Sync ${version} 需要 Obsidian ${result.minAppVersion} 以上，請先更新 Obsidian`, 10_000);
+				this.updateMeta.notifiedVersion = version;
+			}
+			return;
+		}
+		if (opts.manual || this.settings.autoUpdate) {
+			await this.installUpdate(result.release);
+		} else if (this.updateMeta.notifiedVersion !== version) {
+			new Notice(`LocalOCR Sync 有新版本 ${version}：執行「檢查並更新插件」或到插件設定按「檢查並更新」`, 10_000);
+			this.updateMeta.notifiedVersion = version;
+		}
+	}
+
+	/** One line for the settings tab: the latest check's outcome. */
+	updateStatusText(): string {
+		const check = this.lastUpdateCheck;
+		const checkedAt = this.updateMeta.lastCheckAt ? `上次檢查：${formatDateTime(this.updateMeta.lastCheckAt)}。` : "";
+		if (check?.status === "available") return `有新版本 ${check.release.version}。${checkedAt}`;
+		if (check?.status === "needs-newer-obsidian") {
+			return `新版本 ${check.release.version} 需要 Obsidian ${check.minAppVersion} 以上。${checkedAt}`;
+		}
+		if (check?.status === "up-to-date") return `已是最新版本。${checkedAt}`;
+		return checkedAt || "從 GitHub 檢查新版本。";
+	}
+
+	/** Downloads, verifies and installs a release, then reloads the plugin so the new version runs. */
+	private async installUpdate(release: PluginRelease): Promise<void> {
+		if (this.syncing) {
+			// Never swap the code under a running sync: install when it ends.
+			this.pendingUpdate = release;
+			return;
+		}
+		if (this.updating) return;
+		this.updating = true;
+		try {
+			await this.writePluginFiles(await downloadRelease(obsidianDownload, release));
+		} catch (error) {
+			this.updating = false;
+			new Notice(`LocalOCR：更新到 ${release.version} 失敗，仍使用 ${this.manifest.version}\n${describeUpdateError(error)}`, 10_000);
+			return;
+		}
+		this.updateMeta.notifiedVersion = release.version;
+		await this.savePluginData();
+		const notes = release.notes.split("\n").filter((line) => line.trim()).slice(0, 4).join("\n");
+		new Notice(`LocalOCR Sync 已更新到 ${release.version}${notes ? `\n${notes}` : ""}`, 12_000);
+		this.reloadSelf();
+	}
+
+	private pluginDir(): string {
+		return normalizePath(this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`);
+	}
+
+	/** Writes the new files (main.js before manifest.json); puts the old ones back if a write fails. */
+	private async writePluginFiles(files: Partial<Record<UpdateFileName, string>>): Promise<void> {
+		const adapter = this.app.vault.adapter;
+		const dir = this.pluginDir();
+		const previous = new Map<string, string | null>();
+		for (const name of UPDATE_FILES) {
+			if (files[name] === undefined) continue;
+			const path = `${dir}/${name}`;
+			previous.set(path, (await adapter.exists(path)) ? await adapter.read(path) : null);
+		}
+		try {
+			for (const name of UPDATE_FILES) {
+				const text = files[name];
+				if (text !== undefined) await adapter.write(`${dir}/${name}`, text);
+			}
+		} catch (error) {
+			for (const [path, text] of previous) {
+				if (text !== null) await adapter.write(path, text).catch(() => undefined);
+			}
+			throw error;
+		}
+	}
+
+	/** Reloads this plugin from its folder so the new main.js runs. */
+	private reloadSelf(): void {
+		const plugins = (this.app as unknown as { plugins?: PluginManager }).plugins;
+		const id = this.manifest.id;
+		const restartNotice = () => new Notice("LocalOCR Sync：請重新啟動 Obsidian 以完成更新", 10_000);
+		if (!plugins) {
+			restartNotice();
+			return;
+		}
+		window.setTimeout(() => {
+			void (async () => {
+				try {
+					await plugins.loadManifests();
+					await plugins.disablePlugin(id);
+					await plugins.enablePlugin(id);
+				} catch (error) {
+					console.error(LOG_PREFIX, "重新載入失敗：", error);
+					restartNotice();
+				}
+			})();
+		}, 500);
 	}
 
 	/** 「配對 iPhone／iPad」: a single-use code that gives the LocalOCR app this server and API key. */
@@ -327,6 +520,9 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		} finally {
 			this.syncing = false;
 			this.frontmatterIndex = null;
+			const update = this.pendingUpdate;
+			this.pendingUpdate = null;
+			if (update && !this.unloaded) void this.installUpdate(update);
 		}
 	}
 

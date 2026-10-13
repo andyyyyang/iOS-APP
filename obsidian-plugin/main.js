@@ -918,14 +918,14 @@ var require_regex = __commonJS({
     var TEST_KANJI = new RegExp("^" + kanji + "$");
     var TEST_NUMERIC = new RegExp("^" + numeric + "$");
     var TEST_ALPHANUMERIC = new RegExp("^[A-Z0-9 $%*+\\-./:]+$");
-    exports.testKanji = function testKanji(str) {
-      return TEST_KANJI.test(str);
+    exports.testKanji = function testKanji(str2) {
+      return TEST_KANJI.test(str2);
     };
-    exports.testNumeric = function testNumeric(str) {
-      return TEST_NUMERIC.test(str);
+    exports.testNumeric = function testNumeric(str2) {
+      return TEST_NUMERIC.test(str2);
     };
-    exports.testAlphanumeric = function testAlphanumeric(str) {
-      return TEST_ALPHANUMERIC.test(str);
+    exports.testAlphanumeric = function testAlphanumeric(str2) {
+      return TEST_ALPHANUMERIC.test(str2);
     };
   }
 });
@@ -1419,13 +1419,13 @@ var require_segments = __commonJS({
     var Regex = require_regex();
     var Utils = require_utils();
     var dijkstra = require_dijkstra();
-    function getStringByteLength(str) {
-      return unescape(encodeURIComponent(str)).length;
+    function getStringByteLength(str2) {
+      return unescape(encodeURIComponent(str2)).length;
     }
-    function getSegments(regex, mode, str) {
+    function getSegments(regex, mode, str2) {
       const segments = [];
       let result;
-      while ((result = regex.exec(str)) !== null) {
+      while ((result = regex.exec(str2)) !== null) {
         segments.push({
           data: result[0],
           index: result.index,
@@ -1994,13 +1994,13 @@ var require_svg_tag = __commonJS({
     var Utils = require_utils2();
     function getColorAttrib(color, attrib) {
       const alpha = color.a / 255;
-      const str = attrib + '="' + color.hex + '"';
-      return alpha < 1 ? str + " " + attrib + '-opacity="' + alpha.toFixed(2).slice(1) + '"' : str;
+      const str2 = attrib + '="' + color.hex + '"';
+      return alpha < 1 ? str2 + " " + attrib + '-opacity="' + alpha.toFixed(2).slice(1) + '"' : str2;
     }
     function svgCmd(cmd, x, y) {
-      let str = cmd + x;
-      if (typeof y !== "undefined") str += " " + y;
-      return str;
+      let str2 = cmd + x;
+      if (typeof y !== "undefined") str2 += " " + y;
+      return str2;
     }
     function qrToPath(data, size, margin) {
       let path = "";
@@ -2238,9 +2238,9 @@ function yamlScalar(value) {
   if (value === null || value === void 0) return "null";
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
   if (typeof value === "boolean") return String(value);
-  const str = String(value);
-  if (YAML_PLAIN.test(str) && !YAML_RESERVED.test(str)) return str;
-  return JSON.stringify(str);
+  const str2 = String(value);
+  if (YAML_PLAIN.test(str2) && !YAML_RESERVED.test(str2)) return str2;
+  return JSON.stringify(str2);
 }
 function yamlFlowItem(tag) {
   return /^[\p{L}\p{N}_\-/]+$/u.test(tag) && !YAML_RESERVED.test(tag) ? tag : JSON.stringify(tag);
@@ -2409,7 +2409,8 @@ var DEFAULT_SETTINGS = {
   createNotes: true,
   jsonMappings: [],
   jsonPreserveFields: "docNo, done",
-  jsonDoneField: "done"
+  jsonDoneField: "done",
+  autoUpdate: true
 };
 function loadSettings(saved) {
   const settings = { ...DEFAULT_SETTINGS, ...saved != null ? saved : {} };
@@ -2422,6 +2423,7 @@ function loadSettings(saved) {
   })) : [];
   if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
   if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
+  if (typeof settings.autoUpdate !== "boolean") settings.autoUpdate = DEFAULT_SETTINGS.autoUpdate;
   return settings;
 }
 var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -2481,6 +2483,26 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
         } finally {
           button.setDisabled(false);
         }
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u66F4\u65B0").setHeading();
+    new import_obsidian.Setting(containerEl).setName(`\u7248\u672C ${this.plugin.manifest.version}`).setDesc(this.plugin.updateStatusText()).addButton(
+      (button) => button.setButtonText("\u6AA2\u67E5\u4E26\u66F4\u65B0").onClick(async () => {
+        button.setDisabled(true);
+        button.setButtonText("\u6AA2\u67E5\u4E2D\u2026");
+        try {
+          await this.plugin.checkForUpdates({ manual: true });
+        } finally {
+          this.display();
+        }
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u81EA\u52D5\u66F4\u65B0").setDesc(
+      "\u555F\u52D5 Obsidian \u6642\uFF08\u4E4B\u5F8C\u6BCF 6 \u5C0F\u6642\uFF09\u6AA2\u67E5 GitHub \u4E0A\u7684\u65B0\u7248\u672C\uFF0C\u6709\u65B0\u7248\u672C\u5C31\u81EA\u52D5\u4E0B\u8F09\u3001\u9A57\u8B49\u4E26\u5B89\u88DD\uFF0C\u4E0D\u5FC5\u518D\u624B\u52D5\u8907\u88FD\u6A94\u6848\u3002\u95DC\u9589\u6642\u53EA\u6703\u901A\u77E5\u3002"
+    ).addToggle(
+      (toggle) => toggle.setValue(settings.autoUpdate).onChange(async (value) => {
+        settings.autoUpdate = value;
+        await this.plugin.saveSettings();
       })
     );
     new import_obsidian.Setting(containerEl).setName("\u7B46\u8A18").setHeading();
@@ -3145,9 +3167,172 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
   }
 };
 
+// src/updater.ts
+var UPDATE_REPO = "andyyyyang/iOS-APP";
+var RELEASE_TAG_PREFIX = "obsidian-plugin-";
+var PLUGIN_ID = "localocr-sync";
+var UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1e3;
+var UPDATE_FILES = ["styles.css", "main.js", "manifest.json"];
+var UpdateError = class extends Error {
+};
+function parseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  return match ? match.slice(1).map(Number) : null;
+}
+function compareVersions(a, b) {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+var GITHUB_HEADERS = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function str(value) {
+  return typeof value === "string" ? value : "";
+}
+function parseReleases(json) {
+  var _a, _b;
+  if (!Array.isArray(json)) throw new UpdateError("GitHub \u56DE\u50B3\u7684\u7248\u672C\u6E05\u55AE\u683C\u5F0F\u4E0D\u6B63\u78BA");
+  const releases = [];
+  for (const item of json) {
+    const release = asRecord(item);
+    if (!release || release.draft === true || release.prerelease === true) continue;
+    const tag = str(release.tag_name);
+    if (!tag.startsWith(RELEASE_TAG_PREFIX)) continue;
+    const version = tag.slice(RELEASE_TAG_PREFIX.length);
+    if (!parseVersion(version)) continue;
+    const assets = {};
+    for (const rawAsset of Array.isArray(release.assets) ? release.assets : []) {
+      const asset = asRecord(rawAsset);
+      const name = str(asset == null ? void 0 : asset.name);
+      if (!asset || !UPDATE_FILES.includes(name)) continue;
+      assets[name] = {
+        name,
+        url: str(asset.browser_download_url),
+        size: typeof asset.size === "number" ? asset.size : 0,
+        digest: str(asset.digest) || null
+      };
+    }
+    if (!((_a = assets["main.js"]) == null ? void 0 : _a.url) || !((_b = assets["manifest.json"]) == null ? void 0 : _b.url)) continue;
+    releases.push({
+      version,
+      tag,
+      notes: str(release.body).trim(),
+      publishedAt: str(release.published_at),
+      pageUrl: str(release.html_url),
+      assets
+    });
+  }
+  return releases.sort((a, b) => compareVersions(b.version, a.version));
+}
+function describeStatus(status) {
+  if (status === 403 || status === 429) return "GitHub \u66AB\u6642\u9650\u5236\u67E5\u8A62\u6B21\u6578\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66";
+  if (status === 404) return "\u627E\u4E0D\u5230\u66F4\u65B0\u4F86\u6E90";
+  return `GitHub \u56DE\u61C9 ${status}`;
+}
+async function get(download, url, headers) {
+  let response;
+  try {
+    response = await download({ url, headers });
+  } catch (error) {
+    throw new UpdateError(`\u7121\u6CD5\u9023\u7DDA\u5230 GitHub\uFF1A${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (response.status < 200 || response.status >= 300) throw new UpdateError(describeStatus(response.status));
+  return response;
+}
+async function fetchLatestRelease(download, repo = UPDATE_REPO) {
+  var _a;
+  const response = await get(download, `https://api.github.com/repos/${repo}/releases?per_page=50`, GITHUB_HEADERS);
+  let json;
+  try {
+    json = JSON.parse(response.text);
+  } catch (e) {
+    throw new UpdateError("GitHub \u56DE\u50B3\u7684\u7248\u672C\u6E05\u55AE\u4E0D\u662F\u6709\u6548\u7684 JSON");
+  }
+  return (_a = parseReleases(json)[0]) != null ? _a : null;
+}
+function parseReleaseManifest(text, release) {
+  let json;
+  try {
+    json = asRecord(JSON.parse(text));
+  } catch (e) {
+    json = null;
+  }
+  if (!json) throw new UpdateError("\u65B0\u7248\u672C\u7684 manifest.json \u683C\u5F0F\u4E0D\u6B63\u78BA");
+  const manifest = { id: str(json.id), version: str(json.version), minAppVersion: str(json.minAppVersion) };
+  if (manifest.id !== PLUGIN_ID) throw new UpdateError(`\u65B0\u7248\u672C\u7684\u63D2\u4EF6\u4EE3\u78BC\u4E0D\u7B26\uFF08${manifest.id || "\u7A7A\u767D"}\uFF09`);
+  if (manifest.version !== release.version) {
+    throw new UpdateError(`\u65B0\u7248\u672C\u7684 manifest.json \u7248\u672C\uFF08${manifest.version || "\u7A7A\u767D"}\uFF09\u8207\u767C\u4F48\u7248\u672C ${release.version} \u4E0D\u7B26`);
+  }
+  return manifest;
+}
+async function checkForUpdate(download, currentVersion, supportsApp, repo = UPDATE_REPO) {
+  const latest = await fetchLatestRelease(download, repo);
+  if (!latest || compareVersions(latest.version, currentVersion) <= 0) return { status: "up-to-date", latest };
+  const manifest = parseReleaseManifest(
+    (await get(download, latest.assets["manifest.json"].url)).text,
+    latest
+  );
+  if (manifest.minAppVersion && !supportsApp(manifest.minAppVersion)) {
+    return { status: "needs-newer-obsidian", release: latest, minAppVersion: manifest.minAppVersion };
+  }
+  return { status: "available", release: latest };
+}
+function toHex(buffer) {
+  return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+async function sha256Hex(bytes) {
+  return toHex(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+}
+async function downloadRelease(download, release, hash = sha256Hex) {
+  var _a, _b, _c;
+  const files = {};
+  for (const name of UPDATE_FILES) {
+    const asset = release.assets[name];
+    if (!asset) continue;
+    const response = await get(download, asset.url);
+    if ((_a = asset.digest) == null ? void 0 : _a.startsWith("sha256:")) {
+      const expected = asset.digest.slice("sha256:".length).toLowerCase();
+      if (await hash(response.bytes) !== expected) throw new UpdateError(`${name} \u4E0B\u8F09\u4E0D\u5B8C\u6574\u6216\u5DF2\u88AB\u4FEE\u6539\uFF0C\u5DF2\u505C\u6B62\u66F4\u65B0`);
+    }
+    files[name] = response.text;
+  }
+  parseReleaseManifest((_b = files["manifest.json"]) != null ? _b : "", release);
+  const main = (_c = files["main.js"]) != null ? _c : "";
+  if (!main.includes("module.exports") || main.length < 1e3) throw new UpdateError("\u4E0B\u8F09\u7684 main.js \u4E0D\u662F\u63D2\u4EF6\u7A0B\u5F0F\uFF0C\u5DF2\u505C\u6B62\u66F4\u65B0");
+  return files;
+}
+function isCheckDue(lastCheckAt, now, interval = UPDATE_CHECK_INTERVAL_MS) {
+  const last = lastCheckAt ? Date.parse(lastCheckAt) : NaN;
+  return !Number.isFinite(last) || now - last >= interval || last > now;
+}
+function describeUpdateError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // src/main.ts
 var LOG_PREFIX = "[LocalOCR Sync]";
 var STARTUP_SYNC_DELAY_MS = 5e3;
+var UPDATE_STARTUP_DELAY_MS = 2e4;
+var obsidianDownload = async ({ url, headers }) => {
+  const response = await (0, import_obsidian3.requestUrl)({ url, headers, throw: false });
+  let text = "";
+  let bytes = new ArrayBuffer(0);
+  try {
+    text = response.text;
+  } catch (e) {
+  }
+  try {
+    bytes = response.arrayBuffer;
+  } catch (e) {
+  }
+  return { status: response.status, text, bytes };
+};
 var obsidianHttp = async (request) => {
   const response = await (0, import_obsidian3.requestUrl)({
     url: request.url,
@@ -3172,6 +3357,13 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
     this.meta = { lastSyncAt: null, lastSyncCount: 0 };
     this.paths = {};
     this.jsonRecords = {};
+    this.updateMeta = { lastCheckAt: null, notifiedVersion: null };
+    /** Result of the latest update check (shown in the settings tab). */
+    this.lastUpdateCheck = null;
+    /** An update found during a sync: installed when the sync ends. */
+    this.pendingUpdate = null;
+    this.updating = false;
+    this.updateTimer = null;
     this.syncing = false;
     this.unloaded = false;
     this.lastSyncFailed = false;
@@ -3212,9 +3404,19 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
       name: "\u8A2D\u5B9A Remotely Save\uFF08\u540C\u6B65 vault\uFF09",
       callback: () => void this.openRemotelySaveSetup()
     });
+    this.addCommand({
+      id: "update-plugin",
+      name: "\u6AA2\u67E5\u4E26\u66F4\u65B0\u63D2\u4EF6",
+      callback: () => void this.checkForUpdates({ manual: true })
+    });
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onFileRenamed(file, oldPath)));
     this.registerEvent(this.app.vault.on("delete", (file) => this.onFileDeleted(file)));
     this.app.workspace.onLayoutReady(() => {
+      this.updateTimer = window.setTimeout(() => {
+        this.updateTimer = null;
+        void this.checkForUpdates({ manual: false });
+      }, UPDATE_STARTUP_DELAY_MS);
+      this.registerInterval(window.setInterval(() => void this.checkForUpdates({ manual: false }), UPDATE_CHECK_INTERVAL_MS));
       this.scheduleAutoSync();
       if (this.settings.autoSyncMinutes > 0 && this.isConfigured()) {
         this.startupTimer = window.setTimeout(() => {
@@ -3228,22 +3430,25 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
     this.unloaded = true;
     this.requestSave.run();
     if (this.startupTimer !== null) window.clearTimeout(this.startupTimer);
+    if (this.updateTimer !== null) window.clearTimeout(this.updateTimer);
     if (this.autoSyncTimer !== null) window.clearInterval(this.autoSyncTimer);
   }
   // -------------------------------------------------------------------------
   // Persistence
   async loadPluginData() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const raw = (_a = await this.loadData()) != null ? _a : {};
     this.settings = loadSettings(raw.settings);
-    this.syncState = { ...initialCursorState(), ...(_b = raw.sync) != null ? _b : {} };
-    this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(_c = raw.meta) != null ? _c : {} };
-    this.paths = { ...(_d = raw.paths) != null ? _d : {} };
-    this.jsonRecords = { ...(_e = raw.jsonRecords) != null ? _e : {} };
+    this.updateMeta = { lastCheckAt: null, notifiedVersion: null, ...(_b = raw.update) != null ? _b : {} };
+    this.syncState = { ...initialCursorState(), ...(_c = raw.sync) != null ? _c : {} };
+    this.meta = { lastSyncAt: null, lastSyncCount: 0, ...(_d = raw.meta) != null ? _d : {} };
+    this.paths = { ...(_e = raw.paths) != null ? _e : {} };
+    this.jsonRecords = { ...(_f = raw.jsonRecords) != null ? _f : {} };
   }
   async savePluginData() {
     const data = {
       settings: this.settings,
+      update: this.updateMeta,
       sync: this.syncState,
       meta: this.meta,
       paths: this.paths,
@@ -3320,6 +3525,129 @@ ${describeError(error)}`, 1e4);
       new import_obsidian3.Notice(`LocalOCR\uFF1A\u4F3A\u670D\u5668\u53EF\u9023\u7DDA\uFF0C\u4F46\u8B80\u53D6\u6A23\u677F\u5931\u6557
 ${describeError(error)}`, 1e4);
     }
+  }
+  // -------------------------------------------------------------------------
+  // Online updates (GitHub releases, see updater.ts)
+  /**
+   * Checks GitHub for a newer version. Manual checks (command, settings button) install it right away;
+   * automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
+   */
+  async checkForUpdates(opts) {
+    if (this.updating) return;
+    if (!opts.manual && !isCheckDue(this.updateMeta.lastCheckAt, Date.now())) return;
+    let result;
+    try {
+      result = await checkForUpdate(obsidianDownload, this.manifest.version, (version2) => (0, import_obsidian3.requireApiVersion)(version2));
+    } catch (error) {
+      if (opts.manual) new import_obsidian3.Notice(`LocalOCR\uFF1A\u7121\u6CD5\u6AA2\u67E5\u66F4\u65B0
+${describeUpdateError(error)}`, 1e4);
+      else console.warn(LOG_PREFIX, "\u6AA2\u67E5\u66F4\u65B0\u5931\u6557\uFF1A", describeUpdateError(error));
+      return;
+    }
+    if (this.unloaded) return;
+    this.lastUpdateCheck = result;
+    this.updateMeta.lastCheckAt = (/* @__PURE__ */ new Date()).toISOString();
+    this.requestSave();
+    if (result.status === "up-to-date") {
+      if (opts.manual) new import_obsidian3.Notice(`LocalOCR Sync \u5DF2\u662F\u6700\u65B0\u7248\u672C\uFF08${this.manifest.version}\uFF09`);
+      return;
+    }
+    const { version } = result.release;
+    if (result.status === "needs-newer-obsidian") {
+      if (opts.manual || this.updateMeta.notifiedVersion !== version) {
+        new import_obsidian3.Notice(`LocalOCR Sync ${version} \u9700\u8981 Obsidian ${result.minAppVersion} \u4EE5\u4E0A\uFF0C\u8ACB\u5148\u66F4\u65B0 Obsidian`, 1e4);
+        this.updateMeta.notifiedVersion = version;
+      }
+      return;
+    }
+    if (opts.manual || this.settings.autoUpdate) {
+      await this.installUpdate(result.release);
+    } else if (this.updateMeta.notifiedVersion !== version) {
+      new import_obsidian3.Notice(`LocalOCR Sync \u6709\u65B0\u7248\u672C ${version}\uFF1A\u57F7\u884C\u300C\u6AA2\u67E5\u4E26\u66F4\u65B0\u63D2\u4EF6\u300D\u6216\u5230\u63D2\u4EF6\u8A2D\u5B9A\u6309\u300C\u6AA2\u67E5\u4E26\u66F4\u65B0\u300D`, 1e4);
+      this.updateMeta.notifiedVersion = version;
+    }
+  }
+  /** One line for the settings tab: the latest check's outcome. */
+  updateStatusText() {
+    const check = this.lastUpdateCheck;
+    const checkedAt = this.updateMeta.lastCheckAt ? `\u4E0A\u6B21\u6AA2\u67E5\uFF1A${formatDateTime(this.updateMeta.lastCheckAt)}\u3002` : "";
+    if ((check == null ? void 0 : check.status) === "available") return `\u6709\u65B0\u7248\u672C ${check.release.version}\u3002${checkedAt}`;
+    if ((check == null ? void 0 : check.status) === "needs-newer-obsidian") {
+      return `\u65B0\u7248\u672C ${check.release.version} \u9700\u8981 Obsidian ${check.minAppVersion} \u4EE5\u4E0A\u3002${checkedAt}`;
+    }
+    if ((check == null ? void 0 : check.status) === "up-to-date") return `\u5DF2\u662F\u6700\u65B0\u7248\u672C\u3002${checkedAt}`;
+    return checkedAt || "\u5F9E GitHub \u6AA2\u67E5\u65B0\u7248\u672C\u3002";
+  }
+  /** Downloads, verifies and installs a release, then reloads the plugin so the new version runs. */
+  async installUpdate(release) {
+    if (this.syncing) {
+      this.pendingUpdate = release;
+      return;
+    }
+    if (this.updating) return;
+    this.updating = true;
+    try {
+      await this.writePluginFiles(await downloadRelease(obsidianDownload, release));
+    } catch (error) {
+      this.updating = false;
+      new import_obsidian3.Notice(`LocalOCR\uFF1A\u66F4\u65B0\u5230 ${release.version} \u5931\u6557\uFF0C\u4ECD\u4F7F\u7528 ${this.manifest.version}
+${describeUpdateError(error)}`, 1e4);
+      return;
+    }
+    this.updateMeta.notifiedVersion = release.version;
+    await this.savePluginData();
+    const notes = release.notes.split("\n").filter((line) => line.trim()).slice(0, 4).join("\n");
+    new import_obsidian3.Notice(`LocalOCR Sync \u5DF2\u66F4\u65B0\u5230 ${release.version}${notes ? `
+${notes}` : ""}`, 12e3);
+    this.reloadSelf();
+  }
+  pluginDir() {
+    var _a;
+    return (0, import_obsidian3.normalizePath)((_a = this.manifest.dir) != null ? _a : `${this.app.vault.configDir}/plugins/${this.manifest.id}`);
+  }
+  /** Writes the new files (main.js before manifest.json); puts the old ones back if a write fails. */
+  async writePluginFiles(files) {
+    const adapter = this.app.vault.adapter;
+    const dir = this.pluginDir();
+    const previous = /* @__PURE__ */ new Map();
+    for (const name of UPDATE_FILES) {
+      if (files[name] === void 0) continue;
+      const path = `${dir}/${name}`;
+      previous.set(path, await adapter.exists(path) ? await adapter.read(path) : null);
+    }
+    try {
+      for (const name of UPDATE_FILES) {
+        const text = files[name];
+        if (text !== void 0) await adapter.write(`${dir}/${name}`, text);
+      }
+    } catch (error) {
+      for (const [path, text] of previous) {
+        if (text !== null) await adapter.write(path, text).catch(() => void 0);
+      }
+      throw error;
+    }
+  }
+  /** Reloads this plugin from its folder so the new main.js runs. */
+  reloadSelf() {
+    const plugins = this.app.plugins;
+    const id = this.manifest.id;
+    const restartNotice = () => new import_obsidian3.Notice("LocalOCR Sync\uFF1A\u8ACB\u91CD\u65B0\u555F\u52D5 Obsidian \u4EE5\u5B8C\u6210\u66F4\u65B0", 1e4);
+    if (!plugins) {
+      restartNotice();
+      return;
+    }
+    window.setTimeout(() => {
+      void (async () => {
+        try {
+          await plugins.loadManifests();
+          await plugins.disablePlugin(id);
+          await plugins.enablePlugin(id);
+        } catch (error) {
+          console.error(LOG_PREFIX, "\u91CD\u65B0\u8F09\u5165\u5931\u6557\uFF1A", error);
+          restartNotice();
+        }
+      })();
+    }, 500);
   }
   /** 「配對 iPhone／iPad」: a single-use code that gives the LocalOCR app this server and API key. */
   async openPairing() {
@@ -3407,6 +3735,9 @@ ${result.errors.join("\n")}`, 15e3);
     } finally {
       this.syncing = false;
       this.frontmatterIndex = null;
+      const update = this.pendingUpdate;
+      this.pendingUpdate = null;
+      if (update && !this.unloaded) void this.installUpdate(update);
     }
   }
   // -------------------------------------------------------------------------

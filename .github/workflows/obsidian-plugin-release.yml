@@ -1,0 +1,74 @@
+name: Obsidian Plugin Release
+
+# Publishes each plugin version as the GitHub release "obsidian-plugin-<version>" with main.js and
+# manifest.json, which the plugin's online updater (obsidian-plugin/src/updater.ts) installs.
+# Runs when manifest.json changes (a version bump); a version that already has a release is skipped.
+
+on:
+  push:
+    paths:
+      - "obsidian-plugin/manifest.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: obsidian-plugin-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: obsidian-plugin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: obsidian-plugin/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Committed main.js matches the source
+        run: git diff --exit-code -- main.js || (echo "::error::main.js 與原始碼不一致，請執行 npm run build 後提交" && exit 1)
+      - name: Version
+        id: version
+        run: |
+          node <<'JS'
+          const manifest = require("./manifest.json");
+          const pkg = require("./package.json");
+          const versions = require("./versions.json");
+          if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) throw new Error(`manifest.json version must be x.y.z, got ${manifest.version}`);
+          if (pkg.version !== manifest.version) throw new Error(`package.json ${pkg.version} ≠ manifest.json ${manifest.version}`);
+          if (versions[manifest.version] !== manifest.minAppVersion) {
+            throw new Error(`versions.json must map ${manifest.version} to ${manifest.minAppVersion}`);
+          }
+          JS
+          version=$(node -p "require('./manifest.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=obsidian-plugin-$version" >> "$GITHUB_OUTPUT"
+      - name: Publish (skipped when this version is already released)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG 已發佈，略過"
+            exit 0
+          fi
+          # Release notes: the CHANGELOG.md section "## <version>"
+          awk -v v="$VERSION" '$0 ~ "^## "v"( |$)" {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          test -s release-notes.md || echo "LocalOCR Sync $VERSION" > release-notes.md
+          gh release create "$TAG" main.js manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "LocalOCR Sync $VERSION" \
+            --notes-file release-notes.md
+          echo "已發佈 $TAG"
