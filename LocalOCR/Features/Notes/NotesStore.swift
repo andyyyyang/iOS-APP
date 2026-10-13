@@ -1,6 +1,19 @@
 import Foundation
 import Observation
 
+/// 筆記中的一個待辦。
+struct NoteTask: Identifiable, Hashable, Sendable {
+    let notePath: String
+    let noteTitle: String
+    let text: String
+    /// 在這則筆記中是第幾個待辦（含已完成的），切換時用。
+    let index: Int
+    let done: Bool
+    let mtime: Date
+
+    var id: String { "\(notePath)#\(index)" }
+}
+
 /// 筆記清單中的一則（一個 .md 檔）。
 struct NoteSummary: Identifiable, Hashable, Sendable {
     let path: String
@@ -13,6 +26,7 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     let notebookID: String?
     /// 第一張內嵌圖片（清單縮圖）。
     let firstEmbed: String?
+    let tasks: [NoteTask]
 
     var id: String { path }
     var isNotebook: Bool { notebookID != nil }
@@ -55,7 +69,9 @@ final class NotesStore {
     }
 
     nonisolated static func summarize(path: String, mtime: Date, text: String) -> NoteSummary {
-        let blocks = MarkdownParser.blocks(from: String(text.prefix(4000)))
+        let blocks = MarkdownParser.blocks(from: text)
+        let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        var tasks: [NoteTask] = []
         var tags: [String] = []
         var notebookID: String?
         var snippet = ""
@@ -75,13 +91,15 @@ final class NotesStore {
                 snippet = value
             case .callout(_, _, let body) where snippet.isEmpty:
                 snippet = String(body.prefix(160))
-            case .embed(let name) where firstEmbed == nil:
-                firstEmbed = name
+            case .embed(let embed) where firstEmbed == nil:
+                firstEmbed = embed
             default:
                 break
             }
+            if case .listItem(.task(let done), _, let value) = block {
+                tasks.append(NoteTask(notePath: path, noteTitle: name, text: value, index: tasks.count, done: done, mtime: mtime))
+            }
         }
-        let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         let folder = (path as NSString).deletingLastPathComponent
         return NoteSummary(
             path: path,
@@ -91,15 +109,63 @@ final class NotesStore {
             snippet: snippet.replacingOccurrences(of: "\n", with: " "),
             tags: tags,
             notebookID: notebookID?.isEmpty == false ? notebookID : nil,
-            firstEmbed: firstEmbed
+            firstEmbed: firstEmbed,
+            tasks: tasks
         )
     }
 
-    func notes(inFolder folder: String?, notebooksOnly: Bool = false, query: String = "") -> [NoteSummary] {
+    // MARK: - 查詢
+
+    /// 尚未完成的待辦，最近編輯的筆記在前。
+    var openTasks: [NoteTask] {
+        notes.flatMap { $0.tasks.filter { !$0.done } }
+    }
+
+    var notebookCount: Int { notes.filter(\.isNotebook).count }
+
+    var editedTodayCount: Int { notes.filter { Calendar.current.isDateInToday($0.mtime) }.count }
+
+    /// 資料夾（含子資料夾）中的筆記數。
+    func noteCount(inFolder folder: String) -> Int {
+        notes.filter { $0.folder == folder || $0.folder.hasPrefix(folder + "/") }.count
+    }
+
+    /// 直接的子資料夾；`parent` 為空字串時是最上層。
+    func childFolders(of parent: String) -> [String] {
+        folders.filter { folder in
+            let folderParent = (folder as NSString).deletingLastPathComponent
+            return folderParent == parent
+        }
+    }
+
+    /// 標籤與使用的筆記數，依數量排序。
+    var tagCounts: [(tag: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for note in notes {
+            for tag in Set(note.tags) { counts[tag, default: 0] += 1 }
+        }
+        return counts.map { (tag: $0.key, count: $0.value) }.sorted { $0.count == $1.count ? $0.tag < $1.tag : $0.count > $1.count }
+    }
+
+    /// 切換某則筆記的待辦（儀表板上直接打勾）。
+    func toggle(_ task: NoteTask) {
+        guard let text = vault.readText(task.notePath) else { return }
+        try? save(NoteMarkdownEditing.togglingTask(at: task.index, in: text), to: task.notePath)
+    }
+
+    /// `recursive: false` 只列出這個資料夾本身的筆記（資料夾頁面中子資料夾另外顯示）。
+    func notes(inFolder folder: String?, recursive: Bool = true, notebooksOnly: Bool = false, tag: String? = nil, query: String = "") -> [NoteSummary] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return notes.filter { note in
             if notebooksOnly && !note.isNotebook { return false }
-            if let folder, note.folder != folder && !note.folder.hasPrefix(folder + "/") { return false }
+            if let tag, !note.tags.contains(tag) { return false }
+            if let folder {
+                if recursive {
+                    if note.folder != folder && !note.folder.hasPrefix(folder + "/") { return false }
+                } else if note.folder != folder {
+                    return false
+                }
+            }
             guard !query.isEmpty else { return true }
             if note.title.localizedCaseInsensitiveContains(query) || note.tags.contains(where: { $0.localizedCaseInsensitiveContains(query) }) {
                 return true

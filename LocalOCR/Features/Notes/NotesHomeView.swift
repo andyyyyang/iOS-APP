@@ -1,67 +1,76 @@
 import SwiftUI
 import UIKit
 
-/// 筆記 App 的主畫面：iPad 三欄（資料夾｜筆記清單｜筆記），iPhone 一層層進入。
-/// 所有筆記都是 Obsidian vault 中的 Markdown 檔，存在這台裝置上，並與 Railway 空間雙向同步。
+/// 筆記庫中的一個位置（側邊欄的項目）。
+enum NotesSection: Hashable {
+    case home
+    case all
+    case notebooks
+    case tasks
+    case folder(String)
+    case tag(String)
+}
+
+/// 推入的頁面。
+enum NoteRoute: Hashable {
+    case note(String)
+}
+
+/// 筆記 App 的主畫面：左邊是筆記庫（首頁、所有筆記、資料夾樹／標籤與數量），右邊是首頁、資料夾或筆記。
+/// 打開筆記時自動收起側邊欄，整個畫面用來書寫；iPhone 會變成一層層進入。
 struct NotesHomeView: View {
-    enum SidebarItem: Hashable {
-        case all
-        case notebooks
-        case folder(String)
-    }
+    @Binding var selectedTab: AppTab
 
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
-    @State private var sidebarSelection: SidebarItem? = .all
-    @State private var selectedNote: String?
+    @State private var section: NotesSection? = .home
+    @State private var path: [NoteRoute] = []
+    @State private var sidebarMode = SidebarMode.folders
     @State private var searchText = ""
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var compactColumn = NavigationSplitViewColumn.detail
     @State private var showsNewNotebook = false
     @State private var showsNewFolder = false
     @State private var newFolderName = ""
     @State private var showsPairing = false
     @State private var pendingDelete: NoteSummary?
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
 
+    enum SidebarMode: String, CaseIterable, Identifiable {
+        case folders = "資料夾"
+        case tags = "標籤"
+
+        var id: Self { self }
+    }
+
+    /// 新筆記放的位置：目前所在的資料夾，否則是預設資料夾。
     private var currentFolder: String {
-        if case .folder(let folder) = sidebarSelection { return folder }
+        if case .folder(let folder) = section { return folder }
         return NotesSettings.defaultFolder
     }
 
-    private var visibleNotes: [NoteSummary] {
-        switch sidebarSelection ?? .all {
-        case .all: return store.notes(inFolder: nil, query: searchText)
-        case .notebooks: return store.notes(inFolder: nil, notebooksOnly: true, query: searchText)
-        case .folder(let folder): return store.notes(inFolder: folder, query: searchText)
-        }
-    }
-
-    private var listTitle: String {
-        switch sidebarSelection ?? .all {
-        case .all: return "所有筆記"
-        case .notebooks: return "手寫筆記本"
-        case .folder(let folder): return (folder as NSString).lastPathComponent
-        }
+    private var newFolderLocation: String {
+        if case .folder(let folder) = section { return "建立在「\(folder)」中" }
+        return "建立在最上層"
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
             sidebar
-        } content: {
-            noteList
         } detail: {
-            NavigationStack {
-                if let selectedNote, let note = store.notes.first(where: { $0.path == selectedNote }) ?? summary(for: selectedNote) {
-                    NoteDetailRouter(note: note, onPathChange: { self.selectedNote = $0 }, onOpenNote: openLinkedNote)
-                        .id(note.path)
-                } else {
-                    ContentUnavailableView("選擇或新增一則筆記", systemImage: "note.text", description: Text("筆記都是 Markdown，會同步到 Obsidian。"))
-                }
+            NavigationStack(path: $path) {
+                root
+                    .navigationDestination(for: NoteRoute.self) { route in
+                        switch route {
+                        case .note(let notePath):
+                            NoteDetailRouter(path: notePath, onPathChange: { replaceTop(with: $0) }, onOpenNote: openLinkedNote)
+                        }
+                    }
             }
         }
         .sheet(isPresented: $showsNewNotebook) {
             NewNotebookSheet { title, paper, color in
-                if let path = try? NotebookFiles.create(in: currentFolder, title: title, paper: paper, color: color, store: store) {
-                    selectedNote = path
+                if let notePath = try? NotebookFiles.create(in: currentFolder, title: title, paper: paper, color: color, store: store) {
+                    open(notePath)
                 }
             }
         }
@@ -72,6 +81,8 @@ struct NotesHomeView: View {
             TextField("名稱", text: $newFolderName)
             Button("取消", role: .cancel) {}
             Button("建立") { createFolder() }
+        } message: {
+            Text(newFolderLocation)
         }
         .confirmationDialog(
             "刪除「\(pendingDelete?.title ?? "")」？",
@@ -79,14 +90,19 @@ struct NotesHomeView: View {
             titleVisibility: .visible
         ) {
             Button("刪除筆記", role: .destructive) {
-                if let note = pendingDelete {
-                    if selectedNote == note.path { selectedNote = nil }
-                    try? store.delete(note.path)
-                }
+                if let note = pendingDelete { try? store.delete(note.path) }
                 pendingDelete = nil
             }
         } message: {
-            Text("同步後也會從 Obsidian 刪除（Obsidian 的回收桶設定不影響這裡）。")
+            Text("同步後也會從 Obsidian 刪除。")
+        }
+        .onChange(of: section) { _, _ in
+            path.removeAll()
+            compactColumn = .detail
+        }
+        .onChange(of: path.isEmpty) { _, isEmpty in
+            // 打開筆記時收起側邊欄，回到清單時再打開
+            withAnimation { columnVisibility = isEmpty ? .all : .detailOnly }
         }
         .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
         .task {
@@ -95,38 +111,84 @@ struct NotesHomeView: View {
         }
     }
 
-    // MARK: - 側邊欄
+    // MARK: - 側邊欄（筆記庫）
 
     private var sidebar: some View {
-        List(selection: $sidebarSelection) {
+        List(selection: $section) {
             Section {
-                Label("所有筆記", systemImage: "note.text").tag(SidebarItem.all)
-                Label("手寫筆記本", systemImage: "pencil.and.scribble").tag(SidebarItem.notebooks)
+                sidebarRow("首頁", systemImage: "house", count: nil).tag(NotesSection.home)
+                sidebarRow("所有筆記", systemImage: "note.text", count: store.notes.count).tag(NotesSection.all)
+                sidebarRow("手寫筆記本", systemImage: "pencil.and.scribble", count: store.notebookCount).tag(NotesSection.notebooks)
+                sidebarRow("待辦", systemImage: "checklist", count: store.openTasks.count).tag(NotesSection.tasks)
             }
-            Section("資料夾") {
-                ForEach(store.folders, id: \.self) { folder in
-                    Label((folder as NSString).lastPathComponent, systemImage: "folder")
-                        .padding(.leading, CGFloat(folder.split(separator: "/").count - 1) * 14)
-                        .tag(SidebarItem.folder(folder))
+
+            Section {
+                Picker("顯示", selection: $sidebarMode) {
+                    ForEach(SidebarMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+
+                switch sidebarMode {
+                case .folders:
+                    ForEach(store.childFolders(of: ""), id: \.self) { folder in
+                        FolderTreeRow(folder: folder, store: store, rowBuilder: folderRow)
+                    }
+                    if store.folders.isEmpty {
+                        Text("還沒有資料夾").font(.footnote).foregroundStyle(.tertiary)
+                    }
+                case .tags:
+                    ForEach(store.tagCounts, id: \.tag) { item in
+                        sidebarRow("#\(item.tag)", systemImage: "number", count: item.count).tag(NotesSection.tag(item.tag))
+                    }
+                    if store.tagCounts.isEmpty {
+                        Text("筆記的屬性中加入 tags 就會出現在這裡").font(.footnote).foregroundStyle(.tertiary)
+                    }
                 }
             }
+
             Section {
                 syncStatus
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("筆記")
+        .navigationTitle("筆記庫")
+        .searchable(text: $searchText, placement: .sidebar, prompt: "搜尋筆記")
+        .onChange(of: searchText) { _, text in
+            if !text.isEmpty { compactColumn = .detail }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    newFolderName = ""
-                    showsNewFolder = true
+                Menu {
+                    Button { newTextNote() } label: { Label("新增筆記", systemImage: "square.and.pencil") }
+                    Button { showsNewNotebook = true } label: { Label("新增手寫筆記本", systemImage: "pencil.and.scribble") }
+                    Button { promptNewFolder() } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
-                    Label("新增資料夾", systemImage: "folder.badge.plus")
+                    Label("新增", systemImage: "plus")
                 }
             }
         }
         .refreshable { await sync.syncNow() }
+    }
+
+    private func sidebarRow(_ title: String, systemImage: String, count: Int?) -> some View {
+        HStack {
+            Label(title, systemImage: systemImage)
+            Spacer()
+            if let count, count > 0 {
+                CountBadge(count: count)
+            }
+        }
+    }
+
+    private func folderRow(_ folder: String) -> AnyView {
+        AnyView(
+            sidebarRow((folder as NSString).lastPathComponent, systemImage: "folder", count: store.noteCount(inFolder: folder))
+                .tag(NotesSection.folder(folder))
+        )
     }
 
     @ViewBuilder
@@ -149,217 +211,174 @@ struct NotesHomeView: View {
                     .lineLimit(3)
             }
         } else if let date = sync.lastSyncedAt {
-            Label {
-                Text("已同步 \(date.formatted(.relative(presentation: .named)))")
-            } icon: {
-                Image(systemName: "checkmark.icloud")
-            }
-            .foregroundStyle(.secondary)
+            Label("已同步 \(date.formatted(.relative(presentation: .named)))", systemImage: "checkmark.icloud")
+                .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - 筆記清單
+    // MARK: - 右側內容
 
-    private var noteList: some View {
-        List(selection: $selectedNote) {
-            if !sync.isConfigured && store.notes.isEmpty {
-                PairingPromptCard { showsPairing = true }
-                    .listRowSeparator(.hidden)
-            }
-            ForEach(visibleNotes) { note in
-                NoteRow(note: note)
-                    .tag(note.path)
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            pendingDelete = note
-                        } label: {
-                            Label("刪除", systemImage: "trash")
-                        }
-                    }
-                    .contextMenu {
-                        if let url = NotesSettings.obsidianURL(for: note.path) {
-                            Link(destination: url) {
-                                Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app")
-                            }
-                        }
-                        Button(role: .destructive) {
-                            pendingDelete = note
-                        } label: {
-                            Label("刪除", systemImage: "trash")
-                        }
-                    }
-            }
-        }
-        .listStyle(.plain)
-        .overlay {
-            if visibleNotes.isEmpty && !store.isLoading {
-                if searchText.isEmpty {
-                    ContentUnavailableView("沒有筆記", systemImage: "note.text", description: Text("點右上角新增筆記或手寫筆記本。"))
-                } else {
-                    ContentUnavailableView.search(text: searchText)
+    @ViewBuilder
+    private var root: some View {
+        Group {
+            if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                NotesListPage(title: "搜尋結果", notes: store.notes(inFolder: nil, query: searchText), onDelete: { pendingDelete = $0 })
+            } else {
+                switch section ?? .home {
+                case .home:
+                    NotesDashboardView(
+                        store: store,
+                        isPaired: sync.isConfigured,
+                        onOpen: open,
+                        onPair: { showsPairing = true }
+                    )
+                case .all:
+                    NotesListPage(title: "所有筆記", notes: store.notes, onDelete: { pendingDelete = $0 })
+                case .notebooks:
+                    NotesListPage(title: "手寫筆記本", notes: store.notes(inFolder: nil, notebooksOnly: true), onDelete: { pendingDelete = $0 })
+                case .tasks:
+                    NotesTasksPage(store: store, onOpen: open)
+                case .folder(let folder):
+                    NotesFolderPage(
+                        folder: folder,
+                        store: store,
+                        onSelectFolder: { section = .folder($0) },
+                        onDelete: { pendingDelete = $0 }
+                    )
+                case .tag(let tag):
+                    NotesListPage(title: "#\(tag)", notes: store.notes(inFolder: nil, tag: tag), onDelete: { pendingDelete = $0 })
                 }
             }
         }
-        .navigationTitle(listTitle)
-        .searchable(text: $searchText, prompt: "搜尋筆記")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        newTextNote()
-                    } label: {
-                        Label("新增筆記", systemImage: "square.and.pencil")
-                    }
-                    Button {
-                        showsNewNotebook = true
-                    } label: {
-                        Label("新增手寫筆記本", systemImage: "pencil.and.scribble")
-                    }
-                } label: {
-                    Label("新增", systemImage: "square.and.pencil")
-                } primaryAction: {
-                    newTextNote()
-                }
-            }
+        .safeAreaInset(edge: .bottom) {
+            NoteToolPalette(tools: paletteTools, more: moreTools)
+                .padding(.bottom, 8)
         }
-        .refreshable { await sync.syncNow() }
+    }
+
+    private var paletteTools: [NoteToolPalette.Tool] {
+        [
+            .init(id: "text", systemImage: "textformat", title: "新增筆記", color: .lavender) { newTextNote() },
+            .init(id: "ink", systemImage: "pencil.and.scribble", title: "新增手寫筆記本", color: .sky) { showsNewNotebook = true },
+            .init(id: "tasks", systemImage: "checklist", title: "新增待辦清單", color: .butter) { newTaskNote() },
+            .init(id: "folder", systemImage: "folder.badge.plus", title: "新增資料夾", color: .blush) { promptNewFolder() },
+            .init(id: "scan", systemImage: "doc.viewfinder", title: "掃描文件", color: .mint) { selectedTab = .scan },
+        ]
+    }
+
+    private var moreTools: [NoteToolPalette.Tool] {
+        var tools: [NoteToolPalette.Tool] = [
+            .init(id: "sync", systemImage: "arrow.triangle.2.circlepath.icloud", title: "立即同步", color: .sky) {
+                Task { await sync.syncNow() }
+            },
+        ]
+        if !sync.isConfigured {
+            tools.append(.init(id: "pair", systemImage: "qrcode.viewfinder", title: "與 Obsidian 配對", color: .mint) { showsPairing = true })
+        }
+        tools.append(.init(id: "records", systemImage: "clock.arrow.circlepath", title: "掃描紀錄", color: .butter) { selectedTab = .history })
+        return tools
     }
 
     // MARK: - Actions
 
+    private func open(_ notePath: String) {
+        path = [.note(notePath)]
+        compactColumn = .detail
+    }
+
+    private func replaceTop(with notePath: String) {
+        guard !path.isEmpty else { return }
+        path[path.count - 1] = .note(notePath)
+    }
+
     private func newTextNote() {
         let title = "筆記 " + Date().formatted(.dateTime.month().day().hour().minute())
-        if let path = try? store.createTextNote(in: currentFolder, title: title) {
-            selectedNote = path
+        if let notePath = try? store.createTextNote(in: currentFolder, title: title) {
+            open(notePath)
         }
     }
 
+    private func newTaskNote() {
+        let title = "待辦 " + Date().formatted(.dateTime.month().day())
+        if let notePath = try? store.createTextNote(in: currentFolder, title: title) {
+            try? store.save("- [ ] ", to: notePath)
+            open(notePath)
+        }
+    }
+
+    private func promptNewFolder() {
+        newFolderName = ""
+        showsNewFolder = true
+    }
+
     private func createFolder() {
-        let name = NotebookMarkdown.fileName(for: newFolderName)
         guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        let name = NotebookMarkdown.fileName(for: newFolderName)
         let parent: String
-        if case .folder(let folder) = sidebarSelection { parent = folder + "/" } else { parent = "" }
+        if case .folder(let folder) = section { parent = folder + "/" } else { parent = "" }
         try? store.createFolder(parent + name)
-        sidebarSelection = .folder(parent + name)
+        section = .folder(parent + name)
     }
 
     private func openLinkedNote(_ target: String) {
         Task {
             let files = sync.vault.allFiles()
-            if let path = await sync.engine.resolve(name: target, localFiles: files), path.lowercased().hasSuffix(".md") {
-                selectedNote = path
+            if let notePath = await sync.engine.resolve(name: target, localFiles: files), notePath.lowercased().hasSuffix(".md") {
+                path.append(.note(notePath))
             }
         }
     }
+}
 
-    /// 剛建立、還沒出現在索引中的筆記。
-    private func summary(for path: String) -> NoteSummary? {
-        guard sync.vault.exists(path) else { return nil }
-        return NotesStore.summarize(path: path, mtime: Date(), text: sync.vault.readText(path) ?? "")
+/// 側邊欄的資料夾樹（可展開子資料夾）。
+private struct FolderTreeRow: View {
+    let folder: String
+    let store: NotesStore
+    let rowBuilder: (String) -> AnyView
+
+    var body: some View {
+        let children = store.childFolders(of: folder)
+        if children.isEmpty {
+            rowBuilder(folder)
+        } else {
+            DisclosureGroup {
+                ForEach(children, id: \.self) { child in
+                    AnyView(FolderTreeRow(folder: child, store: store, rowBuilder: rowBuilder))
+                }
+            } label: {
+                rowBuilder(folder)
+            }
+        }
+    }
+}
+
+struct CountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(.caption.monospacedDigit().weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color(.tertiarySystemFill), in: Capsule())
     }
 }
 
 /// 依筆記種類開啟：手寫筆記本或一般 Markdown 筆記。
-private struct NoteDetailRouter: View {
-    let note: NoteSummary
+struct NoteDetailRouter: View {
+    let path: String
     var onPathChange: (String) -> Void
     var onOpenNote: (String) -> Void
 
     var body: some View {
-        if let id = note.notebookID {
-            NotebookEditorView(initialPath: note.path, notebookID: id, onPathChange: onPathChange)
+        let summary = NotesStore.shared.notes.first { $0.path == path }
+            ?? NotesStore.summarize(path: path, mtime: Date(), text: LocalVault.shared.readText(path) ?? "")
+        if let id = summary.notebookID {
+            NotebookEditorView(initialPath: path, notebookID: id, onPathChange: onPathChange)
         } else {
-            NoteView(initialPath: note.path, onPathChange: onPathChange, onOpenNote: onOpenNote)
+            NoteView(initialPath: path, onPathChange: onPathChange, onOpenNote: onOpenNote)
         }
-    }
-}
-
-private struct NoteRow: View {
-    let note: NoteSummary
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if note.isNotebook {
-                        Image(systemName: "pencil.and.scribble")
-                            .font(.caption)
-                            .foregroundStyle(.tint)
-                    }
-                    Text(note.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                }
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(note.mtime, format: .relative(presentation: .named))
-                        .foregroundStyle(.secondary)
-                    Text(note.snippet.isEmpty ? "沒有其他文字" : note.snippet)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                .font(.subheadline)
-                if !note.folder.isEmpty {
-                    Label(note.folder, systemImage: "folder")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-            if let embed = note.firstEmbed {
-                NoteThumbnail(embed: embed)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct NoteThumbnail: View {
-    let embed: String
-    @State private var image: UIImage?
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Color.secondary.opacity(0.1)
-            }
-        }
-        .frame(width: 52, height: 52)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .task(id: embed) {
-            // 只用本機已有的圖片當縮圖，不為了清單下載附件
-            let files = VaultSyncCenter.shared.vault.allFiles()
-            guard let path = await VaultSyncCenter.shared.engine.resolve(name: embed, localFiles: files),
-                  VaultSyncCenter.shared.vault.exists(path) else { return }
-            let url = VaultSyncCenter.shared.vault.url(for: path)
-            image = await Task.detached(priority: .utility) {
-                UIImage(contentsOfFile: url.path(percentEncoded: false))?.preparingThumbnail(of: CGSize(width: 156, height: 156))
-            }.value
-        }
-    }
-}
-
-private struct PairingPromptCard: View {
-    var onPair: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("與 Obsidian 配對", systemImage: "link.badge.plus")
-                .font(.headline)
-            Text("在 Mac 的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，用這台裝置掃描 QR Code，筆記就會雙向同步。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Button("開始配對", action: onPair)
-                .buttonStyle(.borderedProminent)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .padding(.vertical, 6)
     }
 }
 

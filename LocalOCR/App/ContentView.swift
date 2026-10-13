@@ -11,7 +11,7 @@ struct ContentView: View {
         // 筆記是主要功能；掃描、相機、紀錄是附加的工具。iPad 顯示為側邊欄，iPhone 為底部分頁列。
         TabView(selection: $selectedTab) {
             Tab("筆記", systemImage: "note.text", value: AppTab.notes) {
-                NotesHomeView()
+                NotesHomeView(selectedTab: $selectedTab)
             }
             TabSection("工具") {
                 Tab("掃描", systemImage: "doc.text.viewfinder", value: AppTab.scan) {
