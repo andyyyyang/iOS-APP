@@ -1,6 +1,11 @@
 import { MAX_TEMPLATE_RULES, MAX_VAULT_SEARCH_LIMIT, RULE_TARGET_PATTERN } from "../schemas.js";
 import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES } from "../types.js";
 import { MAX_PATH_BYTES } from "../vault/paths.js";
+import {
+  REMOTELY_SAVE_AUTO_RUN_MS,
+  REMOTELY_SAVE_INIT_RUN_MS,
+  REMOTELY_SAVE_SYNC_ON_SAVE_MS,
+} from "../vault/remotely-save.js";
 import { VERSION } from "../version.js";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -52,6 +57,8 @@ const vaultErrors = {
   "503": errorResponse("Vault storage is not configured (vault_not_configured)"),
 };
 const preconditionFailed = response(ref("PreconditionFailed"), "Precondition failed (precondition_failed)");
+const noStoreHeader = { "Cache-Control": { description: "no-store", schema: { type: "string", const: "no-store" } } };
+const pairingCode = { type: "string", pattern: "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$", examples: ["K7QM-3XPA"] };
 
 /** Hand-written OpenAPI 3.1 description of the REST API. */
 export function buildOpenApi(serverUrl?: string) {
@@ -63,7 +70,8 @@ export function buildOpenApi(serverUrl?: string) {
       description:
         "Scans from the LocalOCR iOS app, scenario templates, server-side classification, and the user's Obsidian vault " +
         "(plain files in an S3-compatible bucket synced by Remotely Save). " +
-        "MCP (Streamable HTTP, stateless) is served at /mcp with the same API keys.",
+        "MCP (Streamable HTTP, stateless) is served at /mcp with the same API keys. " +
+        "New devices pair with POST /v1/pairing (creates a code) and POST /pair (redeems it for the API key).",
     },
     ...(serverUrl ? { servers: [{ url: serverUrl }] } : {}),
     security: [{ bearerAuth: [] }, { apiKeyQuery: [] }],
@@ -268,6 +276,65 @@ export function buildOpenApi(serverUrl?: string) {
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: MAX_VAULT_SEARCH_LIMIT, default: 20 } },
           ],
           responses: { "200": response(ref("VaultSearchResult")), ...vaultErrors },
+        },
+      },
+      "/v1/pairing": {
+        post: {
+          operationId: "createPairingCode",
+          summary: "Create a single-use pairing code for a new device",
+          description:
+            "The code (8 characters from ABCDEFGHJKLMNPQRSTUVWXYZ23456789, shown as XXXX-XXXX) is valid for 10 minutes and redeems, " +
+            "once, the API key that authenticated this request (POST /pair). Codes live in server memory (lost on restart); " +
+            "at most 20 per key are outstanding, older ones are dropped. pairUrl uses PUBLIC_URL when set, else this request's host.",
+          requestBody: { required: false, ...json(ref("PairingCreateRequest")) },
+          responses: {
+            "201": { description: "Created", headers: noStoreHeader, ...json(ref("PairingCode")) },
+            ...commonErrors,
+          },
+        },
+      },
+      "/pair": {
+        post: {
+          operationId: "redeemPairingCode",
+          summary: "Redeem a pairing code for the API key (no auth)",
+          description:
+            "The code is case-insensitive; spaces and hyphens are ignored. A code works once. " +
+            "Unknown, expired and already used codes all answer 404 invalid_code. At most 10 attempts per client IP per 10 minutes.",
+          security: [],
+          requestBody: requestBody(ref("PairClaimRequest")),
+          responses: {
+            "200": { description: "Paired", headers: noStoreHeader, ...json(ref("PairClaim")) },
+            "400": errorResponse("Invalid request"),
+            "404": errorResponse("Unknown, expired or used code (invalid_code)"),
+            "429": {
+              description: "Too many attempts from this IP (rate_limited)",
+              headers: { "Retry-After": { description: "Seconds", schema: { type: "integer" } } },
+              ...json(ref("Error")),
+            },
+          },
+        },
+      },
+      "/v1/vault/remotely-save": {
+        get: {
+          operationId: "getRemotelySaveSettings",
+          summary: "Remotely Save settings for this vault's bucket (contains the bucket keys)",
+          description:
+            "Settings that the Obsidian plugin Remotely Save imports through its own settings URI, so a device syncs the vault " +
+            "with one tap or a QR code scan. Remotely Save merges the import shallowly, so s3 is always complete. " +
+            "The response contains the S3 secret key: it is never cached or logged.",
+          parameters: [
+            {
+              name: "vault",
+              in: "query",
+              description: "Obsidian vault name; Remotely Save rejects a URI for another vault. Without it uri is null.",
+              schema: { type: "string", maxLength: 200 },
+            },
+          ],
+          responses: {
+            "200": { description: "OK", headers: noStoreHeader, ...json(ref("RemotelySaveSetup")) },
+            ...commonErrors,
+            "503": errorResponse("Vault storage is not configured (vault_not_configured)"),
+          },
         },
       },
       "/v1/openapi.json": {
@@ -508,6 +575,107 @@ export function buildOpenApi(serverUrl?: string) {
                 },
               },
             },
+          },
+        },
+        PairingCreateRequest: {
+          type: "object",
+          properties: {
+            vaultName: { type: ["string", "null"], minLength: 1, maxLength: 200, description: "Obsidian vault the device should use" },
+            notesFolder: { type: ["string", "null"], minLength: 1, maxLength: 200, examples: ["iPad 筆記"] },
+          },
+        },
+        PairingCode: {
+          type: "object",
+          required: ["code", "expiresAt", "pairUrl"],
+          properties: {
+            code: pairingCode,
+            expiresAt: { type: "string", format: "date-time" },
+            pairUrl: {
+              type: "string",
+              description: "localocr://pair?server=<encodeURIComponent(base URL)>&code=<code>, for a QR code",
+              examples: ["localocr://pair?server=https%3A%2F%2Fxxx.up.railway.app&code=K7QM-3XPA"],
+            },
+          },
+        },
+        PairClaimRequest: {
+          type: "object",
+          required: ["code"],
+          properties: { code: { type: "string", maxLength: 100, examples: ["K7QM-3XPA", "k7qm 3xpa"] } },
+        },
+        PairClaim: {
+          type: "object",
+          required: ["apiKey", "vaultName", "notesFolder"],
+          properties: {
+            apiKey: { type: "string", description: "Send as Authorization: Bearer <apiKey>" },
+            vaultName: { type: ["string", "null"] },
+            notesFolder: { type: ["string", "null"] },
+          },
+        },
+        RemotelySaveSetup: {
+          type: "object",
+          required: ["settings", "uri"],
+          properties: {
+            settings: ref("RemotelySaveSettings"),
+            uri: {
+              type: ["string", "null"],
+              description:
+                "obsidian://remotely-save?func=settings&version=localocr&vault=<vault>&data=<encodeURIComponent(JSON.stringify(settings))>; " +
+                "null without the vault parameter",
+            },
+          },
+        },
+        RemotelySaveSettings: {
+          type: "object",
+          description: "Partial Remotely Save settings; fields not listed keep the device's values",
+          required: [
+            "serviceType",
+            "s3",
+            "autoRunEveryMilliseconds",
+            "initRunAfterMilliseconds",
+            "syncOnSaveAfterMilliseconds",
+            "agreeToUseSyncV3",
+          ],
+          properties: {
+            serviceType: { type: "string", const: "s3" },
+            s3: {
+              type: "object",
+              required: [
+                "s3Endpoint",
+                "s3Region",
+                "s3AccessKeyID",
+                "s3SecretAccessKey",
+                "s3BucketName",
+                "partsConcurrency",
+                "forcePathStyle",
+                "remotePrefix",
+                "useAccurateMTime",
+                "reverseProxyNoSignUrl",
+                "generateFolderObject",
+                "bypassCorsLocally",
+              ],
+              properties: {
+                s3Endpoint: { type: "string", description: "VAULT_S3_ENDPOINT" },
+                s3Region: { type: "string", description: "VAULT_S3_REGION" },
+                s3AccessKeyID: { type: "string", description: "VAULT_S3_ACCESS_KEY_ID" },
+                s3SecretAccessKey: { type: "string", description: "VAULT_S3_SECRET_ACCESS_KEY" },
+                s3BucketName: { type: "string", description: "VAULT_S3_BUCKET" },
+                partsConcurrency: { type: "integer", const: 20 },
+                forcePathStyle: { type: "boolean", description: "VAULT_S3_FORCE_PATH_STYLE" },
+                remotePrefix: { type: "string", description: "VAULT_PREFIX" },
+                useAccurateMTime: { type: "boolean", const: true },
+                reverseProxyNoSignUrl: { type: "string", const: "" },
+                generateFolderObject: { type: "boolean", const: false },
+                bypassCorsLocally: { type: "boolean", const: true },
+              },
+            },
+            autoRunEveryMilliseconds: { type: "integer", const: REMOTELY_SAVE_AUTO_RUN_MS, description: "Schedule For Auto Run: every 5 minutes" },
+            initRunAfterMilliseconds: {
+              type: "integer",
+              const: REMOTELY_SAVE_INIT_RUN_MS,
+              description: "Run Once On Start Up Automatically: after 10 seconds",
+            },
+            syncOnSaveAfterMilliseconds: { type: "integer", const: REMOTELY_SAVE_SYNC_ON_SAVE_MS, description: "Sync On Save: enabled" },
+            agreeToUseSyncV3: { type: "boolean", const: true },
           },
         },
         ValidationResult: {

@@ -9,8 +9,25 @@ iPhone Obsidian ─┼─ Remotely Save（S3）⇄ Railway Storage Bucket ⇄ Lo
 iPad Obsidian ─┘
 ```
 
-App 與 Claude 一律經過伺服器存取筆記，只需要伺服器的 API 金鑰；儲存桶金鑰只放在伺服器與各裝置的 Remotely Save 設定中。
+App 與 Claude 一律經過伺服器存取筆記，只需要伺服器的 API 金鑰；儲存桶金鑰只放在伺服器與各裝置的 Remotely Save 設定中（伺服器只透過需要 API 金鑰的 `GET /v1/vault/remotely-save` 交給 Remotely Save 設定使用）。
 API 細節見 [API.md 的「Vault（Obsidian 筆記）」](API.md#vaultobsidian-筆記)。
+
+## 最快的設定方式
+
+前提：伺服器已設定 `VAULT_S3_*`（見「[1. 準備 Railway 儲存桶](#1-準備-railway-儲存桶)」），而且 Mac 的 Obsidian 已安裝我們的 LocalOCR 插件（[`obsidian-plugin/`](../obsidian-plugin/README.md)）並填好伺服器網址與 API 金鑰。
+
+1. **Mac：安裝 Remotely Save。** Obsidian →「設定 → 第三方外掛」→ 瀏覽，搜尋「**Remotely Save**」，安裝並啟用。第一次啟用時 Remotely Save 會詢問是否使用新版同步演算法，請勾選並同意（不同意時它會自行停用）。
+2. **Mac：在 LocalOCR 插件執行「設定 Remotely Save（同步 vault）」**（命令面板，或插件設定頁「裝置設定」的按鈕）→ 按「**套用到這台裝置**」。Remotely Save 顯示已匯入設定後，**重新啟動 Obsidian**。
+   這一步會設定 S3 連線（Remote prefix 與伺服器的 `VAULT_PREFIX` 相同）、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步，等同下方第 3、4 節的手動設定。
+3. **Mac：第一次同步。** 按左側欄的 Remotely Save 同步按鈕，把筆記上傳到空的儲存桶（順序見「[5. 第一次同步的順序](#5-第一次同步的順序)」）。
+4. **iPhone／iPad：** 在 Obsidian 建立一個與 Mac **同名**的空保險庫，安裝並啟用 Remotely Save（同第 1 步）。接著用 iPhone／iPad 的**相機 App** 掃描 Mac 上同一個對話框中的 QR Code，點開連結讓 Obsidian 套用設定，再重新啟動 Obsidian，筆記就會開始下載。
+5. **配對 LocalOCR App：** 在 Mac 的 LocalOCR 插件執行「**配對 iPhone／iPad**」，然後在 iPhone／iPad 的 LocalOCR App 開啟「設定 → 配對」掃描 QR Code，或輸入畫面上的配對碼（10 分鐘內有效、只能使用一次）。App 會取得伺服器網址、API 金鑰、保險庫名稱與 iPad 筆記資料夾（`iPad 筆記`）。
+
+- Remotely Save 只接受與目前保險庫**同名**的設定；名稱不同時它會顯示「the target vault is … but you are currently in …」。
+- Remotely Save 的 QR Code 含有**儲存桶的存取金鑰**，不要截圖、貼到聊天或分享。
+- 匯入只會改 S3 連線與同步排程，Encryption Password（加密密碼）等其他設定不變；加密密碼請保持空白（見下方「不要開啟端對端加密」）。
+
+自動設定失敗、或想自行調整時，依下面的手動步驟設定。
 
 > 插件的選項名稱會隨版本略有不同，下文以英文介面為準，括號內為說明。
 
@@ -107,6 +124,9 @@ Railway 儲存桶**沒有版本控制，也沒有自動備份**：被覆寫或�
 | `NoSuchBucket`、404 | Bucket Name 錯誤（少了雜湊），或 Endpoint 不對 |
 | `SignatureDoesNotMatch` | Region 不是 `auto`，或 S3 URL style 與儲存桶不符（新儲存桶用 virtual-hosted；只有 Credentials 分頁註明時才用 path-style），也可能是 Secret 複製不完整 |
 | 手機上連線失敗、CORS 錯誤 | 開啟 Bypass CORS Locally，更新 Remotely Save 到最新版 |
+| 掃描 QR Code 或「套用到這台裝置」後，Remotely Save 顯示「the target vault is …」 | 這台裝置的保險庫名稱與 Mac 不同。把保險庫改成相同名稱，或在這台裝置的 LocalOCR 插件執行「設定 Remotely Save」 |
+| 套用設定後沒有自動同步 | 重新啟動 Obsidian（Remotely Save 只在啟動時建立自動同步排程）；也確認已同意新版同步演算法 |
+| LocalOCR 插件顯示「伺服器尚未設定 Obsidian 儲存桶」 | 伺服器的 `VAULT_S3_*` 未設定，見第 1 節 |
 | App／Claude 寫的筆記沒出現在 Obsidian | 等下一次自動同步或手動同步；在 Files 分頁確認檔案存在；確認 Remote Prefix 留空（或與伺服器的 `VAULT_PREFIX` 相同）；確認沒有開啟加密 |
 | App 看不到 Obsidian 的新筆記 | 確認該裝置已同步完成（Files 分頁可看到檔案） |
 | 伺服器 `GET /v1/vault/status` 回傳 `configured: false`，其他端點 503 `vault_not_configured` | 伺服器的 `VAULT_S3_*` 變數未設定或不完整（啟動紀錄會列出缺少的變數名稱），設定後重新部署 |

@@ -108,6 +108,40 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		new Setting(containerEl).setName("裝置設定").setHeading();
+
+		new Setting(containerEl)
+			.setName("配對 iPhone／iPad")
+			.setDesc(
+				"產生配對碼與 QR Code，iPhone／iPad 上的 LocalOCR App 掃描後即取得伺服器網址與 API 金鑰（10 分鐘內有效、只能使用一次）。",
+			)
+			.addButton((button) =>
+				button.setButtonText("配對 iPhone／iPad").onClick(async () => {
+					button.setDisabled(true);
+					try {
+						await this.plugin.openPairing();
+					} finally {
+						button.setDisabled(false);
+					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("設定 Remotely Save（同步 vault）")
+			.setDesc(
+				"從伺服器取得儲存桶設定，一鍵套用到這台裝置的 Remotely Save，或用 QR Code 套用到 iPhone／iPad 的 Obsidian。伺服器需已設定 VAULT_S3_*。",
+			)
+			.addButton((button) =>
+				button.setButtonText("設定 Remotely Save").onClick(async () => {
+					button.setDisabled(true);
+					try {
+						await this.plugin.openRemotelySaveSetup();
+					} finally {
+						button.setDisabled(false);
+					}
+				}),
+			);
+
 		new Setting(containerEl).setName("筆記").setHeading();
 
 		new Setting(containerEl)

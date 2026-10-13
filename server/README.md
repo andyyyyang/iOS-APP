@@ -10,7 +10,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 
 ## 端點
 
-除了 `GET /health`，所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
+除了 `GET /health` 與 `POST /pair`，所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
 錯誤一律回傳 `{"error":{"code":"...","message":"..."}}`。
 
 | 方法與路徑 | 說明 |
@@ -32,6 +32,9 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/vault/files?prefix=&recursive=` | 列出 vault 檔案 `{"items":[{"path","size","mtime","etag"}],"folders":[...]}`（`folders` 只在非遞迴時回傳） |
 | `GET`／`PUT`／`DELETE /v1/vault/file?path=` | 下載／上傳（原始位元組，最多 25 MB；`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`）／刪除單一檔案 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
+| `GET /v1/vault/remotely-save?vault=` | Remotely Save 的 S3 設定（含儲存桶金鑰）與匯入用的 `obsidian://remotely-save?…` 網址 `{"settings":{...},"uri":"..."}`；未設定 vault 時 503 `vault_not_configured` |
+| `POST /v1/pairing` | 建立配對碼（`XXXX-XXXX`，10 分鐘、只能用一次）：`{"vaultName"?,"notesFolder"?}` → 201 `{"code","expiresAt","pairUrl"}` |
+| `POST /pair` | **不需要金鑰**：`{"code":"XXXX-XXXX"}` → `{"apiKey","vaultName","notesFolder"}`；無效／過期／已用過 404 `invalid_code`；每個 IP 每 10 分鐘最多 10 次，超過 429 `rate_limited` |
 | `POST /mcp` | MCP Streamable HTTP（無狀態；`GET`／`DELETE /mcp` 回傳 405） |
 
 ### 增量同步（Obsidian 插件、harness）
@@ -43,6 +46,8 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 伺服器每次寫入都從單一時鐘取得嚴格遞增的 `updatedAt`（Postgres 以 `write_clock` 列鎖確保順序與提交順序一致），所以不會漏掉或重複。
 不帶 `updatedAfter`／`cursor` 時依 `createdAt` 由新到舊排序，`nextCursor` 也可用來翻頁。
 注意：刪除不會出現在增量同步中。
+
+配對碼存在記憶體中（伺服器只有一個實例；重新啟動後未使用的配對碼失效），只會交出建立配對碼時所用的那把 API 金鑰。配對與 Remotely Save 設定的回應都帶 `Cache-Control: no-store`，金鑰不會寫入紀錄。
 
 Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../docs/API.md`](../docs/API.md) 的「Vault（Obsidian 筆記）」；裝置端的 Remotely Save 設定見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
 
@@ -66,6 +71,7 @@ Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../do
 | `VAULT_S3_REGION` | 否 | 預設 `auto` |
 | `VAULT_S3_FORCE_PATH_STYLE` | 否 | 預設 `false`（virtual-hosted URL）；只有儲存桶註明 path-style 時才設 `true` |
 | `VAULT_PREFIX` | 否 | 物件鍵前綴，需與 Remotely Save 的 Remote prefix 相同；預設空白，有值時必須以 `/` 結尾 |
+| `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl`；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
 
 參考 [`.env.example`](.env.example)。
 
@@ -226,12 +232,12 @@ src/
   validate.ts         依樣板 sample 檢查 JSON 結構
   cursor.ts           不透明分頁游標
   store/              Store 介面、PostgresStore（含 migrations.ts）、MemoryStore
-  services/           商業邏輯：scans、templates、classify、validate、vault
+  services/           商業邏輯：scans、templates、classify、validate、vault、pairing（配對碼）
   classifier/         Classifier 介面與 Jev 實作
-  vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證
+  vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證、Remotely Save 設定
   templates/builtin.ts 內建樣板
   templates/managed.ts 讀取並同步 templates/managed/*.json
-  http/               createApp、驗證、錯誤處理、路由、OpenAPI
+  http/               createApp、驗證、錯誤處理、/pair 頻率限制、路由、OpenAPI
   mcp/                MCP 工具與無狀態 /mcp 路由
 templates/managed/    受管理樣板（repo 控管的 JSON 檔）
 test/                 vitest + supertest（fixtures/managed/ 為測試用樣板檔）

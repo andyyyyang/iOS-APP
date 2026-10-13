@@ -1,7 +1,9 @@
+import type { VaultConfig } from "../config.js";
 import { AppError, notFound } from "../errors.js";
-import { vaultListQuerySchema, vaultSearchQuerySchema } from "../schemas.js";
+import { remotelySaveQuerySchema, vaultListQuerySchema, vaultSearchQuerySchema } from "../schemas.js";
 import type { WriteResult } from "../store/types.js";
 import { contentTypeFor, extensionOf, normalizeEtag, vaultFolder, vaultPath } from "../vault/paths.js";
+import { remotelySaveSettings, remotelySaveUri, type RemotelySaveSettings } from "../vault/remotely-save.js";
 import { VaultStorageError, type VaultEntry, type VaultFile, type VaultStore } from "../vault/types.js";
 import { parse } from "./parse.js";
 
@@ -29,6 +31,12 @@ export interface VaultSearchHit {
   snippet: string;
 }
 
+export interface RemotelySaveSetup {
+  settings: RemotelySaveSettings;
+  /** obsidian://remotely-save?func=settings&… for `vault`; null when no vault name was given. */
+  uri: string | null;
+}
+
 export interface VaultWriteInput {
   /** Etag (or list, or "*") the current file must match. */
   ifMatch?: string;
@@ -37,6 +45,9 @@ export interface VaultWriteInput {
   /** Milliseconds; defaults to now. */
   mtime?: number;
 }
+
+const notConfigured = () =>
+  new AppError(503, "vault_not_configured", "Vault storage is not configured (set VAULT_S3_* variables)");
 
 const byPath = (a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
@@ -83,17 +94,30 @@ function snippetAround(text: string, index: number, length: number): string {
  * Writes use optimistic concurrency: stat, compare the etag, then put (a tiny race window remains).
  */
 export class VaultService {
-  constructor(private readonly store: VaultStore | null) {}
+  constructor(
+    private readonly store: VaultStore | null,
+    /** The bucket credentials, only for handing them to Remotely Save; null when VAULT_S3_* is not set. */
+    private readonly config: VaultConfig | null = null,
+  ) {}
 
   status(): VaultStatus {
     return { configured: this.store !== null, prefix: this.store?.prefix ?? "" };
   }
 
   private storage(): VaultStore {
-    if (!this.store) {
-      throw new AppError(503, "vault_not_configured", "Vault storage is not configured (set VAULT_S3_* variables)");
-    }
+    if (!this.store) throw notConfigured();
     return this.store;
+  }
+
+  /**
+   * Remotely Save settings (S3 bucket keys included) for setting up another device in one step,
+   * plus its import URI when `vault` names the Obsidian vault. Never log the result.
+   */
+  remotelySave(input: { vault?: unknown } = {}): RemotelySaveSetup {
+    if (!this.config) throw notConfigured();
+    const { vault } = parse(remotelySaveQuerySchema, input);
+    const settings = remotelySaveSettings(this.config);
+    return { settings, uri: vault === undefined ? null : remotelySaveUri(settings, vault) };
   }
 
   /** Turns backend failures into 502 vault_storage_error. */

@@ -15,6 +15,8 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 - **保留你的筆記**：更新時只覆寫插件產生的區塊與插件管理的屬性；你在區塊外寫的內容、自己加的屬性與標籤都會保留。
 - **JSON 陣列輸出**：可把指定情境的結構化資料，依 `id` 新增／更新到保險庫中的 JSON 陣列檔（例如 FV60 廠商請款紀錄），並保留你之後填入的欄位。
 - **自動同步**：預設每 15 分鐘一次，也可以用指令、左側功能區圖示或點狀態列手動同步。
+- **一鍵配對 iPhone／iPad**：產生配對碼與 QR Code，LocalOCR App 掃描後就取得伺服器網址與 API 金鑰，不必手動輸入。
+- **一鍵設定 Remotely Save**：從伺服器取得 Obsidian 儲存桶的設定，套用到這台裝置的 Remotely Save，或用 QR Code 套用到 iPhone／iPad 的 Obsidian。
 - 使用 Obsidian 的 `requestUrl` 連線，沒有 CORS 問題，**桌面版與行動版（iOS／Android）都能用**。
 
 ## 安裝
@@ -51,14 +53,37 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 | 已完成欄位 | `done` | 這個欄位為真的 JSON 紀錄不會再被修改；留空表示不檢查 |
 | 自動同步間隔（分鐘） | `15` | `0` 表示關閉自動同步；開啟時，Obsidian 啟動後約 5 秒也會同步一次 |
 | 測試連線 | — | 先呼叫 `GET /health`，再用 API 金鑰呼叫 `GET /v1/templates`，結果以通知顯示 |
+| 配對 iPhone／iPad | — | 見下方「配對 iPhone／iPad」 |
+| 設定 Remotely Save（同步 vault） | — | 見下方「設定 Remotely Save」 |
 | 重設同步進度 | — | 下次同步時重新下載全部掃描；已存在的筆記會原地更新，不會重複建立 |
 
 ### 指令與介面
 
 - 指令「**立即同步 LocalOCR**」：手動同步，完成後顯示「新增 N 筆、更新 M 筆」；有 JSON 陣列輸出時再加上「JSON：新增 a 筆、更新 b 筆、略過 c 筆」。
 - 指令「**重新同步全部（重設進度）**」：重設進度後立刻同步全部掃描。
+- 指令「**配對 iPhone／iPad**」、「**設定 Remotely Save（同步 vault）**」：與設定頁「裝置設定」中的按鈕相同。
 - 左側功能區的 `scan-text` 圖示：立即同步。
 - 狀態列（桌面版）：`LocalOCR：同步中…`、`LocalOCR：HH:mm 已同步 N 筆` 或 `LocalOCR：同步失敗`（滑鼠移上去可看錯誤原因）；點一下即可同步。
+
+## 配對 iPhone／iPad
+
+指令或設定頁按鈕「配對 iPhone／iPad」會以目前的伺服器網址與 API 金鑰呼叫 `POST /v1/pairing`（`{"vaultName":"<目前保險庫名稱>","notesFolder":"iPad 筆記"}`），然後顯示：
+
+- 配對連結 `localocr://pair?server=…&code=…` 的 QR Code；
+- 配對碼（例如 `K7QM-3XPA`，大字等寬顯示）與倒數計時（10 分鐘內有效、只能使用一次，過期後 QR Code 變淡）；
+- 說明「在 iPhone／iPad 的 LocalOCR App 開啟『設定 → 配對』掃描 QR Code，或輸入配對碼」，以及「產生新的配對碼」按鈕。
+
+App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**、保險庫名稱與 iPad 筆記資料夾。想讓 iPhone／iPad 使用另一把金鑰（方便之後單獨撤銷），先在插件設定換成那把金鑰再配對。
+
+## 設定 Remotely Save
+
+指令或設定頁按鈕「設定 Remotely Save（同步 vault）」會呼叫 `GET /v1/vault/remotely-save?vault=<目前保險庫名稱>`，取得伺服器儲存桶的 Remotely Save 設定（S3 連線、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步），然後顯示：
+
+- 「**套用到這台裝置**」：開啟 `obsidian://remotely-save?func=settings&…`，由 Remotely Save 自己匯入設定（需已安裝並啟用 Remotely Save；未啟用時會提示）。看到 Remotely Save 的匯入通知後**重新啟動 Obsidian**，自動同步排程才會生效。
+- 同一個網址的 **QR Code**：在 iPhone／iPad 用相機掃描，即可在那台裝置的 Obsidian 套用同樣設定（需先安裝 Remotely Save，且那台裝置的保險庫名稱必須相同，Remotely Save 會拒絕套用到名稱不同的保險庫）。
+
+匯入只會取代 Remotely Save 的 S3 設定、同步排程等列出的項目，其他設定（例如加密密碼，請保持空白）不變。**QR Code 含有儲存桶的存取金鑰，請勿截圖或分享。**
+伺服器未設定 `VAULT_S3_*` 時會顯示「伺服器尚未設定 Obsidian 儲存桶」。完整步驟見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
 
 ## 筆記格式
 
@@ -222,12 +247,18 @@ tags: [localocr, localocr/receipt]
 | 「…的內容不是 JSON 陣列，已略過，不會覆寫」 | JSON 陣列輸出的目標檔案不是有效的 JSON 陣列。修正檔案（最外層必須是 `[...]`）後執行「重新同步全部（重設進度）」 |
 | JSON 紀錄沒有更新 | 該紀錄的「已完成欄位」為真（例如 `done: true`），或情境代碼與對應不符（情境代碼即樣板 id，例如 `fv60_air`） |
 | 筆記重複 | 請確認沒有手動複製筆記（兩則筆記有相同的 `localocr_id`）；刪掉多餘的那則即可 |
+| 「無法產生配對碼」／「無法取得 Remotely Save 設定」＋「伺服器可能是舊版」 | 伺服器還沒有 `/v1/pairing`、`/v1/vault/remotely-save`，請更新並重新部署 LocalOCR 伺服器 |
+| 「伺服器尚未設定 Obsidian 儲存桶」 | 在伺服器設定 `VAULT_S3_*` 變數後重新部署（見 `docs/OBSIDIAN-SYNC.md`） |
+| 按「套用到這台裝置」沒有反應 | 確認 Remotely Save 已安裝並啟用；Remotely Save 若顯示「the target vault is …」，表示保險庫名稱不同 |
+| 套用後沒有自動同步 | 重新啟動 Obsidian（Remotely Save 只在啟動時建立同步排程） |
 
 更多細節可以開啟開發者工具（桌面版 `Ctrl/Cmd + Shift + I`）查看以 `[LocalOCR Sync]` 開頭的訊息。插件不會在任何記錄或通知中輸出 API 金鑰。
 
 ### 安全性
 
 API 金鑰以明文存在 `<保險庫>/.obsidian/plugins/localocr-sync/data.json`（Obsidian 插件的標準做法）。若你把保險庫放到公開的 Git 儲存庫或分享給他人，請排除這個檔案，或為該裝置建立專用的金鑰，以便隨時從伺服器的 `API_KEYS` 移除。
+
+配對碼會交出 API 金鑰：10 分鐘內有效、只能使用一次，伺服器對 `POST /pair` 限制每個 IP 每 10 分鐘 10 次。Remotely Save 的 QR Code 與設定網址含有儲存桶的存取金鑰（等同整個筆記庫的讀寫權限），不要截圖、貼到聊天或分享。
 
 ## 開發
 
@@ -236,7 +267,7 @@ API 金鑰以明文存在 `<保險庫>/.obsidian/plugins/localocr-sync/data.json
 ```bash
 cd obsidian-plugin
 npm install
-npm test            # vitest 單元測試（純邏輯：src/format.ts、src/sync-core.ts、src/json-export.ts）
+npm test            # vitest 單元測試（純邏輯：src/format.ts、src/sync-core.ts、src/json-export.ts、src/device-setup.ts）
 npx tsc --noEmit    # 型別檢查
 npm run build       # 型別檢查 + 以 esbuild 打包成 main.js
 npm run dev         # 監看模式（含 inline source map；提交前請改跑 npm run build）
@@ -249,6 +280,8 @@ npm run dev         # 監看模式（含 inline source map；提交前請改跑 
 | `src/sync-core.ts` | REST 用戶端（注入 HTTP 傳輸）、游標記錄、分頁同步迴圈（不依賴 Obsidian） |
 | `src/format.ts` | 標題、檔名、路徑、筆記產生與保留使用者內容的合併（不依賴 Obsidian） |
 | `src/json-export.ts` | JSON 陣列輸出：解析、依 id 新增／更新、保留欄位、輸出（不依賴 Obsidian） |
+| `src/device-setup.ts` | 配對碼與 Remotely Save 設定的請求、回應檢查、倒數格式、錯誤訊息（不依賴 Obsidian） |
+| `src/setup-modals.ts` | 「配對 iPhone／iPad」與「設定 Remotely Save」對話框（QR Code 由 `qrcode` 產生，打包進 `main.js`） |
 | `src/types.ts` | API 資料型別 |
 | `test/` | vitest 測試 |
 

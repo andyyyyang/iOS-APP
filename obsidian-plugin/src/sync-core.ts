@@ -14,8 +14,10 @@ export const REQUEST_TIMEOUT_MS = 60_000;
 
 export interface HttpRequest {
 	url: string;
-	method: "GET";
+	method: "GET" | "POST";
 	headers: Record<string, string>;
+	/** JSON text (POST only). */
+	body?: string;
 }
 
 export interface HttpResponse {
@@ -76,6 +78,14 @@ function statusMessage(status: number, serverMessage?: string): string {
 	return `請求失敗（${status}）${detail}`;
 }
 
+export interface JsonRequestOptions {
+	method?: "GET" | "POST";
+	/** Sends the API key as a bearer token (default true). */
+	authenticated?: boolean;
+	/** Serialized as the JSON request body. */
+	body?: unknown;
+}
+
 export interface ScanQuery {
 	limit: number;
 	updatedAfter?: string | null;
@@ -94,14 +104,21 @@ export class LocalOcrClient {
 		this.baseUrl = normalizeServerUrl(baseUrl);
 	}
 
-	private async getJson(path: string, authenticated: boolean): Promise<unknown> {
+	/** Any JSON endpoint; non-2xx answers throw ApiError with the server's error code. */
+	async requestJson(path: string, options: JsonRequestOptions = {}): Promise<unknown> {
+		const { method = "GET", authenticated = true } = options;
 		if (!this.baseUrl) throw new ApiError("尚未設定伺服器網址", 0, "config");
 		if (authenticated && !this.apiKey) throw new ApiError("尚未設定 API 金鑰", 0, "config");
 		const headers: Record<string, string> = { Accept: "application/json" };
 		if (authenticated) headers.Authorization = `Bearer ${this.apiKey}`;
+		const request: HttpRequest = { url: this.baseUrl + path, method, headers };
+		if (options.body !== undefined) {
+			headers["Content-Type"] = "application/json";
+			request.body = JSON.stringify(options.body);
+		}
 		let response: HttpResponse;
 		try {
-			response = await withTimeout(this.http({ url: this.baseUrl + path, method: "GET", headers }), this.timeoutMs);
+			response = await withTimeout(this.http(request), this.timeoutMs);
 		} catch (error) {
 			if (error instanceof ApiError) throw error;
 			const reason = error instanceof Error ? error.message : String(error);
@@ -126,7 +143,7 @@ export class LocalOcrClient {
 	}
 
 	async health(): Promise<HealthResponse> {
-		const body = (await this.getJson("/health", false)) as Partial<HealthResponse> | null;
+		const body = (await this.requestJson("/health", { authenticated: false })) as Partial<HealthResponse> | null;
 		if (!body || typeof body !== "object" || typeof body.status !== "string") {
 			throw new ApiError("伺服器 /health 回應格式不正確", 200, "bad_response");
 		}
@@ -134,7 +151,7 @@ export class LocalOcrClient {
 	}
 
 	async listTemplates(): Promise<Template[]> {
-		const body = (await this.getJson("/v1/templates", true)) as { items?: unknown } | null;
+		const body = (await this.requestJson("/v1/templates")) as { items?: unknown } | null;
 		if (!body || !Array.isArray(body.items)) {
 			throw new ApiError("伺服器 /v1/templates 回應格式不正確", 200, "bad_response");
 		}
@@ -147,7 +164,7 @@ export class LocalOcrClient {
 		const params = [`limit=${encodeURIComponent(String(query.limit))}`];
 		if (query.updatedAfter) params.push(`updatedAfter=${encodeURIComponent(query.updatedAfter)}`);
 		if (query.cursor) params.push(`cursor=${encodeURIComponent(query.cursor)}`);
-		const body = (await this.getJson(`/v1/scans?${params.join("&")}`, true)) as {
+		const body = (await this.requestJson(`/v1/scans?${params.join("&")}`)) as {
 			items?: unknown;
 			nextCursor?: unknown;
 		} | null;

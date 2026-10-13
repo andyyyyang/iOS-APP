@@ -150,3 +150,19 @@ export const vaultSearchQuerySchema = z.object({
 
 /** File mtime in milliseconds since the epoch (X-Vault-Mtime). */
 export const vaultMtimeSchema = queryParam(z.coerce.number().int().min(1).max(8_640_000_000_000_000));
+
+/** POST /v1/pairing: what the new device should open (both optional). */
+export const pairingCreateSchema = z.object({
+  vaultName: optionalNullable(z.string().min(1).max(200)),
+  notesFolder: optionalNullable(z.string().min(1).max(200)),
+});
+
+/** POST /pair; the code is normalized (uppercase, spaces and hyphens removed) by the service. */
+export const pairingClaimSchema = z.object({
+  code: z.string().max(100),
+});
+
+/** GET /v1/vault/remotely-save: the Obsidian vault name the import URI targets. */
+export const remotelySaveQuerySchema = z.object({
+  vault: queryParam(z.string().max(200)),
+});

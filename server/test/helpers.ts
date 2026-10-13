@@ -3,6 +3,7 @@ import pg from "pg";
 import { afterEach } from "vitest";
 import { bootstrapStore } from "../src/bootstrap.js";
 import type { ClassificationCandidate, Classifier, ClassifierResult } from "../src/classifier/types.js";
+import type { VaultConfig } from "../src/config.js";
 import { createApp } from "../src/http/app.js";
 import { MemoryStore } from "../src/store/memory.js";
 import { PostgresStore } from "../src/store/postgres.js";
@@ -58,6 +59,11 @@ export async function setup(
     managedTemplatesDir?: string | null;
     /** Vault storage (e.g. a MemoryVaultStore); default null = not configured. */
     vault?: VaultStore | null;
+    /** Bucket credentials for /v1/vault/remotely-save; default null = not configured. */
+    vaultConfig?: VaultConfig | null;
+    publicUrl?: string;
+    /** Clock in milliseconds (pairing expiry, /pair rate limit). */
+    now?: () => number;
   } = {},
 ): Promise<{
   app: Express;
@@ -71,6 +77,9 @@ export async function setup(
     classifier: options.classifier ?? null,
     apiKeys: options.apiKeys ?? [API_KEY],
     vault: options.vault ?? null,
+    vaultConfig: options.vaultConfig ?? null,
+    publicUrl: options.publicUrl,
+    now: options.now,
   });
   return { app, store };
 }

@@ -16,7 +16,14 @@ async function main() {
 
   const classifier = createClassifier(config);
   const vault = createVaultStore(config.vault);
-  const app = createApp({ store, classifier, apiKeys: config.apiKeys, vault });
+  const app = createApp({
+    store,
+    classifier,
+    apiKeys: config.apiKeys,
+    vault,
+    vaultConfig: config.vault,
+    publicUrl: config.publicUrl,
+  });
 
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(

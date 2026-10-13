@@ -8,6 +8,8 @@ export interface Config {
   jevModel: string;
   /** S3-compatible bucket holding the Obsidian vault; null unless endpoint, bucket and both keys are set. */
   vault: VaultConfig | null;
+  /** Public base URL (PUBLIC_URL, no trailing slash) for pairing links; undefined = derived from each request. */
+  publicUrl: string | undefined;
 }
 
 export interface VaultConfig {
@@ -61,6 +63,20 @@ export function parseVaultConfig(env: NodeJS.ProcessEnv, logger: Pick<Console, "
   };
 }
 
+/** PUBLIC_URL without trailing slashes; must be an http(s) URL. */
+export function parsePublicUrl(raw: string | undefined): string | undefined {
+  const value = nonEmpty(raw)?.replace(/\/+$/, "");
+  if (!value) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`Invalid PUBLIC_URL: ${value}`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`Invalid PUBLIC_URL: ${value}`);
+  return value;
+}
+
 export function parseApiKeys(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
@@ -97,5 +113,6 @@ export function loadConfig(
     jevApiKey: nonEmpty(env.JEV_API_KEY) ?? nonEmpty(env.TYPESAFE_API_KEY),
     jevModel: nonEmpty(env.JEV_MODEL) ?? "jev-latest",
     vault: parseVaultConfig(env, logger),
+    publicUrl: parsePublicUrl(env.PUBLIC_URL),
   };
 }

@@ -23,6 +23,12 @@ export function vaultRouter({ vault }: Services): Router {
     res.json(vault.status());
   });
 
+  // Bucket keys for setting up Remotely Save on another device: never cache or log
+  router.get("/remotely-save", (req, res) => {
+    const setup = vault.remotelySave({ vault: req.query.vault });
+    res.set("Cache-Control", "no-store").json(setup);
+  });
+
   router.get("/files", async (req, res) => {
     res.json(await vault.list({ prefix: req.query.prefix, recursive: req.query.recursive }));
   });

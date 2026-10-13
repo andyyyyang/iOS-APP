@@ -346,11 +346,94 @@ describe("vault REST", () => {
   it("describes the vault endpoints in OpenAPI", async () => {
     const { app } = await setup();
     const res = await request(app).get("/v1/openapi.json").set(AUTH).expect(200);
-    for (const path of ["/v1/vault/status", "/v1/vault/files", "/v1/vault/file", "/v1/vault/search"]) {
+    for (const path of ["/v1/vault/status", "/v1/vault/files", "/v1/vault/file", "/v1/vault/search", "/v1/vault/remotely-save"]) {
       expect(res.body.paths[path], path).toBeDefined();
     }
     expect(Object.keys(res.body.paths["/v1/vault/file"])).toEqual(expect.arrayContaining(["get", "put", "delete"]));
     expect(res.body.components.schemas.PreconditionFailed).toBeDefined();
+  });
+});
+
+describe("GET /v1/vault/remotely-save", () => {
+  const vaultConfig = {
+    endpoint: "https://t3.storageapi.dev",
+    bucket: "obsidian-vault-abc",
+    region: "auto",
+    accessKeyId: "tid_key",
+    secretAccessKey: "tsec_secret",
+    forcePathStyle: false,
+    prefix: "",
+  };
+
+  const get = (app: Express, query: Record<string, string> = {}) =>
+    request(app).get("/v1/vault/remotely-save").query(query).set(AUTH);
+
+  it("answers 503 vault_not_configured without bucket credentials", async () => {
+    const notConfigured = {
+      error: { code: "vault_not_configured", message: "Vault storage is not configured (set VAULT_S3_* variables)" },
+    };
+    const { app } = await setup();
+    expect((await get(app, { vault: "V" }).expect(503)).body).toEqual(notConfigured);
+    // a store alone (memory, no S3 keys) has nothing to hand to Remotely Save
+    const { app: memory } = await setup({ vault: new MemoryVaultStore() });
+    expect((await get(memory).expect(503)).body).toEqual(notConfigured);
+  });
+
+  it("requires auth", async () => {
+    const { app } = await setup({ vault: new MemoryVaultStore(), vaultConfig });
+    await request(app).get("/v1/vault/remotely-save").expect(401);
+  });
+
+  it("returns complete S3 settings and Remotely Save's import URI for the vault", async () => {
+    const { app } = await setup({ vault: new MemoryVaultStore(), vaultConfig });
+    const vault = "My Vault 筆記 & 100%+";
+    const res = await get(app, { vault }).expect(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body.settings).toEqual({
+      serviceType: "s3",
+      s3: {
+        s3Endpoint: "https://t3.storageapi.dev",
+        s3Region: "auto",
+        s3AccessKeyID: "tid_key",
+        s3SecretAccessKey: "tsec_secret",
+        s3BucketName: "obsidian-vault-abc",
+        partsConcurrency: 20,
+        forcePathStyle: false,
+        remotePrefix: "",
+        useAccurateMTime: true,
+        reverseProxyNoSignUrl: "",
+        generateFolderObject: false,
+        bypassCorsLocally: true,
+      },
+      autoRunEveryMilliseconds: 300_000,
+      initRunAfterMilliseconds: 10_000,
+      syncOnSaveAfterMilliseconds: 1000,
+      agreeToUseSyncV3: true,
+    });
+
+    // exactly how Remotely Save's exportQrCodeUri builds it
+    const data = encodeURIComponent(JSON.stringify(res.body.settings));
+    expect(res.body.uri).toBe(
+      `obsidian://remotely-save?func=settings&version=localocr&vault=${encodeURIComponent(vault)}&data=${data}`,
+    );
+    // and how its parseUriByHand / importQrCodeUri read it back
+    const params = Object.fromEntries(new URL(res.body.uri).searchParams);
+    expect(params).toEqual({ func: "settings", version: "localocr", vault, data: expect.any(String) });
+    expect(JSON.parse(params.data!)).toEqual(res.body.settings);
+  });
+
+  it("passes region, URL style and prefix through and omits the URI without a vault name", async () => {
+    const { app } = await setup({
+      vault: new MemoryVaultStore("vault/"),
+      vaultConfig: { ...vaultConfig, region: "us-east-1", forcePathStyle: true, prefix: "vault/" },
+    });
+    const res = await get(app).expect(200);
+    expect(res.body.uri).toBeNull();
+    expect(res.body.settings.s3).toMatchObject({ s3Region: "us-east-1", forcePathStyle: true, remotePrefix: "vault/" });
+    expect((await get(app, { vault: "" }).expect(200)).body.uri).toBeNull();
+
+    const tooLong = await get(app, { vault: "x".repeat(201) }).expect(400);
+    expect(tooLong.body.error.code).toBe("invalid_request");
   });
 });
 

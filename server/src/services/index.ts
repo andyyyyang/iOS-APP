@@ -1,7 +1,9 @@
 import type { Classifier } from "../classifier/types.js";
+import type { VaultConfig } from "../config.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { ClassifyService } from "./classify.js";
+import { PairingService } from "./pairing.js";
 import { ScanService } from "./scans.js";
 import { TemplateService } from "./templates.js";
 import { ValidateService } from "./validate.js";
@@ -15,17 +17,24 @@ export interface Services {
   classify: ClassifyService;
   validate: ValidateService;
   vault: VaultService;
+  pairing: PairingService;
 }
 
 export function createServices({
   store,
   classifier,
   vault = null,
+  vaultConfig = null,
+  now = Date.now,
 }: {
   store: Store;
   classifier: Classifier | null;
   /** null when VAULT_S3_* is not configured (vault calls answer 503). */
   vault?: VaultStore | null;
+  /** Bucket credentials for GET /v1/vault/remotely-save; null answers 503 there. */
+  vaultConfig?: VaultConfig | null;
+  /** Clock in milliseconds (pairing code expiry). */
+  now?: () => number;
 }): Services {
   return {
     store,
@@ -33,8 +42,9 @@ export function createServices({
     templates: new TemplateService(store),
     classify: new ClassifyService(store, classifier),
     validate: new ValidateService(store),
-    vault: new VaultService(vault),
+    vault: new VaultService(vault, vaultConfig),
+    pairing: new PairingService({ now }),
   };
 }
 
-export { ClassifyService, ScanService, TemplateService, ValidateService, VaultService };
+export { ClassifyService, PairingService, ScanService, TemplateService, ValidateService, VaultService };

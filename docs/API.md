@@ -22,7 +22,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 - 所有 `/v1/*` 與 `/mcp` 端點都需要 API 金鑰。
 - 標頭：`Authorization: Bearer <API_KEY>`。無法自訂標頭的客戶端可改用查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在必要時使用）。
 - 伺服器環境變數 `API_KEYS` 可放多把金鑰，以逗號分隔（方便替換與分發給不同裝置）。
-- `GET /health` 不需要驗證。
+- `GET /health` 與 `POST /pair`（以配對碼換取金鑰，見「配對」）不需要驗證。
 
 ## 資料格式
 
@@ -148,8 +148,64 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `POST /v1/classify` | 請求 `{"text":"...","templateIds":["receipt","document"]}`（`templateIds` 選用，預設全部樣板）。回傳 `{"templateId":"receipt","confidence":0.93,"probabilities":{...},"provider":"jev"}`。文字命中唯一情境的強特徵（`!` 關鍵字）時直接回傳該情境，`provider` 為 `keywords`，不需要 Jev。其他情況若未設定 Jev 金鑰則回傳 503 `jev_not_configured`，客戶端應改用其他分類器 |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
 | `/v1/vault/*` | Obsidian 筆記檔案，見下方「Vault（Obsidian 筆記）」 |
+| `POST /v1/pairing`、`POST /pair` | 新裝置配對，見下方「配對」 |
 
 `nextCursor` 是不透明字串，客戶端原樣帶回即可。
+
+## 配對
+
+讓 iPhone／iPad 上的 LocalOCR App 不必手動輸入伺服器網址與 API 金鑰：已設定好的裝置（例如 Obsidian 插件的「配對 iPhone／iPad」）建立一次性的配對碼，新裝置掃描 QR Code 或輸入配對碼後換到金鑰。
+
+### `POST /v1/pairing`（需要 API 金鑰）
+
+請求本文選用：
+
+```json
+{ "vaultName": "我的筆記", "notesFolder": "iPad 筆記" }
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `vaultName` | 選用，1–200 字（或 `null`）：新裝置應使用的 Obsidian 保險庫名稱 |
+| `notesFolder` | 選用，1–200 字（或 `null`）：App 存放 iPad 筆記的資料夾 |
+
+回傳 **201**：
+
+```json
+{
+  "code": "K7QM-3XPA",
+  "expiresAt": "2026-10-13T00:10:00.000Z",
+  "pairUrl": "localocr://pair?server=https%3A%2F%2Fxxx.up.railway.app&code=K7QM-3XPA"
+}
+```
+
+- `code`：8 個字元，取自 `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`（沒有 `0`／`O`、`1`／`I`），以加密等級亂數產生，顯示為 `XXXX-XXXX`。
+- 有效 10 分鐘、只能使用一次；換到的是**建立這個配對碼時所用的那把 API 金鑰**。
+- `pairUrl` = `localocr://pair?server=<encodeURIComponent(伺服器網址)>&code=<code>`，供 QR Code 使用。伺服器網址取環境變數 `PUBLIC_URL`（未設定時用請求的 `X-Forwarded-Proto` + `Host`）。
+- 每把金鑰最多同時有 20 個未使用的配對碼，超過時刪除最舊的。配對碼只存在伺服器記憶體中，重新啟動後失效。
+- 錯誤：400 `invalid_request`（欄位格式）、401 `unauthorized`。
+
+### `POST /pair`（不需要 API 金鑰）
+
+```json
+{ "code": "k7qm 3xpa" }
+```
+
+配對碼不分大小寫，空白與 `-` 會被忽略。成功回傳 **200** 並使配對碼失效：
+
+```json
+{ "apiKey": "<API 金鑰>", "vaultName": "我的筆記", "notesFolder": "iPad 筆記" }
+```
+
+`vaultName`、`notesFolder` 建立時沒有提供則為 `null`。之後所有請求帶 `Authorization: Bearer <apiKey>`。
+
+| HTTP | `code` | 說明 |
+| --- | --- | --- |
+| 400 | `invalid_request` | 缺少 `code` 或不是字串 |
+| 404 | `invalid_code` | 配對碼不存在、已過期或已使用過（三者訊息相同：`Invalid or expired pairing code`） |
+| 429 | `rate_limited` | 同一個 IP 10 分鐘內已嘗試 10 次（滑動視窗，附 `Retry-After` 秒數） |
+
+兩個端點的回應都帶 `Cache-Control: no-store`；伺服器不會記錄金鑰或配對碼。
 
 ## MCP（`/mcp`）
 
@@ -216,6 +272,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `GET /v1/vault/file?path=` | 下載原始位元組。回應標頭：`Content-Type`（依副檔名）、`ETag`（含引號，例如 `"5d41…"`）、`Last-Modified`、`X-Vault-Mtime`（毫秒）。不存在時 404 `not_found` |
 | `PUT /v1/vault/file?path=` | 以請求本文（原始位元組，任何 Content-Type 都原樣儲存，最多 25 MB）新增或整檔取代。選用標頭：`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`（毫秒，預設為現在）。新增回傳 **201**、覆寫回傳 **200**，本文為 `{"path","size","mtime","etag"}`，並附 `ETag` 標頭 |
 | `DELETE /v1/vault/file?path=` | 刪除，回傳 204；選用 `If-Match`。不存在時 404 `not_found`（不論是否帶 `If-Match`） |
+| `GET /v1/vault/remotely-save?vault=` | Remotely Save 的設定與匯入網址，見下方「Remotely Save 設定」 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 在 `.md`、`.txt`、`.json`、`.canvas` 檔案中比對檔名與內容（不分大小寫，`q` 為一般文字而非正規表示式），略過 `.obsidian` 等以 `.` 開頭的資料夾與檔案。依 `mtime` 由新到舊，最多檢查最新的 3000 個檔案，超過 1 MB 的檔案只比對檔名。`limit` 預設 20、上限 100。回傳 `{"items":[{"path","mtime","snippet"}]}`，`snippet` 是第一個內容符合處前後約 120 字（只有檔名符合時為檔案開頭；空白會合併、截斷處加 `…`） |
 
 `Content-Type` 對照（`GET` 回應與寫入儲存桶時使用）：
@@ -247,6 +304,42 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 - 儲存桶不支援條件式寫入，伺服器是「先 HEAD 比對、再 PUT」，兩者之間仍有極短的競爭窗口。
 - Remotely Save 本身不檢查 etag；同一份筆記同時在 Obsidian 與 App 修改時，由 Remotely Save 的衝突處理設定決定保留哪一份。
 
+### Remotely Save 設定
+
+`GET /v1/vault/remotely-save?vault=<Obsidian 保險庫名稱>` 回傳讓社群插件 Remotely Save 一次設定好同步的資料（Obsidian 插件的「設定 Remotely Save（同步 vault）」使用）。伺服器未設定 `VAULT_S3_*` 時回傳 503 `vault_not_configured`；回應帶 `Cache-Control: no-store`，**內含儲存桶金鑰**，伺服器不會記錄。
+
+```json
+{
+  "settings": {
+    "serviceType": "s3",
+    "s3": {
+      "s3Endpoint": "https://t3.storageapi.dev",
+      "s3Region": "auto",
+      "s3AccessKeyID": "<VAULT_S3_ACCESS_KEY_ID>",
+      "s3SecretAccessKey": "<VAULT_S3_SECRET_ACCESS_KEY>",
+      "s3BucketName": "obsidian-vault-jdhhd8oe18xi",
+      "partsConcurrency": 20,
+      "forcePathStyle": false,
+      "remotePrefix": "",
+      "useAccurateMTime": true,
+      "reverseProxyNoSignUrl": "",
+      "generateFolderObject": false,
+      "bypassCorsLocally": true
+    },
+    "autoRunEveryMilliseconds": 300000,
+    "initRunAfterMilliseconds": 10000,
+    "syncOnSaveAfterMilliseconds": 1000,
+    "agreeToUseSyncV3": true
+  },
+  "uri": "obsidian://remotely-save?func=settings&version=localocr&vault=%E6%88%91%E7%9A%84%E7%AD%86%E8%A8%98&data=%7B%22serviceType%22..."
+}
+```
+
+- `s3` 來自伺服器的 `VAULT_S3_*` 與 `VAULT_PREFIX`。Remotely Save 匯入時是淺層合併（`Object.assign({}, 目前設定, 匯入的設定)`），所以 `s3` 一律完整提供，會整個取代裝置上原本的 S3 設定；沒有列出的設定（例如加密密碼）維持不變。
+- 同步排程取 Remotely Save 設定選單中的值：每 5 分鐘自動同步（`300000`）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。
+- `uri` 與 Remotely Save 自己的「匯出 QR Code」相同格式：`obsidian://remotely-save?func=settings&version=localocr&vault=<encodeURIComponent(vault)>&data=<encodeURIComponent(JSON.stringify(settings))>`。Remotely Save 只接受與目前保險庫同名的 `vault`；沒有帶 `vault` 參數時 `uri` 為 `null`。
+- 匯入後要重新啟動 Obsidian，自動同步排程才會生效（Remotely Save 只在啟動時建立排程）。
+
 ### 錯誤碼
 
 錯誤格式同其他端點：`{"error":{"code","message"}}`（412 另含 `currentEtag`）。
@@ -254,13 +347,13 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | HTTP | `code` | 說明 |
 | --- | --- | --- |
 | 400 | `invalid_path` | `path` 或 `prefix` 不合法（見「路徑」） |
-| 400 | `invalid_request` | `recursive`、`q`、`limit` 或 `X-Vault-Mtime`（須為正整數毫秒）格式錯誤 |
+| 400 | `invalid_request` | `recursive`、`q`、`limit`、`vault`（最多 200 字）或 `X-Vault-Mtime`（須為正整數毫秒）格式錯誤 |
 | 401 | `unauthorized` | 缺少或錯誤的 API 金鑰 |
 | 404 | `not_found` | 檔案不存在 |
 | 412 | `precondition_failed` | `If-Match`／`If-None-Match` 不成立；含 `currentEtag` |
 | 413 | `payload_too_large` | 上傳超過 25 MB |
 | 502 | `vault_storage_error` | 儲存桶請求失敗（金鑰、bucket 名稱、網路），訊息含 S3 錯誤名稱，例如 `AccessDenied`、`SignatureDoesNotMatch` |
-| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*` |
+| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*`（`GET /v1/vault/remotely-save` 亦同） |
 
 ### MCP 工具
 
@@ -275,7 +368,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 
 ### 伺服器環境變數
 
-`VAULT_S3_ENDPOINT`、`VAULT_S3_BUCKET`、`VAULT_S3_ACCESS_KEY_ID`、`VAULT_S3_SECRET_ACCESS_KEY` 四個都有值時才啟用 Vault；只設定部分時伺服器會記錄缺少的變數名稱（不會記錄值）。金鑰不會出現在任何回應或紀錄中。
+`VAULT_S3_ENDPOINT`、`VAULT_S3_BUCKET`、`VAULT_S3_ACCESS_KEY_ID`、`VAULT_S3_SECRET_ACCESS_KEY` 四個都有值時才啟用 Vault；只設定部分時伺服器會記錄缺少的變數名稱（不會記錄值）。金鑰不會出現在任何紀錄中，也只有 `GET /v1/vault/remotely-save`（需要 API 金鑰）會回傳。
 
 | 變數 | 預設 | Railway 參照（儲存桶名為 `obsidian-vault` 時） |
 | --- | --- | --- |

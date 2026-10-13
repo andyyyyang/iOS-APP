@@ -30,6 +30,8 @@ import {
 	type HttpFn,
 } from "./sync-core";
 import type { Scan, SyncCursorState, WriteOutcome } from "./types";
+import { createPairingCode, describeSetupError, fetchRemotelySaveSetup } from "./device-setup";
+import { PairingModal, RemotelySaveModal } from "./setup-modals";
 
 interface SyncMeta {
 	lastSyncAt: string | null;
@@ -55,6 +57,7 @@ const obsidianHttp: HttpFn = async (request) => {
 		url: request.url,
 		method: request.method,
 		headers: request.headers,
+		body: request.body,
 		throw: false,
 	});
 	let text = "";
@@ -105,6 +108,17 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			callback: async () => {
 				if (await this.resetProgress(false)) await this.sync({ manual: true });
 			},
+		});
+
+		this.addCommand({
+			id: "pair-device",
+			name: "配對 iPhone／iPad",
+			callback: () => void this.openPairing(),
+		});
+		this.addCommand({
+			id: "setup-remotely-save",
+			name: "設定 Remotely Save（同步 vault）",
+			callback: () => void this.openRemotelySaveSetup(),
 		});
 
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onFileRenamed(file, oldPath)));
@@ -224,6 +238,36 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			);
 		} catch (error) {
 			new Notice(`LocalOCR：伺服器可連線，但讀取樣板失敗\n${describeError(error)}`, 10_000);
+		}
+	}
+
+	/** 「配對 iPhone／iPad」: a single-use code that gives the LocalOCR app this server and API key. */
+	async openPairing(): Promise<void> {
+		if (!this.isConfigured()) {
+			new Notice("LocalOCR：請先在設定中填入伺服器網址與 API 金鑰");
+			return;
+		}
+		const client = this.createClient();
+		const createCode = () => createPairingCode(client, this.app.vault.getName());
+		try {
+			new PairingModal(this.app, await createCode(), createCode).open();
+		} catch (error) {
+			new Notice(`LocalOCR：無法產生配對碼\n${describeSetupError(error)}`, 10_000);
+		}
+	}
+
+	/** 「設定 Remotely Save（同步 vault）」: the server's bucket settings for Remotely Save, here or by QR code. */
+	async openRemotelySaveSetup(): Promise<void> {
+		if (!this.isConfigured()) {
+			new Notice("LocalOCR：請先在設定中填入伺服器網址與 API 金鑰");
+			return;
+		}
+		const vaultName = this.app.vault.getName();
+		try {
+			const setup = await fetchRemotelySaveSetup(this.createClient(), vaultName);
+			new RemotelySaveModal(this.app, setup, vaultName).open();
+		} catch (error) {
+			new Notice(`LocalOCR：無法取得 Remotely Save 設定\n${describeSetupError(error)}`, 10_000);
 		}
 	}
 
