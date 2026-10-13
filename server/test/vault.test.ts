@@ -392,6 +392,13 @@ describe("vault MCP tools", () => {
     expect(again.isError).toBe(true);
     expect(parse(again).error).toMatchObject({ code: "precondition_failed", currentEtag: md5(note) });
 
+    // Without ifMatch an existing note is never overwritten, even without createOnly
+    const blind = await client.callTool({ name: "vault_write", arguments: { path: "Inbox/想法.md", content: "x" } });
+    expect(blind.isError).toBe(true);
+    expect(parse(blind).error).toMatchObject({ code: "precondition_failed", currentEtag: md5(note) });
+    const fresh = await client.callTool({ name: "vault_write", arguments: { path: "Inbox/新的.md", content: "新筆記" } });
+    expect(parse(fresh)).toMatchObject({ path: "Inbox/新的.md", created: true });
+
     const read = await client.callTool({ name: "vault_read", arguments: { path: "Inbox/想法.md" } });
     expect(read.isError).toBeFalsy();
     const [meta, text] = texts(read);
@@ -416,7 +423,7 @@ describe("vault MCP tools", () => {
     const list = parse(await client.callTool({ name: "vault_list", arguments: {} }));
     expect(list).toEqual({ items: [], folders: ["Inbox/"] });
     const all = parse(await client.callTool({ name: "vault_list", arguments: { recursive: true } }));
-    expect(all.items.map((item: { path: string }) => item.path)).toEqual(["Inbox/想法.md"]);
+    expect(all.items.map((item: { path: string }) => item.path)).toEqual(["Inbox/想法.md", "Inbox/新的.md"]);
 
     const search = parse(await client.callTool({ name: "vault_search", arguments: { query: "第二版" } }));
     expect(search.items).toHaveLength(1);

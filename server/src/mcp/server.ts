@@ -306,25 +306,26 @@ export function createMcpServer(services: Services): McpServer {
       description:
         "寫入（新增或整檔取代）Obsidian vault 中的文字檔，例如 Markdown 筆記；下次 Remotely Save 同步時就會出現在使用者的所有裝置上。" +
         "修改既有筆記：先 vault_read，保留原有的 frontmatter（開頭的 --- 區塊）與其他內容，只改需要改的部分，並帶 ifMatch=讀取時的 etag；" +
-        "若檔案在這之間被改過會回傳 precondition_failed（含 currentEtag），請重新讀取、合併後再寫。新增筆記請用 createOnly=true，避免覆寫既有檔案。" +
+        "若檔案在這之間被改過會回傳 precondition_failed（含 currentEtag），請重新讀取、合併後再寫。沒有 ifMatch 時只會新增：檔案已存在就回傳 precondition_failed，不會覆寫。" +
         "回傳 { path, size, mtime, etag, created }。\n" +
         "Write (create or fully replace) a text file in the Obsidian vault, e.g. a Markdown note; it reaches all of the user's devices on the next Remotely Save sync. " +
         "To edit an existing note: vault_read it first, preserve its frontmatter (the leading --- block) and all other content, change only what is needed, " +
         "and pass ifMatch with the etag from the read. If the file changed in between you get precondition_failed (with currentEtag): re-read, merge and write again. " +
-        "For a new note use createOnly=true so an existing file is never overwritten. Returns { path, size, mtime, etag, created }.",
+        "Without ifMatch the call only creates: an existing file is never overwritten and you get precondition_failed instead. Returns { path, size, mtime, etag, created }.",
       inputSchema: {
         path: vaultPath,
         content: z.string().describe("完整的新檔案內容（UTF-8） The complete new file content (UTF-8)"),
         ifMatch: z.string().optional().describe("vault_read 取得的 etag；不符時不寫入 Etag from vault_read; the write fails if the file changed"),
-        createOnly: z.boolean().optional().describe("只新增：檔案已存在時失敗 Only create; fail if the file already exists"),
+        createOnly: z.boolean().optional().describe("只新增（沒有 ifMatch 時的預設行為） Only create; the default when ifMatch is absent"),
       },
       annotations: { idempotentHint: true },
     },
     ({ path, content, ifMatch, createOnly }) =>
       run(async () => {
+        // 覆寫既有筆記一定要帶讀取時的 etag：避免 agent 沒讀過就整檔取代使用者的筆記
         const { value, created } = await services.vault.write(path, Buffer.from(content, "utf8"), {
           ifMatch,
-          ifNoneMatch: createOnly ? "*" : undefined,
+          ifNoneMatch: createOnly || !ifMatch ? "*" : undefined,
         });
         return { ...value, created };
       }),

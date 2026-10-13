@@ -268,7 +268,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | --- | --- | --- |
 | `vault_list` | `prefix?`, `recursive?`（預設 `false`） | 同 `GET /v1/vault/files` |
 | `vault_read` | `path` | 文字檔回傳兩段內容：第一段 JSON `{"path","size","mtime","etag","contentType"}`，第二段是檔案原文。圖片、PDF、含 NUL 或非 UTF-8 的檔案回傳 `{…, "binary": true}`，超過 1 MB 回傳 `{…, "tooLarge": true}`，都不含內容 |
-| `vault_write` | `path`, `content`, `ifMatch?`, `createOnly?` | 以 UTF-8 文字整檔寫入（`mtime` 為現在）；`ifMatch` 同 `If-Match`，`createOnly: true` 同 `If-None-Match: *`。回傳 VaultEntry 加上 `created` |
+| `vault_write` | `path`, `content`, `ifMatch?`, `createOnly?` | 以 UTF-8 文字整檔寫入（`mtime` 為現在）；`ifMatch` 同 `If-Match`。**沒有 `ifMatch` 時只會新增**（同 `If-None-Match: *`），檔案已存在就回傳 `precondition_failed`，agent 不會在沒讀過的情況下覆寫筆記。回傳 VaultEntry 加上 `created` |
 | `vault_search` | `query`, `prefix?`, `limit?` | 同 `GET /v1/vault/search` |
 
 刻意**不提供刪除工具**，避免代理誤刪筆記。工具說明要求 Claude：這些是使用者經 Remotely Save 同步的 Markdown 筆記；修改前先 `vault_read`，保留 frontmatter 與既有內容，寫入時帶 `ifMatch`（讀取時的 etag），新增筆記用 `createOnly`。

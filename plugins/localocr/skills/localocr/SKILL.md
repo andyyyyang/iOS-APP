@@ -48,7 +48,7 @@ The server also holds the user's **Obsidian vault** as plain files in a Railway 
 **Work with Obsidian notes**:
 1. Find notes with `vault_search` (content) or `vault_list` (folders). Paths are vault-relative, e.g. `11 SOP/fv60-廠商請款-紀錄.json`.
 2. `vault_read` before changing a note; keep its frontmatter and existing content, change only what the user asked.
-3. `vault_write` with `ifMatch` set to the etag you read. On a precondition failure the note changed in the meantime — read it again and redo the edit; never blindly overwrite. Use `createOnly: true` for new notes.
+3. `vault_write` with `ifMatch` set to the etag you read. On a precondition failure the note changed in the meantime — read it again and redo the edit. Without `ifMatch` the tool only creates new notes (an existing file returns `precondition_failed` with its `currentEtag`), so you must read a note before replacing it.
 4. Changes reach Obsidian on the next Remotely Save sync (on open, on save, or every few minutes).
 
 **Report or export**: use `list_scans` with `templateId` (e.g. `receipt`) and `updatedAfter`, read `data`, then summarize (totals per store, contacts list, upcoming events) or convert to CSV/Markdown as asked.
