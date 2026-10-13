@@ -44,6 +44,18 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink {
+                        NotesSettingsView()
+                    } label: {
+                        LabeledContent("筆記與 Obsidian", value: NotesSettings.vaultFolder)
+                    }
+                } header: {
+                    Text("筆記")
+                } footer: {
+                    Text("手寫筆記會連同 AI 摘要、手寫辨識文字與每頁圖片存進 Obsidian vault；vault 存在 Railway 空間，由 Remotely Save 同步到 Mac、iPhone、iPad。")
+                }
+
+                Section {
+                    NavigationLink {
                         ServerSettingsView()
                     } label: {
                         LabeledContent("伺服器與同步", value: ServerSettings.normalizedURL(baseURL)?.host() ?? "未設定")

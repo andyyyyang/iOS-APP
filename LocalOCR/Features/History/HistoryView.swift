@@ -7,6 +7,7 @@ struct HistoryView: View {
     @Query(sort: \ScanRecord.createdAt, order: .reverse) private var records: [ScanRecord]
     @State private var searchText = ""
     @State private var confirmsDeleteAll = false
+    @State private var selection: ScanRecord?
 
     private var filteredRecords: [ScanRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,13 +20,11 @@ struct HistoryView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        // iPad 左邊列表、右邊內容；iPhone 自動變成一層層進入
+        NavigationSplitView {
             content
                 .navigationTitle("紀錄")
-                .navigationDestination(for: ScanRecord.self) { record in
-                    HistoryDetailView(record: record)
-                }
-                .searchable(text: $searchText, prompt: "搜尋文字或 JSON")
+                .searchable(text: $searchText, prompt: "搜尋名稱、文字或 JSON")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("全部刪除", role: .destructive) {
@@ -38,6 +37,15 @@ struct HistoryView: View {
                     Button("全部刪除", role: .destructive, action: deleteAll)
                 }
                 .task { fillMissingDisplayNames() }
+        } detail: {
+            NavigationStack {
+                if let selection {
+                    HistoryDetailView(record: selection)
+                        .id(selection.persistentModelID)
+                } else {
+                    ContentUnavailableView("選擇一筆紀錄", systemImage: "doc.text.magnifyingglass")
+                }
+            }
         }
     }
 
@@ -52,11 +60,10 @@ struct HistoryView: View {
         } else if filteredRecords.isEmpty {
             ContentUnavailableView.search(text: searchText)
         } else {
-            List {
+            List(selection: $selection) {
                 ForEach(filteredRecords) { record in
-                    NavigationLink(value: record) {
-                        HistoryRow(record: record)
-                    }
+                    HistoryRow(record: record)
+                        .tag(record)
                 }
                 .onDelete(perform: delete)
             }
@@ -67,6 +74,7 @@ struct HistoryView: View {
     private func delete(at offsets: IndexSet) {
         let items = filteredRecords
         for index in offsets {
+            if items[index] == selection { selection = nil }
             PageImageStore.remove(for: items[index].pagesID)
             modelContext.delete(items[index])
         }
@@ -88,6 +96,7 @@ struct HistoryView: View {
     }
 
     private func deleteAll() {
+        selection = nil
         for record in records {
             PageImageStore.remove(for: record.pagesID)
             modelContext.delete(record)

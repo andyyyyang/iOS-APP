@@ -3,26 +3,35 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(TemplateLibrary.self) private var library
-    @State private var selectedTab: AppTab = .scan
+    @State private var selectedTab: AppTab = UIDevice.current.userInterfaceIdiom == .pad ? .notes : .scan
 
     var body: some View {
+        // iPad 顯示為側邊欄（可收合成上方分頁列），iPhone 顯示為底部分頁列
         TabView(selection: $selectedTab) {
-            ScanView(selectedTab: $selectedTab)
-                .tabItem { Label("掃描", systemImage: "doc.text.viewfinder") }
-                .tag(AppTab.scan)
-
-            LiveScanView()
-                .tabItem { Label("相機", systemImage: "camera") }
-                .tag(AppTab.live)
-
-            HistoryView()
-                .tabItem { Label("紀錄", systemImage: "clock.arrow.circlepath") }
-                .tag(AppTab.history)
-
-            SettingsView()
-                .tabItem { Label("設定", systemImage: "gearshape") }
-                .tag(AppTab.settings)
+            Tab("筆記", systemImage: "pencil.and.scribble", value: AppTab.notes) {
+                NotesLibraryView()
+            }
+            Tab("Obsidian", systemImage: "books.vertical", value: AppTab.vault) {
+                VaultBrowserView()
+            }
+            TabSection("掃描") {
+                Tab("掃描", systemImage: "doc.text.viewfinder", value: AppTab.scan) {
+                    ScanView(selectedTab: $selectedTab)
+                }
+                Tab("相機", systemImage: "camera", value: AppTab.live) {
+                    LiveScanView()
+                }
+                // iPhone 的分頁列放不下：相機可從「掃描」頁進入
+                .defaultVisibility(.hidden, for: .tabBar)
+                Tab("紀錄", systemImage: "clock.arrow.circlepath", value: AppTab.history) {
+                    HistoryView()
+                }
+            }
+            Tab("設定", systemImage: "gearshape", value: AppTab.settings) {
+                SettingsView()
+            }
         }
+        .tabViewStyle(.sidebarAdaptable)
         .task { await refreshServerTemplates() }
     }
 
@@ -38,5 +47,5 @@ struct ContentView: View {
     ContentView()
         .environment(TemplateLibrary.shared)
         .environment(ScanDraft())
-        .modelContainer(for: ScanRecord.self, inMemory: true)
+        .modelContainer(for: [ScanRecord.self, Notebook.self], inMemory: true)
 }

@@ -16,7 +16,8 @@ struct ScanView: View {
     @State private var showsServer = false
     @State private var toast: String?
 
-    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    /// iPhone 兩欄，iPad 依寬度增加欄數。
+    private let columns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
 
     var body: some View {
         NavigationStack {
@@ -32,6 +33,8 @@ struct ScanView: View {
                     scenarioSection
                 }
                 .padding()
+                .frame(maxWidth: 960)
+                .frame(maxWidth: .infinity)
             }
             .screenBackground()
             .overlay(alignment: .bottomTrailing) { toolsButton }
