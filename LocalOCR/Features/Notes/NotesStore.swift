@@ -29,6 +29,8 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     let tasks: [NoteTask]
     /// [[連結]] 的目標名稱（關聯圖、反向連結）。
     let links: [String]
+    /// false：只在 Railway 空間（按需模式還沒打開過），只知道路徑與修改時間，打開時下載。
+    var isLocal = true
 
     var id: String { path }
     var isNotebook: Bool { notebookID != nil }
@@ -66,8 +68,9 @@ struct VaultItem: Identifiable, Hashable, Sendable {
     }
 }
 
-/// 筆記的索引與操作。檔案是唯一的資料來源（本機 vault 鏡像），這裡只是方便查詢的快取。
+/// 筆記的索引與操作。檔案是唯一的資料來源（本機 vault 加上遠端清單），這裡只是方便查詢的快取。
 /// 筆記可以放在 vault 的任何資料夾；筆記以外的檔案也會列在資料夾中。
+/// 還沒下載的筆記也會列出（只有標題與修改時間）；內文搜尋、標籤、待辦、連結只涵蓋這台裝置上的筆記。
 @MainActor
 @Observable
 final class NotesStore {
@@ -119,23 +122,42 @@ final class NotesStore {
         }.value
         cache = Dictionary(summaries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         self.contents = contents
-        notes = summaries.sorted { $0.mtime > $1.mtime }
-        linkIndex = NoteLinks.index(notes)
 
-        // 尚未下載的雲端檔案也列出來（以及它們所在的資料夾）
-        let localPaths = Set(localFiles.map(\.path))
-        let pending = VaultSyncCenter.shared.pendingFiles
-            .filter { !localPaths.contains($0.path) && !$0.path.lowercased().hasSuffix(".md") }
+        // 還沒下載的檔案也列出來（以及它們所在的資料夾）：筆記只有標題，其他檔案打開時下載
+        let localPaths = Set(localFiles.map(\.path)).union(summaries.map(\.path))
+        let remoteOnly = VaultSyncCenter.shared.pendingFiles.filter { !localPaths.contains($0.path) && !LocalVault.isHidden($0.path) }
+        let remoteNotes = remoteOnly.filter { $0.path.lowercased().hasSuffix(".md") }.map { NotesStore.remoteSummary(path: $0.path, mtime: $0.mtime) }
+        let pending = remoteOnly
+            .filter { !$0.path.lowercased().hasSuffix(".md") }
             .map { VaultItem(path: $0.path, size: $0.size, mtime: $0.mtime, isLocal: false) }
+        notes = (summaries + remoteNotes).sorted { $0.mtime > $1.mtime }
+        linkIndex = NoteLinks.index(notes)
         files = (localFiles + pending).filter { !$0.isInternal }
         var allFolders = Set(localFolders)
-        for item in pending {
-            var folder = item.folder
+        for entry in remoteOnly {
+            var folder = (entry.path as NSString).deletingLastPathComponent
             while !folder.isEmpty && allFolders.insert(folder).inserted {
                 folder = (folder as NSString).deletingLastPathComponent
             }
         }
         folders = allFolders.filter { !LocalVault.isHidden($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// 還沒下載的筆記：只有路徑與修改時間。
+    nonisolated static func remoteSummary(path: String, mtime: Date) -> NoteSummary {
+        NoteSummary(
+            path: path,
+            title: ((path as NSString).lastPathComponent as NSString).deletingPathExtension,
+            folder: (path as NSString).deletingLastPathComponent,
+            mtime: mtime,
+            snippet: "",
+            tags: [],
+            notebookID: nil,
+            firstEmbed: nil,
+            tasks: [],
+            links: [],
+            isLocal: false
+        )
     }
 
     nonisolated static func summarize(path: String, mtime: Date, text: String) -> NoteSummary {
@@ -286,12 +308,13 @@ final class NotesStore {
 
     // MARK: - 操作
 
-    /// 不重複的路徑：「資料夾/標題.md」，同名時加上編號。
+    /// 不重複的路徑：「資料夾/標題.md」，同名時加上編號（也避開只在遠端、還沒下載的檔案）。
     func uniquePath(folder: String, title: String, extension ext: String = "md") -> String {
         let base = (folder.isEmpty ? "" : folder + "/") + NotebookMarkdown.fileName(for: title)
+        let remotePaths = Set(VaultSyncCenter.shared.pendingFiles.map(\.path))
         var candidate = "\(base).\(ext)"
         var number = 2
-        while vault.exists(candidate) {
+        while vault.exists(candidate) || remotePaths.contains(LocalVault.normalize(candidate)) {
             candidate = "\(base) \(number).\(ext)"
             number += 1
         }
@@ -305,10 +328,12 @@ final class NotesStore {
         return path
     }
 
+    /// 存檔並在編輯當下上傳這個檔案。
     func save(_ text: String, to path: String) throws {
         guard vault.readText(path) != text else { return }
         try vault.writeText(text, to: path)
-        changed()
+        VaultSyncCenter.shared.fileDidChange(path)
+        Task { await reload() }
     }
 
     /// 改名：同步時舊檔會從 Railway 空間刪除、新檔上傳。
@@ -323,6 +348,14 @@ final class NotesStore {
     }
 
     func delete(_ path: String) throws {
+        guard vault.exists(path) else {
+            // 還沒下載的筆記：同步時直接從遠端刪除
+            Task {
+                await VaultSyncCenter.shared.deleteRemoteOnly(path)
+                await reload()
+            }
+            return
+        }
         try vault.delete(path)
         changed()
     }

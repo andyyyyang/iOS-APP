@@ -12,6 +12,26 @@ protocol VaultRemote: Sendable {
 
 extension VaultClient: VaultRemote {}
 
+/// 這台裝置上保留哪些 vault 檔案。
+enum VaultDownloadPolicy: String, CaseIterable, Identifiable, Sendable {
+    /// 只同步檔案清單，打開時才下載、編輯當下上傳；最近沒打開的檔案自動從這台裝置移除（預設，最省空間）。
+    case onDemand
+    /// 筆記等文字檔全部下載，圖片、PDF 等打開時才下載。
+    case notes
+    /// 全部下載（超過 `VaultSyncEngine.autoDownloadLimit` 的檔案除外）。
+    case everything
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .onDemand: return "打開時才下載"
+        case .notes: return "下載所有筆記"
+        case .everything: return "下載所有檔案"
+        }
+    }
+}
+
 enum VaultSyncError: LocalizedError {
     case remoteLooksEmpty
     case tooManyDeletions(local: Int, remote: Int)
@@ -29,7 +49,8 @@ enum VaultSyncError: LocalizedError {
 /// 本機 vault 與 Railway 空間的雙向同步（三方比對）：
 /// 以上次同步時記下的 ETag（遠端）與內容雜湊（本機）判斷哪一邊改過；
 /// 兩邊都改過時保留兩份（本機版本另存為「（iPad 衝突 …）」），不會覆蓋任何一邊的內容。
-/// 整個 vault 都會同步（. 開頭的 .obsidian、.trash 除外）；關閉「下載所有檔案」時，圖片、PDF 等附件需要時才下載。
+/// 整個 vault 都會同步（. 開頭的 .obsidian、.trash 除外）；哪些檔案下載到這台裝置依 `VaultDownloadPolicy`。
+/// 按需模式下這台裝置只是快取：遠端清單記在檔案中（離線也能瀏覽），移除快取的檔案只刪本機、不會刪到遠端。
 actor VaultSyncEngine {
     struct FileState: Codable, Equatable {
         var etag: String
@@ -37,6 +58,16 @@ actor VaultSyncEngine {
         /// 記錄時本機檔案的修改時間（秒）與大小：兩者都沒變就不必重新計算雜湊，大型 vault 每次同步不用讀遍所有檔案。
         var mtime: Double?
         var size: Int?
+        /// 上次在這台裝置上打開或編輯的時間（秒）；按需模式依此決定保留哪些檔案。
+        var opened: Double?
+    }
+
+    /// 遠端清單存檔用的格式。
+    private struct IndexEntry: Codable {
+        let path: String
+        let size: Int
+        let mtime: Double
+        let etag: String
     }
 
     typealias ProgressHandler = @Sendable (_ done: Int, _ total: Int) -> Void
@@ -60,16 +91,23 @@ actor VaultSyncEngine {
 
     let vault: LocalVault
     private let stateURL: URL
+    private let indexURL: URL
     private var state: [String: FileState]
-    /// 上次同步時遠端的檔案（包含尚未下載的附件），用來依檔名找附件。
+    /// 遠端的檔案（上次同步時的清單，之後上傳、刪除時更新；包含尚未下載的檔案），存在檔案中，啟動時就能顯示。
     private(set) var remoteFiles: [String: VaultEntry] = [:]
     private let now: @Sendable () -> Date
 
     init(vault: LocalVault, stateURL: URL, now: @escaping @Sendable () -> Date = { Date() }) {
         self.vault = vault
         self.stateURL = stateURL
+        indexURL = stateURL.deletingLastPathComponent().appending(path: stateURL.deletingPathExtension().lastPathComponent + "-remote.json")
         self.now = now
         state = (try? JSONDecoder().decode([String: FileState].self, from: Data(contentsOf: stateURL))) ?? [:]
+        let index = (try? JSONDecoder().decode([IndexEntry].self, from: Data(contentsOf: indexURL))) ?? []
+        remoteFiles = Dictionary(
+            index.map { (LocalVault.normalize($0.path), VaultEntry(path: $0.path, size: $0.size, mtime: Date(timeIntervalSince1970: $0.mtime), etag: $0.etag)) },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     var trackedPaths: Set<String> { Set(state.keys) }
@@ -81,9 +119,13 @@ actor VaultSyncEngine {
     }
 
     /// 遠端新出現的檔案是否在同步時直接下載。
-    static func shouldDownload(_ entry: VaultEntry, all: Bool) -> Bool {
+    static func shouldDownload(_ entry: VaultEntry, policy: VaultDownloadPolicy) -> Bool {
         guard entry.size <= autoDownloadLimit else { return false }
-        return all || essentialExtensions.contains((entry.path as NSString).pathExtension.lowercased())
+        switch policy {
+        case .onDemand: return false
+        case .notes: return essentialExtensions.contains((entry.path as NSString).pathExtension.lowercased())
+        case .everything: return true
+        }
     }
 
     static func contentType(for path: String) -> String {
@@ -124,12 +166,12 @@ actor VaultSyncEngine {
     // MARK: - 同步
 
     /// - Parameters:
-    ///   - downloadAll: 遠端新出現的檔案全部下載；false 時只下載筆記等文字檔，其他需要時才下載。
+    ///   - policy: 遠端新出現的檔案是否下載（這台裝置上已有的檔案一律保持最新）。
     ///   - progress: 下載進度（已完成、總數）。
     func sync(
         remote: any VaultRemote,
         allowMassDeletion: Bool = false,
-        downloadAll: Bool = true,
+        policy: VaultDownloadPolicy = .everything,
         progress: ProgressHandler? = nil
     ) async throws -> Report {
         let listing = try await remote.list(prefix: "", recursive: true)
@@ -158,7 +200,7 @@ actor VaultSyncEngine {
             let base = state[path]
             switch (remoteEntry, local, base) {
             case let (remoteEntry?, nil, nil):
-                if Self.shouldDownload(remoteEntry, all: downloadAll) { downloads.append(remoteEntry) }
+                if Self.shouldDownload(remoteEntry, policy: policy) { downloads.append(remoteEntry) }
             case let (remoteEntry?, _?, nil):
                 adoptions.append(remoteEntry)
             case let (remoteEntry?, local?, base?):
@@ -211,9 +253,11 @@ actor VaultSyncEngine {
             do {
                 try await remote.delete(path, ifMatch: etag)
                 state[path] = nil
+                remoteFiles[path] = nil
                 report.deleted += 1
             } catch VaultError.notFound {
                 state[path] = nil
+                remoteFiles[path] = nil
             } catch VaultError.conflict {
                 // 刪除前遠端剛好被修改：下次同步會重新下載
             }
@@ -247,20 +291,104 @@ actor VaultSyncEngine {
         report.downloaded += try await download(downloads, from: remote, progress: progress)
         report.uploaded += try await upload(uploads, to: remote)
         saveState()
+        saveIndex()
         return report
     }
 
-    /// 需要時才下載的附件（圖片等）：回傳本機檔案位置。
+    /// 打開時才下載的檔案：回傳本機檔案位置，並記下打開的時間。
     func ensureLocal(_ path: String, remote: any VaultRemote) async throws -> URL {
         let path = LocalVault.normalize(path)
-        if vault.exists(path) { return vault.url(for: path) }
+        if vault.exists(path) {
+            markOpened(path)
+            return vault.url(for: path)
+        }
         let file = try await remote.read(path)
         try vault.write(file.data, to: path)
         if let etag = file.etag ?? remoteFiles[path]?.etag {
-            record(path, etag: etag, hash: LocalVault.hash(file.data))
+            record(path, etag: etag, hash: LocalVault.hash(file.data), opened: true)
             saveState()
         }
         return vault.url(for: path)
+    }
+
+    /// 記下在這台裝置上打開了這個檔案（按需模式最近打開的檔案會保留）。
+    func markOpened(_ path: String) {
+        let path = LocalVault.normalize(path)
+        guard state[path] != nil else { return }
+        state[path]?.opened = now().timeIntervalSince1970
+        saveState()
+    }
+
+    // MARK: - 編輯當下同步
+
+    /// 編輯中的檔案立即上傳（不必列出整個遠端）。遠端同時也改過時上傳會被拒絕，交給下次完整同步（兩份都保留）。
+    @discardableResult
+    func push(_ paths: [String], remote: any VaultRemote) async throws -> Int {
+        var items: [(path: String, base: FileState?)] = []
+        for path in Set(paths.map(LocalVault.normalize)) {
+            guard let local = localFile(path) else { continue }
+            let base = state[path]
+            if let base, !hasLocalChanges(local, since: base) { continue }
+            // 遠端已有同名檔案但沒有同步紀錄：交給完整同步比對內容
+            if base == nil, remoteFiles[path] != nil { continue }
+            items.append((path, base))
+        }
+        guard !items.isEmpty else { return 0 }
+        let count = try await upload(items, to: remote)
+        saveState()
+        saveIndex()
+        return count
+    }
+
+    /// 打開中的檔案：遠端有新版本、這台裝置上沒有未上傳的修改時下載新版本（只列出它所在的資料夾）。
+    /// 回傳是否更新了本機檔案。
+    func refresh(_ path: String, remote: any VaultRemote) async throws -> Bool {
+        let path = LocalVault.normalize(path)
+        let folder = (path as NSString).deletingLastPathComponent
+        let listing = try await remote.list(prefix: folder.isEmpty ? "" : folder + "/", recursive: false)
+        guard let entry = listing.files.first(where: { LocalVault.normalize($0.path) == path }) else { return false }
+        remoteFiles[path] = entry
+        guard let base = state[path], Self.normalizeETag(entry.etag) != base.etag else { return false }
+        if let local = localFile(path), hasLocalChanges(local, since: base) { return false }
+        let file = try await remote.read(path)
+        try vault.write(file.data, to: path)
+        record(path, etag: file.etag ?? entry.etag, hash: LocalVault.hash(file.data))
+        saveState()
+        saveIndex()
+        return true
+    }
+
+    /// App 要整個重新產生的檔案（例如手寫筆記的圖片），這台裝置上可能沒有：先記下遠端目前的版本，
+    /// 之後寫入的內容會當成修改上傳，不會當成衝突另存一份；這台裝置上沒有這個檔案時，同步會把遠端的刪除。
+    func prepareOverwrite(_ path: String) {
+        let path = LocalVault.normalize(path)
+        guard state[path] == nil, !vault.exists(path), let entry = remoteFiles[path] else { return }
+        state[path] = FileState(etag: Self.normalizeETag(entry.etag), hash: "", opened: now().timeIntervalSince1970)
+        saveState()
+    }
+
+    // MARK: - 按需模式的空間
+
+    /// 移除這台裝置上最近沒打開、也沒有未上傳修改的檔案（`keeping` 中的除外）。只刪本機，遠端不受影響，之後打開時重新下載。
+    /// 筆記與筆跡資料保留 `textRetention` 秒，圖片、PDF 等保留 `fileRetention` 秒。回傳移除的檔案數。
+    @discardableResult
+    func evictUnused(keeping: Set<String>, textRetention: TimeInterval = 7 * 86_400, fileRetention: TimeInterval = 86_400) -> Int {
+        let current = now().timeIntervalSince1970
+        let keeping = Set(keeping.map(LocalVault.normalize))
+        let localByPath = Dictionary(vault.allFiles().map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var evicted = 0
+        for (path, base) in state {
+            guard !keeping.contains(path), let local = localByPath[path] else { continue }
+            let retention = Self.essentialExtensions.contains((path as NSString).pathExtension.lowercased()) ? textRetention : fileRetention
+            if let opened = base.opened, current - opened < retention { continue }
+            guard !hasLocalChanges(local, since: base) else { continue }
+            try? vault.delete(path)
+            vault.removeEmptyParents(of: path)
+            state[path] = nil
+            evicted += 1
+        }
+        if evicted > 0 { saveState() }
+        return evicted
     }
 
     /// 遠端有、這台裝置還沒下載的檔案（關閉「下載所有檔案」或檔案太大時），路徑已正規化。
@@ -284,6 +412,12 @@ actor VaultSyncEngine {
     }
 
     // MARK: - Helpers
+
+    private func localFile(_ path: String) -> LocalFile? {
+        let values = try? vault.url(for: path).resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey])
+        guard values?.isRegularFile == true else { return nil }
+        return LocalFile(path: path, size: values?.fileSize ?? 0, mtime: values?.contentModificationDate ?? .distantPast)
+    }
 
     private func localHash(_ path: String) -> String? {
         (try? vault.read(path)).map(LocalVault.hash)
@@ -310,9 +444,11 @@ actor VaultSyncEngine {
 
     /// 記下同步後的版本（遠端 ETag、內容雜湊與本機檔案的修改時間、大小）。
     /// `stamp` 要在讀取內容「之前」取得：讀取後檔案又被修改時，記下的時間比較舊，下次同步會重新比對而不會漏掉。
-    private func record(_ path: String, etag: String, hash: String, stamp: (mtime: Double?, size: Int?)? = nil) {
+    /// `opened`：這次是在這台裝置上打開或編輯（否則沿用先前記下的時間）。
+    private func record(_ path: String, etag: String, hash: String, stamp: (mtime: Double?, size: Int?)? = nil, opened: Bool = false) {
         let current = stamp ?? self.stamp(path)
-        state[path] = FileState(etag: Self.normalizeETag(etag), hash: hash, mtime: current.mtime, size: current.size)
+        let openedAt = opened ? now().timeIntervalSince1970 : state[path]?.opened
+        state[path] = FileState(etag: Self.normalizeETag(etag), hash: hash, mtime: current.mtime, size: current.size, opened: openedAt)
     }
 
     private func download(_ entries: [VaultEntry], from remote: any VaultRemote, progress: ProgressHandler?) async throws -> Int {
@@ -361,7 +497,8 @@ actor VaultSyncEngine {
             let condition: VaultClient.WriteCondition = base.map { .ifMatch($0.etag) } ?? .createOnly
             do {
                 let entry = try await remote.write(path, data: data, contentType: Self.contentType(for: path), condition: condition, mtime: now())
-                record(path, etag: entry.etag, hash: LocalVault.hash(data), stamp: before)
+                record(path, etag: entry.etag, hash: LocalVault.hash(data), stamp: before, opened: true)
+                remoteFiles[path] = entry
                 count += 1
             } catch VaultError.conflict {
                 // 上傳時遠端剛好也改了：清掉紀錄，下次同步會當成衝突處理，兩份都保留
@@ -376,9 +513,16 @@ actor VaultSyncEngine {
         try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: stateURL, options: .atomic)
     }
+
+    private func saveIndex() {
+        let index = remoteFiles.map { IndexEntry(path: $0.key, size: $0.value.size, mtime: $0.value.mtime.timeIntervalSince1970, etag: $0.value.etag) }
+        guard let data = try? JSONEncoder().encode(index) else { return }
+        try? FileManager.default.createDirectory(at: indexURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: indexURL, options: .atomic)
+    }
 }
 
-/// App 的同步中樞：自動同步（開啟 App、修改筆記後、定時）、狀態顯示、需要時下載附件。
+/// App 的同步中樞：自動同步（開啟 App、定時）、編輯當下上傳、打開中的筆記取得遠端修改、打開時下載、狀態顯示。
 @MainActor
 @Observable
 final class VaultSyncCenter {
@@ -395,15 +539,18 @@ final class VaultSyncCenter {
     var lastReport: VaultSyncEngine.Report?
     /// 正在下載的檔案數（第一次同步大型 vault 時顯示進度）。
     var progress: Progress?
-    /// 遠端有、還沒下載到這台裝置的檔案（資料夾頁面中顯示為雲端檔案，打開時下載）。
+    /// 遠端有、還沒下載到這台裝置的檔案（列在檔案樹與資料夾中，打開時下載）。
     var pendingFiles: [VaultEntry] = []
     /// 本機檔案變動（同步下載或 App 編輯）時遞增，畫面據此重新整理。
     var revision = 0
+    /// 工作區中開著的筆記：按需模式移除檔案時不會移除。
+    var openPaths: Set<String> = []
 
     let vault: LocalVault
     let engine: VaultSyncEngine
     private var scheduled: Task<Void, Never>?
     private var periodic: Task<Void, Never>?
+    private var pushes: [String: Task<Void, Never>] = [:]
 
     init(vault: LocalVault = .shared) {
         self.vault = vault
@@ -416,6 +563,11 @@ final class VaultSyncCenter {
 
     var isConfigured: Bool { VaultClient.configured() != nil }
 
+    /// 啟動時先用上次記下的遠端清單列出檔案（按需模式下大部分檔案不在這台裝置上），不必等同步完成。
+    func prepare() async {
+        pendingFiles = await engine.pendingRemoteFiles()
+    }
+
     func syncNow(allowMassDeletion: Bool = false) async {
         guard !isSyncing, let client = VaultClient.configured() else { return }
         isSyncing = true
@@ -424,17 +576,20 @@ final class VaultSyncCenter {
             progress = nil
         }
         do {
+            let policy = NotesSettings.downloadPolicy
             let report = try await engine.sync(
                 remote: client,
                 allowMassDeletion: allowMassDeletion,
-                downloadAll: NotesSettings.downloadAllFiles
+                policy: policy
             ) { done, total in
                 Task { @MainActor in self.updateProgress(done: done, total: total) }
             }
             lastReport = report
             lastSyncedAt = Date()
             lastError = nil
-            if report.changedLocalFiles { revision += 1 }
+            var changed = report.changedLocalFiles
+            if policy == .onDemand, await engine.evictUnused(keeping: openPaths) > 0 { changed = true }
+            if changed { revision += 1 }
         } catch {
             lastError = error.localizedDescription
         }
@@ -449,8 +604,12 @@ final class VaultSyncCenter {
         if done / 200 > previous / 200 { revision += 1 }
     }
 
-    /// 下載一個還沒在這台裝置上的檔案（雲端檔案），回傳本機位置。
+    /// 下載一個還沒在這台裝置上的檔案，回傳本機位置。
     func download(_ path: String) async throws -> URL {
+        if vault.exists(path) {
+            touch(path)
+            return vault.url(for: path)
+        }
         guard let client = VaultClient.configured() else { throw VaultError.notConfigured }
         let url = try await engine.ensureLocal(path, remote: client)
         pendingFiles.removeAll { $0.path == LocalVault.normalize(path) }
@@ -458,10 +617,70 @@ final class VaultSyncCenter {
         return url
     }
 
-    /// 修改筆記後呼叫：更新畫面，幾秒後同步（連續修改只會同步一次）。
+    /// 新增、改名、刪除檔案後呼叫：更新畫面，稍後完整同步一次（連續修改只會同步一次）。
     func localDidChange() {
         revision += 1
-        scheduleSync(after: 3)
+        scheduleSync(after: 1.5)
+    }
+
+    /// 編輯中的檔案存檔後呼叫：一秒內沒有再修改就直接上傳這個檔案（編輯當下同步，不必等完整同步）。
+    func fileDidChange(_ path: String) {
+        revision += 1
+        let path = LocalVault.normalize(path)
+        pushes[path]?.cancel()
+        pushes[path] = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let client = VaultClient.configured() else { return }
+            pushes[path] = nil
+            do {
+                try await engine.push([path], remote: client)
+            } catch {
+                // 網路中斷等：下次完整同步會再上傳
+                scheduleSync(after: 30)
+            }
+        }
+    }
+
+    /// 打開中的筆記：遠端（Obsidian）改過、這台裝置沒有未上傳的修改時，下載新版本並更新畫面。
+    func refreshOpenFile(_ path: String) async {
+        guard !isSyncing, let client = VaultClient.configured() else { return }
+        if (try? await engine.refresh(path, remote: client)) == true {
+            revision += 1
+        }
+    }
+
+    /// 記下打開了這個檔案（按需模式最近打開的檔案會保留在這台裝置上）。
+    func touch(_ path: String) {
+        Task { await engine.markOpened(path) }
+    }
+
+    /// App 要整個重新產生、這台裝置上可能沒有的檔案（手寫筆記的圖片等）：寫入前呼叫，上傳時直接取代遠端版本。
+    func prepareOverwrite(_ paths: [String]) async {
+        for path in paths {
+            await engine.prepareOverwrite(path)
+        }
+    }
+
+    /// 刪除只在遠端的檔案（這台裝置上沒有）：下次同步時從遠端刪除。
+    func deleteRemoteOnly(_ path: String) async {
+        await engine.prepareOverwrite(path)
+        pendingFiles.removeAll { $0.path == LocalVault.normalize(path) }
+        localDidChange()
+    }
+
+    /// 移除這台裝置上所有已同步的檔案（開著的筆記與未上傳的修改除外），回傳移除的檔案數。
+    func clearDownloads() async -> Int {
+        guard !isSyncing else { return 0 }
+        let count = await engine.evictUnused(keeping: openPaths, textRetention: 0, fileRetention: 0)
+        pendingFiles = await engine.pendingRemoteFiles()
+        revision += 1
+        return count
+    }
+
+    /// 這台裝置上 vault 檔案佔用的空間（位元組）。
+    func localUsage() async -> Int {
+        let vault = vault
+        return await Task.detached(priority: .utility) { vault.allFiles().reduce(0) { $0 + $1.size } }.value
     }
 
     func scheduleSync(after seconds: Double) {
@@ -493,7 +712,10 @@ final class VaultSyncCenter {
     func localURL(forEmbed name: String) async -> URL? {
         let files = vault.allFiles()
         guard let path = await engine.resolve(name: name, localFiles: files) else { return nil }
-        if vault.exists(path) { return vault.url(for: path) }
+        if vault.exists(path) {
+            touch(path)
+            return vault.url(for: path)
+        }
         guard let client = VaultClient.configured() else { return nil }
         let url = try? await engine.ensureLocal(path, remote: client)
         if url != nil { pendingFiles.removeAll { $0.path == path } }

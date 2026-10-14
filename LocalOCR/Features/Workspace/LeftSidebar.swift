@@ -94,7 +94,7 @@ struct FileExplorer: View {
             PanelHeader(title: "檔案", subtitle: subtitle, showsSyncDot: sync.isConfigured && sync.lastError == nil) {
                 Menu {
                     Button { workspace.newTextNote(in: "") } label: { Label("新增筆記", systemImage: "square.and.pencil") }
-                    Button { workspace.requestNewNotebook(in: "") } label: { Label("新增手寫筆記本", systemImage: "pencil") }
+                    Button { workspace.newNotebook(in: "") } label: { Label("新增手寫筆記", systemImage: "pencil") }
                     Button { promptFolder(in: "") } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
                     SmallBoxButtonLabel(systemImage: "plus")
@@ -187,7 +187,7 @@ struct FileExplorer: View {
             }
             .contextMenu {
                 Button { workspace.newTextNote(in: folder) } label: { Label("新增筆記", systemImage: "square.and.pencil") }
-                Button { workspace.requestNewNotebook(in: folder) } label: { Label("新增手寫筆記本", systemImage: "pencil") }
+                Button { workspace.newNotebook(in: folder) } label: { Label("新增手寫筆記", systemImage: "pencil") }
                 Button { promptFolder(in: folder) } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 Divider()
                 Button { workspace.open(.folder(folder)) } label: { Label("在分頁中開啟", systemImage: "rectangle.on.rectangle") }

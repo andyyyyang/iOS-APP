@@ -7,15 +7,15 @@ enum NotesSettings {
     enum Key {
         static let defaultFolder = "notes.vaultFolder"
         static let vaultName = "notes.vaultName"
-        static let downloadAllFiles = "notes.downloadAllFiles"
+        static let downloadPolicy = "notes.downloadPolicy"
         static let migratedDefaultFolder = "notes.migratedDefaultFolder"
+        static let lastPaper = "notes.lastPaper"
     }
 
     static func registerDefaults(in defaults: UserDefaults = .standard) {
         defaults.register(defaults: [
             Key.defaultFolder: "",
             Key.vaultName: "",
-            Key.downloadAllFiles: true,
         ])
         // 2.0 配對時會把新筆記固定放到「iPad 筆記」；筆記可以在 vault 任何地方，改回最上層
         if !defaults.bool(forKey: Key.migratedDefaultFolder) {
@@ -32,9 +32,16 @@ enum NotesSettings {
         return raw.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "/")
     }
 
-    /// 同步時下載 vault 中的所有檔案（關閉時只下載筆記，圖片等附件打開時才下載）。
-    static var downloadAllFiles: Bool {
-        UserDefaults.standard.object(forKey: Key.downloadAllFiles) as? Bool ?? true
+    /// 這台裝置上保留哪些檔案；預設打開時才下載（平板空間有限）。
+    static var downloadPolicy: VaultDownloadPolicy {
+        get { UserDefaults.standard.string(forKey: Key.downloadPolicy).flatMap(VaultDownloadPolicy.init(rawValue:)) ?? .onDemand }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.downloadPolicy) }
+    }
+
+    /// 新手寫筆記的紙張：上次在筆記中選的紙張，預設空白。
+    static var lastPaper: PaperStyle {
+        get { UserDefaults.standard.string(forKey: Key.lastPaper).flatMap(PaperStyle.init(rawValue:)) ?? .blank }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.lastPaper) }
     }
 
     static var vaultName: String {
@@ -58,9 +65,12 @@ enum NotesSettings {
     }
 }
 
-/// 手寫筆記本的資料（存在附件資料夾，其他裝置可以接著編輯）。
+/// 手寫筆記的資料（存在附件資料夾，其他裝置可以接著編輯）。
+/// 版本 1 是 2.3 以前的 A4 分頁筆記本；版本 2 起是連續畫布（`CanvasLayout`），`pageCount` 是匯出的圖片數。
 struct NotebookArchive: Codable, Equatable {
-    var version = 1
+    static let canvasVersion = 2
+
+    var version = NotebookArchive.canvasVersion
     var id: String
     var createdAt: Date
     var updatedAt: Date
@@ -89,6 +99,13 @@ struct NotebookArchive: Codable, Equatable {
     var pkDrawing: PKDrawing {
         get { (try? PKDrawing(data: drawing)) ?? PKDrawing() }
         set { drawing = newValue.dataRepresentation() }
+    }
+
+    /// 舊版的分頁筆記本轉成連續畫布（筆跡移到對應位置）；已是新版時不變。
+    mutating func migrateToCanvas() {
+        guard version < Self.canvasVersion else { return }
+        pkDrawing = pkDrawing.migratedFromPagedNotebook(pageCount: pageCount)
+        version = Self.canvasVersion
     }
 }
 
@@ -188,12 +205,12 @@ enum NotebookFiles {
         "\(NotesSettings.attachmentsFolder(forNote: notePath))/\(NotebookMarkdown.pageImageName(id: id, page: page))"
     }
 
-    /// 建立新的手寫筆記本，回傳 Markdown 路徑。
-    static func create(in folder: String, title: String, paper: PaperStyle, color: NotebookColor, store: NotesStore) throws -> String {
+    /// 建立新的手寫筆記（空白畫布），回傳 Markdown 路徑。
+    static func create(in folder: String, title: String, paper: PaperStyle, store: NotesStore) throws -> String {
         let path = store.uniquePath(folder: folder, title: title)
         let id = newID()
         let now = Date()
-        let archive = NotebookArchive(id: id, createdAt: now, updatedAt: now, paper: paper, color: color, pageCount: 1, drawing: PKDrawing().dataRepresentation())
+        let archive = NotebookArchive(id: id, createdAt: now, updatedAt: now, paper: paper, color: .blue, pageCount: 1, drawing: PKDrawing().dataRepresentation())
         try store.vault.write(try NotebookArchive.encoder.encode(archive), to: archivePath(notePath: path, id: id))
         try writePageImages(archive, notePath: path, vault: store.vault)
         try store.vault.writeText(NotebookMarkdown.newNotebook(id: id, createdAt: now), to: path)
@@ -202,39 +219,59 @@ enum NotebookFiles {
         return path
     }
 
-    /// 讀取筆記本資料；檔案還沒同步下來時先下載。
+    /// 讀取筆記資料（舊版的分頁筆記本轉成連續畫布）；檔案還沒同步下來時先下載。
     static func load(notePath: String, id: String) async -> NotebookArchive? {
         let vault = VaultSyncCenter.shared.vault
         let path = archivePath(notePath: notePath, id: id)
-        if !vault.exists(path), let client = VaultClient.configured() {
+        if vault.exists(path) {
+            VaultSyncCenter.shared.touch(path)
+        } else if let client = VaultClient.configured() {
             _ = try? await VaultSyncCenter.shared.engine.ensureLocal(path, remote: client)
         }
-        guard let data = try? vault.read(path) else { return nil }
-        return try? NotebookArchive.decoder.decode(NotebookArchive.self, from: data)
+        guard let data = try? vault.read(path), var archive = try? NotebookArchive.decoder.decode(NotebookArchive.self, from: data) else { return nil }
+        archive.migrateToCanvas()
+        return archive
     }
 
-    /// 儲存筆跡（書寫中隨時呼叫，很快）。
+    /// 儲存筆跡（書寫中隨時呼叫，很快），停筆後上傳（其他裝置可以接著寫；Obsidian 中的圖片離開筆記時更新）。
     static func saveArchive(_ archive: NotebookArchive, notePath: String) throws {
-        try VaultSyncCenter.shared.vault.write(try NotebookArchive.encoder.encode(archive), to: archivePath(notePath: notePath, id: archive.id))
+        let path = archivePath(notePath: notePath, id: archive.id)
+        try VaultSyncCenter.shared.vault.write(try NotebookArchive.encoder.encode(archive), to: path)
+        VaultSyncCenter.shared.fileDidChange(path)
     }
 
-    /// 完整儲存（離開筆記本、AI 整理後）：筆跡、每頁圖片、更新 Markdown 中 App 管理的區段與標籤。
+    /// 完整儲存（離開筆記、AI 整理後）：筆跡、畫布圖片（依筆跡之間的空白分段）、更新 Markdown 中 App 管理的區段與標籤。
     static func publish(_ archive: NotebookArchive, notePath: String, store: NotesStore) async throws {
-        try saveArchive(archive, notePath: notePath)
-        let vault = store.vault
+        var archive = archive
         let drawing = archive.pkDrawing
         let paper = archive.paper
-        let pageCount = max(archive.pageCount, 1)
+        let bands = CanvasLayout.bands(for: drawing)
+        archive.pageCount = bands.count
+        try saveArchive(archive, notePath: notePath)
+        let vault = store.vault
+        let pageCount = bands.count
         let images = await Task.detached(priority: .userInitiated) {
-            (0..<pageCount).compactMap { PaperRenderer.pageImage(drawing: drawing, page: $0, paper: paper, scale: 2).pngData() }
+            bands.compactMap { PaperRenderer.canvasImage(drawing: drawing, rect: $0, paper: paper, scale: 2).pngData() }
         }.value
-        for (index, data) in images.enumerated() {
-            try vault.write(data, to: pageImagePath(notePath: notePath, id: archive.id, page: index + 1))
+        // 圖片每次整個重新產生；按需模式下這台裝置上可能沒有舊的圖片，直接取代遠端版本
+        let sync = VaultSyncCenter.shared
+        let imagePaths = images.indices.map { pageImagePath(notePath: notePath, id: archive.id, page: $0 + 1) }
+        await sync.prepareOverwrite(imagePaths)
+        for (path, data) in zip(imagePaths, images) {
+            try vault.write(data, to: path)
         }
-        // 頁數變少時刪掉多出來的頁面圖片
-        var page = pageCount + 1
-        while vault.exists(pageImagePath(notePath: notePath, id: archive.id, page: page)) {
-            try? vault.delete(pageImagePath(notePath: notePath, id: archive.id, page: page))
+        // 圖片變少時刪掉多出來的（這台裝置上沒有的，同步時從遠端刪除）
+        let remotePaths = Set(sync.pendingFiles.map(\.path))
+        var page = images.count + 1
+        while true {
+            let path = pageImagePath(notePath: notePath, id: archive.id, page: page)
+            if vault.exists(path) {
+                try? vault.delete(path)
+            } else if remotePaths.contains(LocalVault.normalize(path)) {
+                await sync.deleteRemoteOnly(path)
+            } else {
+                break
+            }
             page += 1
         }
         let text = vault.readText(notePath) ?? NotebookMarkdown.newNotebook(id: archive.id, createdAt: archive.createdAt)
@@ -249,24 +286,51 @@ enum NotebookFiles {
     }
 
     private static func writePageImages(_ archive: NotebookArchive, notePath: String, vault: LocalVault) throws {
-        for page in 0..<max(archive.pageCount, 1) {
-            if let data = PaperRenderer.pageImage(drawing: archive.pkDrawing, page: page, paper: archive.paper, scale: 2).pngData() {
-                try vault.write(data, to: pageImagePath(notePath: notePath, id: archive.id, page: page + 1))
+        let drawing = archive.pkDrawing
+        for (index, band) in CanvasLayout.bands(for: drawing).enumerated() {
+            if let data = PaperRenderer.canvasImage(drawing: drawing, rect: band, paper: archive.paper, scale: 2).pngData() {
+                try vault.write(data, to: pageImagePath(notePath: notePath, id: archive.id, page: index + 1))
             }
         }
     }
 }
 
 /// 筆記中的手寫區塊：「附件/ink-xxxx.png」（Obsidian 顯示用）＋「附件/ink-xxxx.ink」（可再編輯的筆跡）。
+/// 版本 2 起與手寫筆記相同是連續畫布（寬 `CanvasLayout.width`），`height` 是圖片高度（依筆跡自動決定）；
+/// 版本 1 的筆跡外圍有 16 的頁邊。
 struct InkBlock: Codable, Equatable {
-    var version = 1
+    static let canvasVersion = 2
+    /// 區塊圖片的最小高度，最低的筆跡下面留的空白。
+    static let minimumHeight: CGFloat = 240
+    static let bottomPadding: CGFloat = 32
+
+    var version = InkBlock.canvasVersion
     var height: CGFloat
     var paper: PaperStyle
     var drawing: Data
 
-    static let defaultHeight: CGFloat = 520
+    var pkDrawing: PKDrawing {
+        get { (try? PKDrawing(data: drawing)) ?? PKDrawing() }
+        set { drawing = newValue.dataRepresentation() }
+    }
 
-    var layout: PageLayout { .inkBlock(height: height) }
+    /// 舊版的區塊（有頁邊）轉成連續畫布；已是新版時不變。
+    mutating func migrateToCanvas() {
+        guard version < Self.canvasVersion else { return }
+        let margin = PageLayout.inkBlock(height: height).margin
+        pkDrawing = PKDrawing(strokes: pkDrawing.strokes.map { stroke in
+            var stroke = stroke
+            stroke.transform = stroke.transform.concatenating(CGAffineTransform(translationX: -margin, y: -margin))
+            return stroke
+        })
+        version = Self.canvasVersion
+    }
+
+    /// 圖片高度剛好包住筆跡（下面留一點空白），至少 `minimumHeight`。
+    static func fittedHeight(for drawing: PKDrawing) -> CGFloat {
+        guard !drawing.strokes.isEmpty else { return minimumHeight }
+        return max(minimumHeight, ceil(drawing.bounds.maxY + bottomPadding))
+    }
 }
 
 enum InkFiles {
@@ -292,6 +356,6 @@ enum InkFiles {
     }
 
     static func image(for block: InkBlock) -> UIImage {
-        PaperRenderer.pageImage(drawing: (try? PKDrawing(data: block.drawing)) ?? PKDrawing(), page: 0, paper: block.paper, scale: 2, layout: block.layout)
+        PaperRenderer.canvasImage(drawing: block.pkDrawing, rect: CGRect(x: 0, y: 0, width: CanvasLayout.width, height: block.height), paper: block.paper, scale: 2)
     }
 }

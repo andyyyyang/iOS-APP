@@ -3,37 +3,98 @@ import XCTest
 @testable import LocalOCR
 
 final class NotesTests: XCTestCase {
-    // MARK: - 頁面配置
+    // MARK: - 手寫畫布
 
-    func testPageLayoutAndIndexing() {
-        let first = NotebookLayout.pageRect(0)
-        let second = NotebookLayout.pageRect(1)
-        XCTAssertEqual(first.minX, NotebookLayout.margin)
-        XCTAssertEqual(second.minY - first.maxY, NotebookLayout.pageGap)
-        XCTAssertEqual(NotebookLayout.canvasHeight(pageCount: 2), second.maxY + NotebookLayout.margin)
-        XCTAssertEqual(NotebookLayout.pageIndex(atY: first.midY, pageCount: 3), 0)
-        XCTAssertEqual(NotebookLayout.pageIndex(atY: second.midY, pageCount: 3), 1)
-        XCTAssertEqual(NotebookLayout.pageIndex(atY: 100_000, pageCount: 3), 2, "超出範圍時歸到最後一頁")
+    func testLegacyPagedLayoutAndIndexing() {
+        let old = PageLayout.notebook
+        let first = old.pageRect(0)
+        let second = old.pageRect(1)
+        XCTAssertEqual(first.minX, old.margin)
+        XCTAssertEqual(second.minY - first.maxY, old.pageGap)
+        XCTAssertEqual(old.canvasHeight(pageCount: 2), second.maxY + old.margin)
+        XCTAssertEqual(old.pageIndex(atY: first.midY, pageCount: 3), 0)
+        XCTAssertEqual(old.pageIndex(atY: second.midY, pageCount: 3), 1)
+        XCTAssertEqual(old.pageIndex(atY: 100_000, pageCount: 3), 2, "超出範圍時歸到最後一頁")
+        XCTAssertEqual(old.pageSize.height, CanvasLayout.segmentHeight, "舊版每頁對應畫布上的一段")
         let ink = PageLayout.inkBlock(height: 520)
         XCTAssertEqual(ink.canvasHeight(pageCount: 1), 520 + ink.margin * 2)
     }
 
-    private func stroke(onPage page: Int) -> PKStroke {
-        let rect = NotebookLayout.pageRect(page)
-        let points = [CGPoint(x: rect.midX - 40, y: rect.midY), CGPoint(x: rect.midX + 40, y: rect.midY + 10)].map {
+    private func stroke(at center: CGPoint) -> PKStroke {
+        let points = [CGPoint(x: center.x - 40, y: center.y), CGPoint(x: center.x + 40, y: center.y + 10)].map {
             PKStrokePoint(location: $0, timeOffset: 0, size: CGSize(width: 3, height: 3), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
         }
         return PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: points, creationDate: Date()))
     }
 
-    func testRemovingAndInsertingPagesMovesStrokes() {
-        let drawing = PKDrawing(strokes: [stroke(onPage: 0), stroke(onPage: 1), stroke(onPage: 2)])
-        let removed = drawing.removingPage(1, pageCount: 3)
-        XCTAssertEqual(removed.strokes.count, 2)
-        XCTAssertTrue(removed.hasStrokes(onPage: 1, pageCount: 2), "第 3 頁的筆跡移到第 2 頁")
-        let inserted = PKDrawing(strokes: [stroke(onPage: 0), stroke(onPage: 1)]).insertingPage(at: 1, pageCount: 2)
-        XCTAssertFalse(inserted.hasStrokes(onPage: 1, pageCount: 3), "新插入的頁面是空白的")
-        XCTAssertTrue(inserted.hasStrokes(onPage: 2, pageCount: 3))
+    /// 2.3 以前分頁筆記本第 `page` 頁中間的一筆。
+    private func stroke(onPage page: Int) -> PKStroke {
+        let rect = PageLayout.notebook.pageRect(page)
+        return stroke(at: CGPoint(x: rect.midX, y: rect.midY))
+    }
+
+    func testMigratingPagedNotebookKeepsPositionWithinEachPage() {
+        let drawing = PKDrawing(strokes: [stroke(onPage: 0), stroke(onPage: 2)])
+        let migrated = drawing.migratedFromPagedNotebook(pageCount: 3)
+        for (index, page) in [0, 2].enumerated() {
+            let rect = PageLayout.notebook.pageRect(page)
+            let before = drawing.strokes[index].renderBounds
+            let after = migrated.strokes[index].renderBounds
+            XCTAssertEqual(after.minX, before.minX - rect.minX, accuracy: 0.5)
+            XCTAssertEqual(after.minY, before.minY - rect.minY + CGFloat(page) * CanvasLayout.segmentHeight, accuracy: 0.5)
+        }
+
+        var archive = NotebookArchive(id: "nb-1", createdAt: Date(), updatedAt: Date(), paper: .lined, color: .blue, pageCount: 3, drawing: drawing.dataRepresentation())
+        XCTAssertEqual(archive.version, NotebookArchive.canvasVersion, "新筆記一開始就是連續畫布")
+        archive.version = 1
+        archive.migrateToCanvas()
+        XCTAssertEqual(archive.version, NotebookArchive.canvasVersion)
+        XCTAssertEqual(archive.pkDrawing.strokes.count, 2)
+        let converted = archive
+        archive.migrateToCanvas()
+        XCTAssertEqual(archive, converted, "已轉換的筆記不會再移動")
+    }
+
+    func testCanvasHeightGrowsWithWriting() {
+        XCTAssertEqual(CanvasLayout.height(for: PKDrawing(), minimum: 0), CanvasLayout.segmentHeight)
+        XCTAssertEqual(CanvasLayout.height(for: PKDrawing(), minimum: 1500), CanvasLayout.segmentHeight * 2, "至少填滿畫面")
+        let low = PKDrawing(strokes: [stroke(at: CGPoint(x: 400, y: 1000))])
+        XCTAssertEqual(CanvasLayout.height(for: low, minimum: 0), CanvasLayout.segmentHeight * 2, "最低的筆跡下方保留書寫空間")
+    }
+
+    func testExportBandsAvoidCuttingThroughStrokes() {
+        XCTAssertEqual(CanvasLayout.bands(for: PKDrawing()), [CGRect(x: 0, y: 0, width: CanvasLayout.width, height: CanvasLayout.segmentHeight)])
+        let short = PKDrawing(strokes: [stroke(at: CGPoint(x: 400, y: 300))])
+        let single = CanvasLayout.bands(for: short)
+        XCTAssertEqual(single.count, 1)
+        XCTAssertEqual(single[0].maxY, short.bounds.maxY + CanvasLayout.exportPadding, accuracy: 0.5)
+
+        // 中間那一筆剛好跨過第一段的底部：切點往上移到它的上面
+        let drawing = PKDrawing(strokes: [
+            stroke(at: CGPoint(x: 400, y: 200)),
+            stroke(at: CGPoint(x: 400, y: CanvasLayout.segmentHeight)),
+            stroke(at: CGPoint(x: 400, y: 2000)),
+        ])
+        let bands = CanvasLayout.bands(for: drawing)
+        XCTAssertEqual(bands.count, 2)
+        XCTAssertEqual(bands[0].minY, 0)
+        XCTAssertEqual(bands[0].maxY, bands[1].minY, "各段相連")
+        XCTAssertLessThanOrEqual(bands[0].maxY, drawing.strokes[1].renderBounds.minY, "不把跨界的那一筆切成兩半")
+        XCTAssertTrue(bands.allSatisfy { $0.height <= CanvasLayout.segmentHeight })
+        XCTAssertEqual(bands[1].maxY, drawing.bounds.maxY + CanvasLayout.exportPadding, accuracy: 0.5)
+        XCTAssertTrue(drawing.hasStrokes(in: bands[1]))
+        XCTAssertFalse(short.hasStrokes(in: CGRect(x: 0, y: 1000, width: CanvasLayout.width, height: 100)))
+    }
+
+    func testCanvasPaperPatternContinuesAcrossSegments() {
+        let spacing = PaperRenderer.spacing
+        XCTAssertEqual(PaperRenderer.positions(first: spacing, from: 0, to: spacing * 3.5), [spacing, spacing * 2, spacing * 3])
+        // 第二段的第一條橫線接在第一段最後一條的下一格
+        let firstSegment = PaperRenderer.positions(first: PaperRenderer.linedTopMargin, from: 0, to: CanvasLayout.segmentHeight)
+        let secondSegment = PaperRenderer.positions(first: PaperRenderer.linedTopMargin, from: CanvasLayout.segmentHeight, to: CanvasLayout.segmentHeight * 2)
+        XCTAssertEqual(firstSegment.first, PaperRenderer.linedTopMargin)
+        XCTAssertEqual(secondSegment.first, firstSegment.last.map { $0 + spacing })
+        XCTAssertNil(PaperRenderer.canvasPatternPath(for: .blank, rect: CGRect(x: 0, y: 0, width: 100, height: 100)))
     }
 
     // MARK: - 手寫筆記本的 Markdown
@@ -74,6 +135,7 @@ final class NotesTests: XCTestCase {
         )
         let decoded = try NotebookArchive.decoder.decode(NotebookArchive.self, from: NotebookArchive.encoder.encode(archive))
         XCTAssertEqual(decoded.paper, .grid)
+        XCTAssertEqual(decoded.version, NotebookArchive.canvasVersion)
         XCTAssertEqual(decoded.pkDrawing.strokes.count, 1)
         XCTAssertEqual(decoded.updatedAt, archive.updatedAt)
     }
@@ -251,7 +313,6 @@ final class NotesTests: XCTestCase {
         defaults.set("iPad 筆記", forKey: NotesSettings.Key.defaultFolder)
         NotesSettings.registerDefaults(in: defaults)
         XCTAssertEqual(defaults.string(forKey: NotesSettings.Key.defaultFolder), "", "2.0 配對時固定的「iPad 筆記」改回最上層")
-        XCTAssertTrue(defaults.bool(forKey: NotesSettings.Key.downloadAllFiles), "預設下載所有檔案")
 
         defaults.set("iPad 筆記", forKey: NotesSettings.Key.defaultFolder)
         NotesSettings.registerDefaults(in: defaults)
@@ -374,7 +435,7 @@ final class VaultSyncEngineTests: XCTestCase {
     func testNotesOnlyModeDownloadsAttachmentsOnDemand() async throws {
         remote.put("工作/會議.md", "# 會議")
         remote.put("工作/附件/photo.png", "PNG")
-        let report = try await engine.sync(remote: remote, downloadAll: false)
+        let report = try await engine.sync(remote: remote, policy: .notes)
         XCTAssertEqual(report.downloaded, 1)
         XCTAssertFalse(vault.exists("工作/附件/photo.png"), "只下載筆記時，圖片打開才下載")
         let pending = await engine.pendingRemoteFiles()
@@ -382,16 +443,129 @@ final class VaultSyncEngineTests: XCTestCase {
 
         _ = try await engine.ensureLocal("工作/附件/photo.png", remote: remote)
         XCTAssertEqual(vault.readText("工作/附件/photo.png"), "PNG")
-        let again = try await engine.sync(remote: remote, downloadAll: false)
+        let again = try await engine.sync(remote: remote, policy: .notes)
         XCTAssertTrue(again.isEmpty)
 
         // 之後開啟「下載所有檔案」：補下載先前略過的檔案
         remote.put("工作/附件/scan.jpg", "JPG")
-        _ = try await engine.sync(remote: remote, downloadAll: false)
+        _ = try await engine.sync(remote: remote, policy: .notes)
         XCTAssertFalse(vault.exists("工作/附件/scan.jpg"))
         let all = try await engine.sync(remote: remote)
         XCTAssertEqual(all.downloaded, 1)
         XCTAssertEqual(vault.readText("工作/附件/scan.jpg"), "JPG")
+    }
+
+    func testOnDemandModeOnlyListsFilesAndKeepsOpenedOnesUpToDate() async throws {
+        remote.put("工作/會議.md", "# 會議")
+        remote.put("工作/附件/photo.png", "PNG")
+        let report = try await engine.sync(remote: remote, policy: .onDemand)
+        XCTAssertEqual(report.downloaded, 0, "按需模式不下載任何檔案")
+        XCTAssertTrue(vault.allFiles().isEmpty)
+        let pending = await engine.pendingRemoteFiles()
+        XCTAssertEqual(pending.map(\.path), ["工作/會議.md", "工作/附件/photo.png"])
+
+        // 遠端清單記在檔案中：重新開啟 App 後不必等同步就能列出
+        engine = makeEngine()
+        let restored = await engine.pendingRemoteFiles()
+        XCTAssertEqual(restored.map(\.path), ["工作/會議.md", "工作/附件/photo.png"])
+
+        // 打開過的筆記之後保持最新
+        _ = try await engine.ensureLocal("工作/會議.md", remote: remote)
+        remote.put("工作/會議.md", "# 會議 v2")
+        let again = try await engine.sync(remote: remote, policy: .onDemand)
+        XCTAssertEqual(again.downloaded, 1)
+        XCTAssertEqual(vault.readText("工作/會議.md"), "# 會議 v2")
+        XCTAssertFalse(vault.exists("工作/附件/photo.png"))
+    }
+
+    func testEvictingUnusedFilesFreesSpaceWithoutTouchingRemote() async throws {
+        for (path, text) in [("a.md", "a"), ("b.md", "b"), ("c.md", "c"), ("edited.md", "e"), ("img.png", "PNG")] {
+            remote.put(path, text)
+        }
+        _ = try await engine.sync(remote: remote)
+        _ = try await engine.ensureLocal("b.md", remote: remote)
+        try vault.writeText("改過", to: "edited.md")
+
+        let evicted = await engine.evictUnused(keeping: ["c.md"])
+        XCTAssertEqual(evicted, 2, "沒打開過、沒修改、不是開著的檔案才移除")
+        XCTAssertFalse(vault.exists("a.md"))
+        XCTAssertFalse(vault.exists("img.png"))
+        XCTAssertTrue(vault.exists("b.md"), "剛打開的保留")
+        XCTAssertTrue(vault.exists("c.md"), "開著的筆記保留")
+        XCTAssertEqual(vault.readText("edited.md"), "改過", "未上傳的修改保留")
+
+        let report = try await engine.sync(remote: remote, policy: .onDemand)
+        XCTAssertEqual(report.deleted, 0, "只移除這台裝置上的檔案，不會刪到遠端")
+        XCTAssertEqual(report.downloaded, 0)
+        XCTAssertEqual(report.uploaded, 1)
+        XCTAssertEqual(remote.paths, ["a.md", "b.md", "c.md", "edited.md", "img.png"])
+        XCTAssertEqual(remote.text("edited.md"), "改過")
+        let pending = await engine.pendingRemoteFiles()
+        XCTAssertEqual(pending.map(\.path), ["a.md", "img.png"])
+
+        // 超過保留天數後，最近打開過的也會移除
+        let later = VaultSyncEngine(vault: vault, stateURL: root.appending(path: "state.json"), now: { Date(timeIntervalSince1970: 1_760_000_000 + 8 * 86_400) })
+        let laterEvicted = await later.evictUnused(keeping: [])
+        XCTAssertEqual(laterEvicted, 3)
+        XCTAssertTrue(vault.allFiles().isEmpty)
+        XCTAssertEqual(remote.paths.count, 5)
+    }
+
+    func testPushUploadsTheEditedFileRightAway() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        try vault.writeText("v2", to: "a.md")
+        let pushed = try await engine.push(["a.md"], remote: remote)
+        XCTAssertEqual(pushed, 1)
+        XCTAssertEqual(remote.text("a.md"), "v2")
+        let nothing = try await engine.push(["a.md"], remote: remote)
+        XCTAssertEqual(nothing, 0, "沒有新的修改時不上傳")
+
+        try vault.writeText("新筆記", to: "new.md")
+        let created = try await engine.push(["new.md"], remote: remote)
+        XCTAssertEqual(created, 1)
+        XCTAssertEqual(remote.text("new.md"), "新筆記")
+
+        // 遠端同時也改了：不覆蓋，完整同步時兩份都保留
+        remote.put("a.md", "Obsidian")
+        try vault.writeText("iPad", to: "a.md")
+        let rejected = try await engine.push(["a.md"], remote: remote)
+        XCTAssertEqual(rejected, 0)
+        XCTAssertEqual(remote.text("a.md"), "Obsidian")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.conflicts.count, 1)
+        XCTAssertEqual(vault.readText("a.md"), "Obsidian")
+    }
+
+    func testRefreshPullsRemoteEditsOfTheOpenFile() async throws {
+        remote.put("工作/a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        remote.put("工作/a.md", "v2")
+        let updated = try await engine.refresh("工作/a.md", remote: remote)
+        XCTAssertTrue(updated)
+        XCTAssertEqual(vault.readText("工作/a.md"), "v2")
+        let unchanged = try await engine.refresh("工作/a.md", remote: remote)
+        XCTAssertFalse(unchanged)
+
+        remote.put("工作/a.md", "v3")
+        try vault.writeText("本機修改", to: "工作/a.md")
+        let blocked = try await engine.refresh("工作/a.md", remote: remote)
+        XCTAssertFalse(blocked, "有未上傳的修改時不覆蓋")
+        XCTAssertEqual(vault.readText("工作/a.md"), "本機修改")
+    }
+
+    func testPrepareOverwriteReplacesOrDeletesFilesNotOnThisDevice() async throws {
+        remote.put("附件/nb-1-p1.png", "old1")
+        remote.put("附件/nb-1-p2.png", "old2")
+        _ = try await engine.sync(remote: remote, policy: .onDemand)
+
+        await engine.prepareOverwrite("附件/nb-1-p1.png")
+        try vault.writeText("new1", to: "附件/nb-1-p1.png")
+        await engine.prepareOverwrite("附件/nb-1-p2.png")
+        let report = try await engine.sync(remote: remote, policy: .onDemand)
+        XCTAssertTrue(report.conflicts.isEmpty, "重新產生的圖片直接取代，不另存衝突版本")
+        XCTAssertEqual(remote.text("附件/nb-1-p1.png"), "new1")
+        XCTAssertNil(remote.text("附件/nb-1-p2.png"), "這台裝置上沒有寫入的會從遠端刪除")
     }
 
     func testVeryLargeFilesDownloadOnlyWhenOpened() async throws {

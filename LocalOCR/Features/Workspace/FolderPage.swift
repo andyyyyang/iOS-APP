@@ -68,7 +68,7 @@ struct FolderPage: View {
                     }
 
                     if subfolders.isEmpty && notes.isEmpty && files.isEmpty {
-                        EmptyStateView(title: "空的資料夾", message: "用下方的工具列新增筆記或手寫筆記本。")
+                        EmptyStateView(title: "空的資料夾", message: "用下方的工具列新增筆記或手寫筆記。")
                     }
                 }
                 .padding(.horizontal, isCompact ? 16 : 24)

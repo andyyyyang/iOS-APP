@@ -2,7 +2,7 @@ import PencilKit
 import SwiftUI
 import UIKit
 
-/// 紙張圖樣與頁面圖片。
+/// 紙張圖樣與畫布圖片（手寫筆記與手寫區塊共用的連續畫布，`CanvasLayout`）。
 enum PaperRenderer {
     static let spacing: CGFloat = 36
     /// 橫線紙上方留白（寫標題的位置）。
@@ -17,66 +17,53 @@ enum PaperRenderer {
         }
     }
 
-    /// 紙張圖樣的路徑（頁面座標，原點在頁面左上角）；點陣紙的點要填滿，其他是線條。
-    static func patternPath(for style: PaperStyle, size: CGSize) -> CGPath? {
+    /// 連續畫布上 `rect` 這一段的紙張圖樣（座標以這一段的左上角為原點）；點陣紙的點要填滿，其他是線條。
+    /// 線條位置以整張畫布為準，所以一段接一段是連續的：橫線從畫布頂端 `linedTopMargin` 開始，方格與點陣每 `spacing` 一格。
+    static func canvasPatternPath(for style: PaperStyle, rect: CGRect) -> CGPath? {
         let path = CGMutablePath()
         switch style {
         case .blank:
             return nil
         case .lined:
-            var y = linedTopMargin
-            while y < size.height - spacing / 2 {
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addLine(to: CGPoint(x: size.width, y: y))
-                y += spacing
+            for y in positions(first: linedTopMargin, from: rect.minY, to: rect.maxY) {
+                path.move(to: CGPoint(x: 0, y: y - rect.minY))
+                path.addLine(to: CGPoint(x: rect.width, y: y - rect.minY))
             }
         case .grid:
-            var x = spacing
-            while x < size.width {
-                path.move(to: CGPoint(x: x, y: 0))
-                path.addLine(to: CGPoint(x: x, y: size.height))
-                x += spacing
+            for x in positions(first: spacing, from: rect.minX, to: rect.maxX) {
+                path.move(to: CGPoint(x: x - rect.minX, y: 0))
+                path.addLine(to: CGPoint(x: x - rect.minX, y: rect.height))
             }
-            var y = spacing
-            while y < size.height {
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addLine(to: CGPoint(x: size.width, y: y))
-                y += spacing
+            for y in positions(first: spacing, from: rect.minY, to: rect.maxY) {
+                path.move(to: CGPoint(x: 0, y: y - rect.minY))
+                path.addLine(to: CGPoint(x: rect.width, y: y - rect.minY))
             }
         case .dotted:
             let radius: CGFloat = 1.4
-            var y = spacing
-            while y < size.height {
-                var x = spacing
-                while x < size.width {
-                    path.addEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
-                    x += spacing
+            let columns = positions(first: spacing, from: rect.minX, to: rect.maxX)
+            for y in positions(first: spacing, from: rect.minY, to: rect.maxY) {
+                for x in columns {
+                    path.addEllipse(in: CGRect(x: x - rect.minX - radius, y: y - rect.minY - radius, width: radius * 2, height: radius * 2))
                 }
-                y += spacing
             }
         }
         return path
     }
 
-    /// 在目前的 context 畫一頁紙（白底＋圖樣）。
-    static func drawPaper(_ style: PaperStyle, in context: CGContext, size: CGSize) {
-        context.setFillColor(UIColor.white.cgColor)
-        context.fill(CGRect(origin: .zero, size: size))
-        guard let path = patternPath(for: style, size: size) else { return }
-        context.addPath(path)
-        if style == .dotted {
-            context.setFillColor(patternColor(for: style).cgColor)
-            context.fillPath()
-        } else {
-            context.setStrokeColor(patternColor(for: style).cgColor)
-            context.setLineWidth(1)
-            context.strokePath()
+    /// `first`、`first + spacing`、… 之中落在 `lower..<upper` 的位置。
+    static func positions(first: CGFloat, from lower: CGFloat, to upper: CGFloat) -> [CGFloat] {
+        var value = first + max(0, ceil((lower - first) / spacing)) * spacing
+        var result: [CGFloat] = []
+        while value < upper {
+            result.append(value)
+            value += spacing
         }
+        return result
     }
 
-    /// 一頁的圖片：紙張＋筆跡。筆跡一律以淺色模式算顏色，深色模式下黑色墨水才不會變成白色。
-    static func pageImage(drawing: PKDrawing, page: Int, paper: PaperStyle, scale: CGFloat, layout: PageLayout = .notebook) -> UIImage {
-        let rect = layout.pageRect(page)
+    /// 連續畫布上一段的圖片（匯出給 Obsidian、手寫辨識）：白紙、圖樣與筆跡。
+    /// 筆跡一律以淺色模式算顏色，深色模式下黑色墨水才不會變成白色。
+    static func canvasImage(drawing: PKDrawing, rect: CGRect, paper: PaperStyle, scale: CGFloat) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
@@ -85,80 +72,93 @@ enum PaperRenderer {
             ink = drawing.image(from: rect, scale: scale)
         }
         return UIGraphicsImageRenderer(size: rect.size, format: format).image { context in
-            drawPaper(paper, in: context.cgContext, size: rect.size)
+            let cg = context.cgContext
+            cg.setFillColor(UIColor.white.cgColor)
+            cg.fill(CGRect(origin: .zero, size: rect.size))
+            if let path = canvasPatternPath(for: paper, rect: rect) {
+                cg.addPath(path)
+                if paper == .dotted {
+                    cg.setFillColor(patternColor(for: paper).cgColor)
+                    cg.fillPath()
+                } else {
+                    cg.setStrokeColor(patternColor(for: paper).cgColor)
+                    cg.setLineWidth(1)
+                    cg.strokePath()
+                }
+            }
             ink.draw(in: CGRect(origin: .zero, size: rect.size))
         }
     }
 }
 
-/// 畫布後面的紙張：每頁一個白色圖層加上向量圖樣（CAShapeLayer 縮放時仍保持清晰）。
-final class PaperUnderlayView: UIView {
-    private var pageLayers: [CALayer] = []
-    private var configuration: (pageCount: Int, paper: PaperStyle, layout: PageLayout)?
+// MARK: - 連續畫布
+
+/// 連續畫布後面的紙張：每 `segmentHeight` 一個白色圖層加上向量圖樣（縮放時仍保持清晰），畫布變長時往下增加。
+final class CanvasPaperView: UIView {
+    private var segmentLayers: [CALayer] = []
+    private var paper: PaperStyle?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        backgroundColor = .clear
+        backgroundColor = .white
+        // 以左上角為縮放原點：改變高度或縮放時左上角固定在畫布原點
+        layer.anchorPoint = .zero
+        layer.position = .zero
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(pageCount: Int, paper: PaperStyle, layout: PageLayout) {
-        if let configuration, configuration.pageCount == pageCount, configuration.paper == paper, configuration.layout == layout { return }
-        configuration = (pageCount, paper, layout)
-        pageLayers.forEach { $0.removeFromSuperlayer() }
-        pageLayers = (0..<pageCount).map { index in
-            let page = CALayer()
-            page.frame = layout.pageRect(index)
-            page.backgroundColor = UIColor.white.cgColor
-            page.cornerRadius = 4
-            page.shadowColor = UIColor.black.cgColor
-            page.shadowOpacity = 0.12
-            page.shadowRadius = 6
-            page.shadowOffset = CGSize(width: 0, height: 2)
-            page.shadowPath = UIBezierPath(roundedRect: page.bounds, cornerRadius: 4).cgPath
-            if let path = PaperRenderer.patternPath(for: paper, size: layout.pageSize) {
-                let pattern = CAShapeLayer()
-                pattern.frame = page.bounds
-                pattern.path = path
-                pattern.contentsScale = max(traitCollection.displayScale, 2)
-                if paper == .dotted {
-                    pattern.fillColor = PaperRenderer.patternColor(for: paper).cgColor
-                } else {
-                    pattern.fillColor = nil
-                    pattern.strokeColor = PaperRenderer.patternColor(for: paper).cgColor
-                    pattern.lineWidth = 1
-                }
-                page.addSublayer(pattern)
-            }
-            layer.addSublayer(page)
-            return page
+    func configure(paper: PaperStyle, height: CGFloat) {
+        if paper != self.paper {
+            segmentLayers.forEach { $0.removeFromSuperlayer() }
+            segmentLayers = []
+            self.paper = paper
         }
-        bounds = CGRect(x: 0, y: 0, width: layout.canvasWidth, height: layout.canvasHeight(pageCount: pageCount))
+        let count = max(Int(ceil(height / CanvasLayout.segmentHeight)), 1)
+        while segmentLayers.count > count {
+            segmentLayers.removeLast().removeFromSuperlayer()
+        }
+        while segmentLayers.count < count {
+            let rect = CGRect(x: 0, y: CGFloat(segmentLayers.count) * CanvasLayout.segmentHeight, width: CanvasLayout.width, height: CanvasLayout.segmentHeight)
+            let segment = CAShapeLayer()
+            segment.frame = rect
+            segment.path = PaperRenderer.canvasPatternPath(for: paper, rect: rect)
+            segment.contentsScale = max(traitCollection.displayScale, 2)
+            if paper == .dotted {
+                segment.fillColor = PaperRenderer.patternColor(for: paper).cgColor
+            } else {
+                segment.fillColor = nil
+                segment.strokeColor = PaperRenderer.patternColor(for: paper).cgColor
+                segment.lineWidth = 1
+            }
+            layer.addSublayer(segment)
+            segmentLayers.append(segment)
+        }
+        bounds = CGRect(x: 0, y: 0, width: CanvasLayout.width, height: CGFloat(count) * CanvasLayout.segmentHeight)
     }
 }
 
-/// 筆記本畫布：一張 PKCanvasView 承載所有頁面（由上而下排列），背後是紙張。
-/// 使用系統原生的 Apple Pencil 工具列（PKToolPicker），可雙指縮放；
-/// 手指書寫或捲動依系統「只用 Apple Pencil 繪圖」設定，工具列選單中也能切換。
-final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
+/// 手寫筆記的畫布：寬度固定、往下無限延伸的 PKCanvasView，後面是連續的紙張。
+/// 一打開就能直接書寫：Apple Pencil 書寫、手指捲動；沒有 Apple Pencil 時手指書寫、兩指捲動
+/// （依系統設定，也能在 Apple Pencil 工具列的選單切換）。寫到接近底部時自動加長；雙指縮放，最小為符合寬度。
+final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PKToolPickerObserver {
     let canvasView = PKCanvasView()
-    private let paperView = PaperUnderlayView()
+    private let paperView = CanvasPaperView()
     private let toolPicker = PKToolPicker()
-    private(set) var pageCount = 1
-    private(set) var layout = PageLayout.notebook
+    private var paper: PaperStyle = .blank
+    private var minimumHeight = CanvasLayout.segmentHeight
+    /// 目前的畫布高度（邏輯座標）。打開期間只會變長，畫面不會因為擦掉筆跡而跳動。
+    private var canvasHeight: CGFloat = 0
     private var lastWidth: CGFloat = 0
-    private var lastVisiblePage = 0
 
     var onDrawingChange: ((PKDrawing) -> Void)?
-    var onVisiblePageChange: ((Int) -> Void)?
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .secondarySystemBackground
+        view.backgroundColor = .white
 
         canvasView.delegate = self
         canvasView.backgroundColor = .clear
@@ -166,7 +166,7 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
         canvasView.drawingPolicy = .default
         canvasView.alwaysBounceVertical = true
         canvasView.showsHorizontalScrollIndicator = false
-        // 紙張是白色的：固定用淺色模式，墨水顏色才會跟紙上一致
+        // 紙張是白色的：固定用淺色模式，墨水顏色才會跟匯出的圖片一致
         canvasView.overrideUserInterfaceStyle = .light
         canvasView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(canvasView)
@@ -178,9 +178,9 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
         ])
         canvasView.insertSubview(paperView, at: 0)
 
-        // 顏色以淺色模式（白紙）呈現
         toolPicker.colorUserInterfaceStyle = .light
         toolPicker.addObserver(canvasView)
+        toolPicker.addObserver(self)
         toolPicker.setVisible(true, forFirstResponder: canvasView)
     }
 
@@ -198,115 +198,115 @@ final class NotebookCanvasController: UIViewController, PKCanvasViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let width = canvasView.bounds.width
-        guard width > 0, width != lastWidth else { return }
-        // 旋轉或改變視窗大小時維持相對縮放比例
-        let relativeZoom = lastWidth > 0 ? canvasView.zoomScale / fitScale(for: lastWidth) : 1
-        lastWidth = width
-        let fit = fitScale(for: width)
-        canvasView.minimumZoomScale = fit
-        canvasView.maximumZoomScale = fit * 4
-        canvasView.zoomScale = fit * max(relativeZoom, 1)
+        guard width > 0 else { return }
+        if width != lastWidth {
+            // 旋轉、調整側欄或視窗大小時維持相對縮放比例
+            let relativeZoom = lastWidth > 0 ? canvasView.zoomScale / fitScale(for: lastWidth) : 1
+            lastWidth = width
+            let fit = fitScale(for: width)
+            canvasView.minimumZoomScale = fit
+            canvasView.maximumZoomScale = fit * 4
+            canvasView.zoomScale = fit * max(relativeZoom, 1)
+        }
         updateLayout()
     }
 
     private func fitScale(for width: CGFloat) -> CGFloat {
-        width / layout.canvasWidth
+        width / CanvasLayout.width
     }
 
-    func configure(drawing: PKDrawing, pageCount: Int, paper: PaperStyle, layout: PageLayout) {
-        self.pageCount = max(pageCount, 1)
-        let layoutChanged = layout != self.layout
-        self.layout = layout
+    /// 載入筆跡與紙張；`minimumSegments` 是上次的畫布長度（段數）。
+    func configure(drawing: PKDrawing, minimumSegments: Int, paper: PaperStyle) {
         if canvasView.drawing != drawing {
             canvasView.drawing = drawing
         }
-        paperView.configure(pageCount: self.pageCount, paper: paper, layout: layout)
-        if layoutChanged, lastWidth > 0 {
-            lastWidth = 0
-            view.setNeedsLayout()
-        }
+        self.paper = paper
+        minimumHeight = CGFloat(max(minimumSegments, 1)) * CanvasLayout.segmentHeight
+        canvasHeight = 0
         updateLayout()
     }
 
-    var drawing: PKDrawing { canvasView.drawing }
-
-    func scrollToPage(_ index: Int, animated: Bool) {
-        let zoom = canvasView.zoomScale
-        let y = layout.pageRect(index).minY * zoom - layout.margin * zoom - canvasView.adjustedContentInset.top
-        let maxY = max(canvasView.contentSize.height - canvasView.bounds.height + canvasView.adjustedContentInset.bottom, -canvasView.adjustedContentInset.top)
-        canvasView.setContentOffset(CGPoint(x: canvasView.contentOffset.x, y: min(max(y, -canvasView.adjustedContentInset.top), maxY)), animated: animated)
+    /// 依筆跡加長畫布（至少填滿畫面），更新捲動範圍與紙張。
+    private func updateLayout() {
+        let zoom = max(canvasView.zoomScale, 0.01)
+        let viewport = canvasView.bounds.height / zoom
+        canvasHeight = max(canvasHeight, CanvasLayout.height(for: canvasView.drawing, minimum: max(minimumHeight, viewport)))
+        paperView.configure(paper: paper, height: canvasHeight)
+        paperView.transform = CGAffineTransform(scaleX: zoom, y: zoom)
+        let size = CGSize(width: CanvasLayout.width * zoom, height: canvasHeight * zoom)
+        if canvasView.contentSize != size {
+            canvasView.contentSize = size
+        }
     }
 
-    private func updateLayout() {
-        let zoom = canvasView.zoomScale
-        canvasView.contentSize = CGSize(
-            width: layout.canvasWidth * zoom,
-            height: layout.canvasHeight(pageCount: pageCount) * zoom
-        )
-        paperView.transform = CGAffineTransform(scaleX: zoom, y: zoom)
-        paperView.frame.origin = .zero
+    /// Apple Pencil 工具列停靠在底部（iPhone）時，讓畫布可以捲到工具列上方。
+    private func updateToolPickerInset() {
+        let obscured = toolPicker.frameObscured(in: view)
+        let inset = obscured.isNull ? 0 : max(0, view.bounds.maxY - obscured.minY)
+        canvasView.contentInset.bottom = inset
+        canvasView.verticalScrollIndicatorInsets.bottom = inset
     }
 
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+        updateLayout()
         onDrawingChange?(canvasView.drawing)
+    }
+
+    func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+        // 改完標題後直接書寫：讓畫布重新取得焦點，Apple Pencil 工具列再次出現
+        if !canvasView.isFirstResponder {
+            canvasView.becomeFirstResponder()
+        }
     }
 
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         updateLayout()
     }
 
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        let zoom = max(scrollView.zoomScale, 0.01)
-        let middle = (scrollView.contentOffset.y + scrollView.bounds.height / 2) / zoom
-        let page = layout.pageIndex(atY: middle, pageCount: pageCount)
-        if page != lastVisiblePage {
-            lastVisiblePage = page
-            onVisiblePageChange?(page)
-        }
+    // MARK: - PKToolPickerObserver
+
+    func toolPickerFramesObscuredDidChange(_ toolPicker: PKToolPicker) {
+        updateToolPickerInset()
+    }
+
+    func toolPickerVisibilityDidChange(_ toolPicker: PKToolPicker) {
+        updateToolPickerInset()
     }
 }
 
-/// 讓 SwiftUI 端取得畫布目前的筆跡、捲動到某頁。
+/// 讓 SwiftUI 端取得畫布目前的筆跡。
 @MainActor
-final class NotebookCanvasHandle {
-    fileprivate weak var controller: NotebookCanvasController?
+final class CanvasNotebookHandle {
+    fileprivate weak var controller: CanvasNotebookController?
 
-    var currentDrawing: PKDrawing? { controller?.drawing }
-
-    func scrollToPage(_ index: Int) {
-        controller?.scrollToPage(index, animated: true)
-    }
+    var currentDrawing: PKDrawing? { controller?.canvasView.drawing }
 }
 
-/// SwiftUI 包裝。`revision` 改變時（插入／刪除頁面、改紙張、重新載入）才把筆跡重新載入畫布；
-/// 書寫時筆跡由畫布回報（`onDrawingChange`），不會反覆重設。
-struct NotebookCanvas: UIViewControllerRepresentable {
+/// SwiftUI 包裝。`revision` 改變時（換紙張、重新載入）才重新設定畫布；書寫時筆跡由畫布回報，不會反覆重設。
+struct CanvasNotebook: UIViewControllerRepresentable {
     let drawing: () -> PKDrawing
-    let pageCount: Int
+    let minimumSegments: Int
     let paper: PaperStyle
-    var layout: PageLayout = .notebook
-    let handle: NotebookCanvasHandle
+    let handle: CanvasNotebookHandle
     let revision: Int
     var onDrawingChange: (PKDrawing) -> Void
-    var onVisiblePageChange: (Int) -> Void = { _ in }
 
-    func makeUIViewController(context: Context) -> NotebookCanvasController {
-        let controller = NotebookCanvasController()
+    func makeUIViewController(context: Context) -> CanvasNotebookController {
+        let controller = CanvasNotebookController()
         controller.loadViewIfNeeded()
-        controller.configure(drawing: drawing(), pageCount: pageCount, paper: paper, layout: layout)
+        controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper)
         handle.controller = controller
         context.coordinator.revision = revision
         return controller
     }
 
-    func updateUIViewController(_ controller: NotebookCanvasController, context: Context) {
+    func updateUIViewController(_ controller: CanvasNotebookController, context: Context) {
         controller.onDrawingChange = onDrawingChange
-        controller.onVisiblePageChange = onVisiblePageChange
         if context.coordinator.revision != revision {
             context.coordinator.revision = revision
-            controller.configure(drawing: drawing(), pageCount: pageCount, paper: paper, layout: layout)
+            controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper)
         }
     }
 

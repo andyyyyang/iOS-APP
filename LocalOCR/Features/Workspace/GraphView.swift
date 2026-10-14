@@ -40,7 +40,9 @@ struct GraphData {
             }
             selected = Array(selected.prefix(limit))
         } else {
+            // 只有這台裝置上的筆記知道連結（還沒下載的筆記不列入）
             selected = store.notes
+                .filter(\.isLocal)
                 .sorted { (adjacency[$0.path]?.count ?? 0, $0.mtime) > (adjacency[$1.path]?.count ?? 0, $1.mtime) }
                 .prefix(limit)
                 .map(\.path)

@@ -14,11 +14,16 @@ struct WorkspaceView: View {
         @Bindable var workspace = workspace
         ZStack {
             DS.ink.ignoresSafeArea()
-            if sizeClass == .compact {
-                CompactWorkspace()
-            } else {
-                RegularWorkspace()
+            Group {
+                if sizeClass == .compact {
+                    CompactWorkspace()
+                } else {
+                    RegularWorkspace()
+                }
             }
+            // 鍵盤出現時版面完全不動（頂部列、側欄、浮動工具列都不跟著跑）；
+            // 筆記編輯器自己依鍵盤高度調整捲動範圍（MarkdownEditor）
+            .ignoresSafeArea(.keyboard)
             if workspace.showsPalette {
                 CommandPalette()
                     .transition(.opacity)
@@ -32,14 +37,6 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $workspace.showsPairing) {
             NavigationStack { PairingView() }
-        }
-        .sheet(item: newNotebookItem) { item in
-            NewNotebookSheet { title, paper, color in
-                if let path = try? NotebookFiles.create(in: item.path, title: title, paper: paper, color: color, store: store) {
-                    workspace.reveal(path: path)
-                    workspace.openNote(path)
-                }
-            }
         }
         .confirmationDialog(
             "刪除「\(workspace.pendingDelete?.title ?? "")」？",
@@ -55,23 +52,20 @@ struct WorkspaceView: View {
         }
         .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
         .onChange(of: sync.pendingFiles) { _, _ in Task { await store.reload() } }
+        // 開著的筆記不會在按需模式整理空間時被移除
+        .onChange(of: workspace.tabs, initial: true) { _, tabs in
+            sync.openPaths = Set(tabs.compactMap { tab -> String? in
+                if case .note(let path) = tab { return path }
+                return nil
+            })
+        }
         .task {
+            // 先用上次記下的遠端清單列出檔案，不必等同步完成
+            await sync.prepare()
             await store.reload()
             if sync.isConfigured { await sync.syncNow() }
         }
     }
-
-    private var newNotebookItem: Binding<FolderItem?> {
-        Binding(
-            get: { workspace.newNotebookFolder.map(FolderItem.init(path:)) },
-            set: { workspace.newNotebookFolder = $0?.path }
-        )
-    }
-}
-
-private struct FolderItem: Identifiable {
-    let path: String
-    var id: String { path }
 }
 
 // MARK: - iPad

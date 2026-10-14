@@ -59,6 +59,17 @@ struct LocalVault: Sendable {
         try FileManager.default.moveItem(at: url(for: source), to: target)
     }
 
+    /// 刪除檔案後，往上移除變成空的資料夾（不會移除 vault 本身）。
+    func removeEmptyParents(of path: String) {
+        var folder = (Self.normalize(path) as NSString).deletingLastPathComponent
+        while !folder.isEmpty {
+            let url = root.appending(path: folder, directoryHint: .isDirectory)
+            guard let contents = try? FileManager.default.contentsOfDirectory(atPath: url.path(percentEncoded: false)), contents.isEmpty else { return }
+            try? FileManager.default.removeItem(at: url)
+            folder = (folder as NSString).deletingLastPathComponent
+        }
+    }
+
     func createFolder(_ path: String) throws {
         try FileManager.default.createDirectory(at: root.appending(path: Self.normalize(path), directoryHint: .isDirectory), withIntermediateDirectories: true)
     }

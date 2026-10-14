@@ -115,7 +115,7 @@ struct CreatePalette: View {
     var body: some View {
         FloatingPalette {
             PaletteButton(title: "新增筆記", glyph: "T", pastel: .lavender) { workspace.newTextNote() }
-            PaletteButton(title: "新增手寫筆記本", systemImage: "pencil", pastel: .sky) { workspace.requestNewNotebook() }
+            PaletteButton(title: "新增手寫筆記", systemImage: "pencil", pastel: .sky) { workspace.newNotebook() }
             PaletteButton(title: "新增待辦清單", systemImage: "checkmark.square", pastel: .butter) { workspace.newTaskNote() }
             PaletteButton(title: "新增資料夾", systemImage: "folder", pastel: .blush) {
                 folderName = ""
@@ -163,7 +163,7 @@ struct NoteCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
-                Text(featured ? "手寫筆記本" : (note.folder.isEmpty ? "最上層" : note.folder))
+                Text(featured ? "手寫筆記" : (note.folder.isEmpty ? "最上層" : note.folder))
                     .font(.caption.weight(featured ? .medium : .regular))
                     .foregroundStyle(featured ? DS.onPastelSecondary : DS.textTertiary)
                     .lineLimit(1)
@@ -183,7 +183,7 @@ struct NoteCard: View {
                 .foregroundStyle(DS.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-            Text(note.snippet.isEmpty ? (note.isNotebook ? "手寫內容" : "沒有其他文字") : note.snippet)
+            Text(!note.isLocal ? "在雲端，打開時下載" : note.snippet.isEmpty ? (note.isNotebook ? "手寫內容" : "沒有其他文字") : note.snippet)
                 .font(.system(size: 13))
                 .foregroundStyle(featured ? DS.onPastelSecondary : DS.textSecondary)
                 .lineLimit(3)

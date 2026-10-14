@@ -66,6 +66,7 @@ struct NoteView: View {
             .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
             .toast($toast)
             .task { load() }
+            .task { await watchRemoteChanges() }
             .onDisappear(perform: flushSave)
     }
 
@@ -76,9 +77,12 @@ struct NoteView: View {
         } else if isEditing {
             VStack(spacing: 0) {
                 headerBar
+                // 位置與閱讀模式完全相同，切換時標題與內文不會移動
                 titleField
-                    .padding(.horizontal, 28)
-                    .padding(.top, 6)
+                    .padding(.horizontal, NoteTextView.horizontalPadding)
+                    .padding(.top, 10)
+                    .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 MarkdownEditor(
                     text: $text,
                     controller: controller,
@@ -93,7 +97,7 @@ struct NoteView: View {
                     headerBar
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 14) {
+                            VStack(alignment: .leading, spacing: NoteTextView.topInset) {
                                 titleField
                                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Text("空白筆記。按下方的 T 開始書寫。")
@@ -115,10 +119,10 @@ struct NoteView: View {
                                     )
                                 }
                             }
-                            .padding(.horizontal, 32)
+                            .padding(.horizontal, NoteTextView.horizontalPadding)
                             .padding(.top, 10)
                             .padding(.bottom, 100)
-                            .frame(maxWidth: 760, alignment: .leading)
+                            .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
                             .frame(maxWidth: .infinity)
                         }
                         .scrollIndicators(.hidden)
@@ -213,7 +217,8 @@ struct NoteView: View {
     }
 
     private func toggleEditing() {
-        withAnimation(.easeOut(duration: 0.2)) { isEditing.toggle() }
+        // 不加動畫：兩種模式的版面位置相同，直接切換最穩定
+        isEditing.toggle()
         if isEditing {
             Task {
                 try? await Task.sleep(for: .milliseconds(150))
@@ -235,6 +240,7 @@ struct NoteView: View {
         title = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         isEditing = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         didLoad = true
+        sync.touch(path)
         if isEditing {
             Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -247,7 +253,7 @@ struct NoteView: View {
         guard didLoad, text != savedText else { return }
         saveTask?.cancel()
         saveTask = Task {
-            try? await Task.sleep(for: .milliseconds(800))
+            try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             flushSave()
         }
@@ -262,6 +268,20 @@ struct NoteView: View {
             savedText = text
         } catch {
             toast = "儲存失敗：\(error.localizedDescription)"
+        }
+    }
+
+    /// 編輯當下同步：打開時先檢查遠端（Obsidian）有沒有新版本，之後開著的期間每 15 秒檢查一次；
+    /// 有新版本且這裡沒有未儲存的修改時下載，畫面經由 `sync.revision` 更新。
+    private func watchRemoteChanges() async {
+        var first = true
+        while !Task.isCancelled {
+            if !first {
+                try? await Task.sleep(for: .seconds(15))
+            }
+            first = false
+            guard didLoad, text == savedText, !Task.isCancelled else { continue }
+            await sync.refreshOpenFile(path)
         }
     }
 

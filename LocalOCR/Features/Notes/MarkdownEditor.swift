@@ -181,6 +181,69 @@ final class MarkdownEditorController {
     }
 }
 
+/// 筆記編輯器的文字區：內容欄與閱讀模式相同（最寬 760、左右 32），切換閱讀／編輯時文字不會移動。
+/// 工作區不隨鍵盤縮放（版面才不會跑來跑去），所以由這裡依鍵盤蓋住的高度加大捲動範圍、讓游標保持可見。
+final class NoteTextView: UITextView {
+    static let columnWidth: CGFloat = 760
+    static let horizontalPadding: CGFloat = 32
+    /// 與閱讀模式標題和內文之間的距離相同。
+    static let topInset: CGFloat = 14
+    static let bottomInset: CGFloat = 140
+
+    private var keyboardOverlap: CGFloat = 0
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        contentInsetAdjustmentBehavior = .never
+        self.textContainer.lineFragmentPadding = 0
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        center.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let side = max((bounds.width - Self.columnWidth) / 2, 0) + Self.horizontalPadding
+        let insets = UIEdgeInsets(top: Self.topInset, left: side, bottom: Self.bottomInset, right: side)
+        if textContainerInset != insets {
+            textContainerInset = insets
+        }
+    }
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard let window, let end = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        // 鍵盤位置是螢幕座標；分割畫面或台前調度時視窗不在螢幕原點
+        let keyboard = window.windowScene.map { window.convert(end, from: $0.screen.coordinateSpace) } ?? end
+        let visible = convert(bounds, to: window)
+        // 只算停靠在底部的鍵盤（iPad 浮動鍵盤不會遮住固定位置）
+        let docked = keyboard.height > 0 && keyboard.maxY >= window.bounds.maxY - 1
+        let overlap = docked ? max(0, visible.maxY - max(keyboard.minY, visible.minY)) : 0
+        setKeyboardOverlap(overlap, notification: notification)
+    }
+
+    @objc private func keyboardWillHide(_ notification: Notification) {
+        setKeyboardOverlap(0, notification: notification)
+    }
+
+    private func setKeyboardOverlap(_ overlap: CGFloat, notification: Notification) {
+        guard abs(overlap - keyboardOverlap) > 0.5 else { return }
+        keyboardOverlap = overlap
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        let curve = notification.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? UInt ?? 7
+        UIView.animate(withDuration: duration, delay: 0, options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState]) {
+            self.contentInset.bottom = overlap
+            self.verticalScrollIndicatorInsets.bottom = overlap
+        }
+        if overlap > 0, isFirstResponder {
+            scrollRangeToVisible(selectedRange)
+        }
+    }
+}
+
 /// Markdown 編輯器（UITextView）：即時樣式、鍵盤上方的格式工具列、系統書寫工具與 Apple Pencil 隨手寫。
 struct MarkdownEditor: UIViewRepresentable {
     @Binding var text: String
@@ -189,7 +252,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var onInsertPhoto: () -> Void
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+        let textView = NoteTextView()
         textView.delegate = context.coordinator
         textView.font = MarkdownHighlighter.bodyFont
         textView.adjustsFontForContentSizeCategory = true
@@ -197,7 +260,6 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.tintColor = MarkdownHighlighter.ink
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
-        textView.textContainerInset = UIEdgeInsets(top: 24, left: 28, bottom: 140, right: 28)
         // Markdown 不需要智慧引號與破折號
         textView.smartQuotesType = .no
         textView.smartDashesType = .no

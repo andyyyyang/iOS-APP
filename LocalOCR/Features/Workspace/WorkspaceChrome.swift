@@ -358,23 +358,52 @@ struct WorkspaceTabContent: View {
     }
 }
 
-/// 依筆記種類開啟：手寫筆記本或一般 Markdown 筆記。
+/// 依筆記種類開啟：手寫筆記或一般 Markdown 筆記。還沒下載的筆記先下載（按需模式），才知道是哪一種。
 struct NoteDetailRouter: View {
     let path: String
 
     @Environment(Workspace.self) private var workspace
+    @State private var isDownloaded = false
+    @State private var downloadError: String?
 
     var body: some View {
-        let summary = NotesStore.shared.notes.first { $0.path == path }
-            ?? NotesStore.summarize(path: path, mtime: Date(), text: LocalVault.shared.readText(path) ?? "")
-        if let id = summary.notebookID {
-            NotebookEditorView(initialPath: path, notebookID: id, onPathChange: { workspace.renameNote(from: path, to: $0) })
+        if isDownloaded || LocalVault.shared.exists(path) {
+            let summary = NotesStore.shared.notes.first { $0.path == path && $0.isLocal }
+                ?? NotesStore.summarize(path: path, mtime: Date(), text: LocalVault.shared.readText(path) ?? "")
+            if let id = summary.notebookID {
+                NotebookEditorView(initialPath: path, notebookID: id, onPathChange: { workspace.renameNote(from: path, to: $0) })
+            } else {
+                NoteView(
+                    initialPath: path,
+                    onPathChange: { workspace.renameNote(from: path, to: $0) },
+                    onOpenNote: { workspace.openLink($0) }
+                )
+            }
+        } else if let downloadError {
+            ContentUnavailableView {
+                Label("無法下載筆記", systemImage: "icloud.slash")
+            } description: {
+                Text(downloadError)
+            } actions: {
+                Button("再試一次") {
+                    self.downloadError = nil
+                }
+                .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
+            }
         } else {
-            NoteView(
-                initialPath: path,
-                onPathChange: { workspace.renameNote(from: path, to: $0) },
-                onOpenNote: { workspace.openLink($0) }
-            )
+            ProgressView("下載中…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task { await download() }
+        }
+    }
+
+    private func download() async {
+        do {
+            _ = try await VaultSyncCenter.shared.download(path)
+            isDownloaded = true
+            await NotesStore.shared.reload()
+        } catch {
+            downloadError = error.localizedDescription
         }
     }
 }

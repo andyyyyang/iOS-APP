@@ -9,29 +9,31 @@ struct InkEditRequest: Identifiable {
     var id: String { name }
 }
 
-/// 筆記中的手寫區塊：與筆記本相同的原生 Apple Pencil 工具列，可以加長。
-/// 完成時存成「附件/ink-xxxx.png」（Obsidian 顯示）與「附件/ink-xxxx.ink」（可再編輯）。
+/// 筆記中的手寫區塊：與手寫筆記相同的連續畫布，打開就能直接書寫，寫到底部自動加長。
+/// 完成時存成「附件/ink-xxxx.png」（Obsidian 顯示，高度剛好包住筆跡）與「附件/ink-xxxx.ink」（可再編輯）。
 struct InkBlockEditorView: View {
     let notePath: String
     let request: InkEditRequest
     var onSaved: (InkEditRequest) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var block = InkBlock(height: InkBlock.defaultHeight, paper: .blank, drawing: PKDrawing().dataRepresentation())
-    @State private var handle = NotebookCanvasHandle()
+    @State private var block = InkBlock(height: InkBlock.minimumHeight, paper: NotesSettings.lastPaper, drawing: PKDrawing().dataRepresentation())
+    @State private var handle = CanvasNotebookHandle()
     @State private var revision = 0
     @State private var didLoad = false
+    @State private var loadFailed = false
     @State private var isSaving = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if didLoad {
-                    NotebookCanvas(
-                        drawing: { (try? PKDrawing(data: block.drawing)) ?? PKDrawing() },
-                        pageCount: 1,
+                if loadFailed {
+                    ContentUnavailableView("無法開啟手寫區塊", systemImage: "icloud.slash", description: Text("筆跡資料還沒下載到這台裝置，請連上網路後再試。"))
+                } else if didLoad {
+                    CanvasNotebook(
+                        drawing: { handle.currentDrawing ?? block.pkDrawing },
+                        minimumSegments: 1,
                         paper: block.paper,
-                        layout: block.layout,
                         handle: handle,
                         revision: revision,
                         onDrawingChange: { _ in }
@@ -47,7 +49,7 @@ struct InkBlockEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Picker("紙張", selection: Binding(get: { block.paper }, set: { changePaper($0) })) {
                             ForEach(PaperStyle.allCases) { style in
@@ -55,14 +57,7 @@ struct InkBlockEditorView: View {
                             }
                         }
                     } label: {
-                        Label("紙張", systemImage: "doc.richtext")
-                    }
-                    Button {
-                        captureDrawing()
-                        block.height += 300
-                        revision += 1
-                    } label: {
-                        Label("加長", systemImage: "arrow.down.to.line.compact")
+                        Label("紙張", systemImage: block.paper.systemImage)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -71,33 +66,43 @@ struct InkBlockEditorView: View {
                     } label: {
                         if isSaving { ProgressView() } else { Text("完成").bold() }
                     }
-                    .disabled(isSaving)
+                    .disabled(isSaving || loadFailed)
                 }
             }
-            .task { load() }
+            .task { await load() }
         }
         .interactiveDismissDisabled()
     }
 
-    private func load() {
-        guard !didLoad else { return }
-        if !request.isNew,
-           let data = try? VaultSyncCenter.shared.vault.read(InkFiles.dataPath(notePath: notePath, name: request.name)),
-           let saved = try? JSONDecoder().decode(InkBlock.self, from: data) {
-            block = saved
+    private func load() async {
+        guard !didLoad, !loadFailed else { return }
+        if !request.isNew {
+            // 按需模式下筆跡資料可能還在遠端：先下載；拿不到時不能編輯（否則會蓋掉原本的筆跡）
+            let sync = VaultSyncCenter.shared
+            let dataPath = InkFiles.dataPath(notePath: notePath, name: request.name)
+            if let url = try? await sync.download(dataPath),
+               let data = try? Data(contentsOf: url),
+               var saved = try? JSONDecoder().decode(InkBlock.self, from: data) {
+                saved.migrateToCanvas()
+                block = saved
+            } else {
+                loadFailed = true
+                return
+            }
         }
         didLoad = true
     }
 
     private func captureDrawing() {
         if let drawing = handle.currentDrawing {
-            block.drawing = drawing.dataRepresentation()
+            block.pkDrawing = drawing
         }
     }
 
     private func changePaper(_ paper: PaperStyle) {
         captureDrawing()
         block.paper = paper
+        NotesSettings.lastPaper = paper
         revision += 1
     }
 
@@ -105,9 +110,12 @@ struct InkBlockEditorView: View {
         isSaving = true
         defer { isSaving = false }
         captureDrawing()
-        let vault = VaultSyncCenter.shared.vault
+        block.height = InkBlock.fittedHeight(for: block.pkDrawing)
+        let sync = VaultSyncCenter.shared
+        let vault = sync.vault
         let block = block
         let image = await Task.detached(priority: .userInitiated) { InkFiles.image(for: block).pngData() }.value
+        await sync.prepareOverwrite([InkFiles.dataPath(notePath: notePath, name: request.name), InkFiles.imagePath(notePath: notePath, name: request.name)])
         do {
             try vault.write(try JSONEncoder().encode(block), to: InkFiles.dataPath(notePath: notePath, name: request.name))
             if let image {

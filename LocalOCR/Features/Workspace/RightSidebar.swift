@@ -414,7 +414,7 @@ private struct AIPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 if isNotebook {
-                    PanelHint(text: "手寫筆記本請按筆記本右上角的「AI」：先辨識手寫內容，再整理摘要與標籤。")
+                    PanelHint(text: "手寫筆記請按筆記上方的「AI」：先辨識手寫內容，再整理摘要與標籤。")
                 } else {
                     Button {
                         Task { await analyze() }

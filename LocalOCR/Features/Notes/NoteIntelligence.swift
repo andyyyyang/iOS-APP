@@ -19,18 +19,18 @@ enum NoteIntelligenceError: LocalizedError {
 
 /// 筆記的 AI 處理：手寫辨識（Vision）＋整理（裝置端 Foundation Models），全程在裝置上執行。
 enum NoteIntelligence {
-    /// 逐頁把筆跡轉成圖片交給 Vision 辨識；空白頁略過。各頁以空白行分隔。
+    /// 把畫布逐段（切在筆跡之間的空白）轉成圖片交給 Vision 辨識；空白段略過。各段以空白行分隔。
     @MainActor
     static func recognizeHandwriting(
         drawing: PKDrawing,
-        pageCount: Int,
         progress: (Int, Int) -> Void = { _, _ in }
     ) async throws -> String {
         let service = OCRService()
+        let bands = CanvasLayout.bands(for: drawing)
         var pages: [String] = []
-        for index in 0..<pageCount where drawing.hasStrokes(onPage: index, pageCount: pageCount) {
-            progress(index + 1, pageCount)
-            let image = PaperRenderer.pageImage(drawing: drawing, page: index, paper: .blank, scale: 2)
+        for (index, band) in bands.enumerated() where drawing.hasStrokes(in: band) {
+            progress(index + 1, bands.count)
+            let image = PaperRenderer.canvasImage(drawing: drawing, rect: band, paper: .blank, scale: 2)
             let page = try await service.recognize(image)
             if !page.text.isEmpty {
                 pages.append(page.text)

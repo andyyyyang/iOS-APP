@@ -165,7 +165,7 @@ struct CommandPalette: View {
     private var commands: [Item] {
         var items: [Item] = [
             Item(id: "new-note", title: "新增筆記", detail: "", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
-            Item(id: "new-notebook", title: "新增手寫筆記本", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.requestNewNotebook() }),
+            Item(id: "new-notebook", title: "新增手寫筆記", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.newNotebook() }),
             Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.newTaskNote() }),
             Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
             Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),

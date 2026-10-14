@@ -158,7 +158,6 @@ final class Workspace {
     var showsPalette = false
     var showsCamera = false
     var showsPairing = false
-    var newNotebookFolder: String?
     var pendingDelete: NoteSummary?
 
     /// 開著的筆記目前的文字（含尚未存檔的修改），右側大綱與 AI 使用。
@@ -370,8 +369,12 @@ final class Workspace {
         newTextNote(in: folder, body: "- [ ] ")
     }
 
-    func requestNewNotebook(in folder: String? = nil) {
-        newNotebookFolder = folder ?? currentFolder
+    /// 新增手寫筆記：直接建立空白畫布並開啟，可以馬上書寫（標題與紙張之後在筆記上方改）。
+    func newNotebook(in folder: String? = nil) {
+        let title = "手寫 " + Date().formatted(.dateTime.month().day().hour().minute())
+        guard let path = try? NotebookFiles.create(in: folder ?? currentFolder, title: title, paper: NotesSettings.lastPaper, store: store) else { return }
+        reveal(path: path)
+        openNote(path)
     }
 
     func createFolder(named name: String, in parent: String) {

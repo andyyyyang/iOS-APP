@@ -3,7 +3,7 @@ import SwiftUI
 /// 筆記與 Obsidian：配對、同步狀態、這台裝置的 Obsidian 設定、新筆記的位置。
 struct NotesSettingsView: View {
     @AppStorage(NotesSettings.Key.defaultFolder) private var defaultFolder = ""
-    @AppStorage(NotesSettings.Key.downloadAllFiles) private var downloadAllFiles = true
+    @AppStorage(NotesSettings.Key.downloadPolicy) private var downloadPolicy = VaultDownloadPolicy.onDemand.rawValue
     @AppStorage(NotesSettings.Key.vaultName) private var vaultName = ""
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
@@ -11,10 +11,17 @@ struct NotesSettingsView: View {
     @State private var showsPairing = false
     @State private var obsidianMessage: String?
     @State private var isOpeningObsidian = false
+    @State private var localUsage: Int?
+    @State private var clearedMessage: String?
 
     private static let guideURL = URL(string: "https://github.com/andyyyyang/iOS-APP/blob/claude/ios-local-ocr-dev-pywvch/docs/OBSIDIAN-SYNC.md")!
 
     var body: some View {
+        form
+            .task { localUsage = await sync.localUsage() }
+    }
+
+    private var form: some View {
         Form {
             Section {
                 if sync.isConfigured {
@@ -62,17 +69,45 @@ struct NotesSettingsView: View {
                         Task { await sync.syncNow(allowMassDeletion: true) }
                     }
                 }
-                Toggle("下載所有檔案", isOn: $downloadAllFiles)
-                    .onChange(of: downloadAllFiles) { _, isOn in
-                        if isOn { Task { await sync.syncNow() } }
-                    }
-                if !sync.pendingFiles.isEmpty {
-                    LabeledContent("尚未下載", value: "\(sync.pendingFiles.count) 個檔案")
-                }
             } header: {
                 Text("同步")
             } footer: {
-                Text("整個 vault 的所有資料夾與檔案都會同步（.obsidian 設定資料夾除外），存在這台裝置的「檔案」App →「我的 iPad」→「LocalOCR」→「Obsidian」，離線也能使用。開啟 App、修改後與每 3 分鐘會和 Railway 空間同步，電腦的 Obsidian 再透過 Remotely Save 同步；兩邊同時修改同一個檔案時會保留兩份。關閉「下載所有檔案」可節省空間：筆記照常下載，圖片、PDF 等打開時才下載；超過 100 MB 的檔案一律打開時才下載。")
+                Text("正在編輯的筆記改完約 1 秒就上傳；開著的筆記每 15 秒檢查一次 Obsidian 那邊的修改。開啟 App 與每 3 分鐘會同步整個檔案清單，電腦的 Obsidian 再透過 Remotely Save 同步；兩邊同時修改同一個檔案時會保留兩份。")
+            }
+
+            Section {
+                Picker("這台裝置上的檔案", selection: $downloadPolicy) {
+                    ForEach(VaultDownloadPolicy.allCases) { policy in
+                        Text(policy.title).tag(policy.rawValue)
+                    }
+                }
+                .onChange(of: downloadPolicy) { _, _ in
+                    Task {
+                        await sync.syncNow()
+                        localUsage = await sync.localUsage()
+                    }
+                }
+                LabeledContent("已下載", value: localUsage.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "…")
+                if !sync.pendingFiles.isEmpty {
+                    LabeledContent("在雲端", value: "\(sync.pendingFiles.count) 個檔案")
+                }
+                Button("移除已下載的檔案") {
+                    Task {
+                        let count = await sync.clearDownloads()
+                        localUsage = await sync.localUsage()
+                        clearedMessage = "已從這台裝置移除 \(count) 個檔案"
+                    }
+                }
+                .disabled(sync.isSyncing)
+                if let clearedMessage {
+                    Text(clearedMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("空間")
+            } footer: {
+                Text("「打開時才下載」只同步檔案清單：筆記與圖片打開時才下載，最近 7 天沒打開的筆記與 1 天沒打開的圖片、PDF 會自動從這台裝置移除（Railway 空間與電腦上的不受影響）。內文搜尋、標籤、待辦與關聯圖只涵蓋這台裝置上的筆記。移除已下載的檔案時，開著的筆記與還沒上傳的修改會保留。")
             }
 
             Section {
