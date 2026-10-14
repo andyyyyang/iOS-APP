@@ -111,99 +111,91 @@ struct DrawingListFilter: Equatable {
     }
 }
 
-/// 左側的機種清單：搜尋、型態／尺寸／厚度篩選、排序，每一款一張卡片。
+/// 機種卡片清單（搜尋與篩選在頁面上方的工具列）；往下拉重新掃描。
 struct DrawingModelList: View {
     let models: [DrawingModel]
     let selectedID: String?
-    @Binding var filter: DrawingListFilter
+    let filter: DrawingListFilter
     var onSelect: (DrawingModel) -> Void
     var onSpec: (DrawingModel) -> Void
+    var onRefresh: () async -> Void
 
     @State private var library = DrawingsLibrary.shared
 
     var body: some View {
         let visible = filter.apply(to: models, library: library)
-        VStack(spacing: 0) {
-            header(visible: visible.count)
-            ScrollViewReader { reader in
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        if visible.isEmpty {
-                            EmptyStateView(title: "沒有符合條件的機種", message: models.isEmpty ? nil : "調整搜尋或篩選條件試試看。")
-                                .padding(.top, 30)
-                        }
-                        ForEach(visible) { model in
-                            DrawingModelCard(
-                                model: model,
-                                capacity: library.capacity(for: model),
-                                isSelected: model.id == selectedID,
-                                onSelect: { onSelect(model) },
-                                onSpec: { onSpec(model) }
-                            )
-                            .id(model.id)
-                        }
+        ScrollViewReader { reader in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if visible.isEmpty {
+                        EmptyStateView(title: "沒有符合條件的機種", message: models.isEmpty ? nil : "調整搜尋或篩選條件試試看。")
+                            .padding(.top, 30)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 16)
+                    ForEach(visible) { model in
+                        DrawingModelCard(
+                            model: model,
+                            capacity: library.capacity(for: model),
+                            isSelected: model.id == selectedID,
+                            onSelect: { onSelect(model) },
+                            onSpec: { onSpec(model) }
+                        )
+                        .id(model.id)
+                    }
                 }
-                .scrollIndicators(.hidden)
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: selectedID) { _, id in
-                    guard let id else { return }
-                    withAnimation { reader.scrollTo(id, anchor: .center) }
-                }
+                .padding(.horizontal, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 16)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable { await onRefresh() }
+            .onChange(of: selectedID) { _, id in
+                guard let id else { return }
+                withAnimation { reader.scrollTo(id, anchor: .center) }
             }
         }
     }
+}
 
-    private func header(visible: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SearchField(placeholder: "搜尋機種、SID、SAP、原廠圖號、PO 號…", text: $filter.query)
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    Menu {
-                        Button("全部") { filter.type = nil }
-                        ForEach(DrawingListFilter.types, id: \.self) { type in
-                            Button(type) { filter.type = type }
-                        }
-                    } label: {
-                        FilterChip(title: filter.type ?? "型態", isActive: filter.type != nil)
-                    }
-                    Menu {
-                        ForEach(DrawingListFilter.SizeBucket.allCases) { bucket in
-                            Button(bucket.rawValue) { filter.size = bucket }
-                        }
-                    } label: {
-                        FilterChip(title: filter.size == .all ? "長寬" : filter.size.rawValue, isActive: filter.size != .all)
-                    }
-                    Menu {
-                        ForEach(DrawingListFilter.ThicknessBucket.allCases) { bucket in
-                            Button(bucket.rawValue) { filter.thickness = bucket }
-                        }
-                    } label: {
-                        FilterChip(title: filter.thickness == .all ? "厚度" : filter.thickness.rawValue, isActive: filter.thickness != .all)
-                    }
-                    Menu {
-                        Picker("排序", selection: $filter.sort) {
-                            ForEach(DrawingListFilter.Sort.allCases) { sort in
-                                Text(sort.rawValue).tag(sort)
-                            }
-                        }
-                        Divider()
-                        Toggle("只顯示有圖面", isOn: $filter.onlyWithDrawings)
-                        Toggle("含未登錄機種", isOn: $filter.includeUncatalogued)
-                    } label: {
-                        FilterChip(title: filter.sort.rawValue, systemImage: "arrow.up.arrow.down")
-                    }
+/// 機種清單的篩選膠囊（放在頁面工具列的第二列）。
+struct DrawingFilterChips: View {
+    @Binding var filter: DrawingListFilter
+
+    var body: some View {
+        Menu {
+            Button("全部") { filter.type = nil }
+            ForEach(DrawingListFilter.types, id: \.self) { type in
+                Button(type) { filter.type = type }
+            }
+        } label: {
+            FilterChip(title: filter.type ?? "型態", isActive: filter.type != nil)
+        }
+        Menu {
+            ForEach(DrawingListFilter.SizeBucket.allCases) { bucket in
+                Button(bucket.rawValue) { filter.size = bucket }
+            }
+        } label: {
+            FilterChip(title: filter.size == .all ? "長寬" : filter.size.rawValue, isActive: filter.size != .all)
+        }
+        Menu {
+            ForEach(DrawingListFilter.ThicknessBucket.allCases) { bucket in
+                Button(bucket.rawValue) { filter.thickness = bucket }
+            }
+        } label: {
+            FilterChip(title: filter.thickness == .all ? "厚度" : filter.thickness.rawValue, isActive: filter.thickness != .all)
+        }
+        Menu {
+            Picker("排序", selection: $filter.sort) {
+                ForEach(DrawingListFilter.Sort.allCases) { sort in
+                    Text(sort.rawValue).tag(sort)
                 }
             }
-            .scrollIndicators(.hidden)
-            Text("\(visible)/\(models.count) 款 · \(models.reduce(0) { $0 + $1.drawings.count }) 張圖面")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(DS.textTertiary)
+            Divider()
+            Toggle("只顯示有圖面", isOn: $filter.onlyWithDrawings)
+            Toggle("含未登錄機種", isOn: $filter.includeUncatalogued)
+        } label: {
+            FilterChip(title: filter.sort.rawValue, systemImage: "arrow.up.arrow.down")
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
     }
 }
 

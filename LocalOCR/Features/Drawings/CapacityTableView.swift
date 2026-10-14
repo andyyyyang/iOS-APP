@@ -66,263 +66,43 @@ struct CapacityColumn: Identifiable, Hashable {
 /// 產能清單：一個機種一列，站別欄位依 PO LIST 的製程順序長出來，沖壓旁邊是理論產能。
 /// 產能與未結量以 PO LIST 為準，和 catalog 不一致時標 ≠。
 struct CapacityTableView: View {
+    @Bindable var model: CapacityTableModel
     var onOpen: (DrawingModel) -> Void
 
-    @State private var library = DrawingsLibrary.shared
-    @State private var query = ""
-    @State private var onlyDiff = false
-    @State private var showArchived = false
-    @State private var showCNC = false
-    @State private var sortID = "未結量"
-    @State private var ascending = false
-    @State private var filters: [String: String] = [:]
-    @State private var exportURL: URL?
-    @State private var notice: String?
+    private var library: DrawingsLibrary { model.library }
+    private var sortID: String {
+        get { model.sortID }
+        nonmutating set { model.sortID = newValue }
+    }
+    private var ascending: Bool {
+        get { model.ascending }
+        nonmutating set { model.ascending = newValue }
+    }
+    private var filters: [String: String] {
+        get { model.filters }
+        nonmutating set { model.filters = newValue }
+    }
 
     var body: some View {
-        let stationColumns = DrawingCapacity.columns(models: library.models, capacity: library.snapshot.capacity, showCNC: showCNC)
-        let allRows = rows(stationColumns: stationColumns)
-        let columns = columns(stations: stationColumns)
-        let visible = sorted(filtered(allRows, columns: columns), columns: columns)
+        let snapshot = model.snapshot()
         VStack(spacing: 0) {
-            toolbar(all: allRows, visible: visible, columns: columns)
-            if let notice {
+            if let notice = model.notice {
                 Text(notice)
                     .font(.footnote)
                     .foregroundStyle(DS.textSecondary)
-                    .padding(.vertical, 6)
-                    .onTapGesture { self.notice = nil }
+                    .padding(.bottom, 8)
+                    .onTapGesture { model.notice = nil }
             }
-            table(rows: visible, allRows: allRows, columns: columns)
+            table(rows: snapshot.visible, allRows: snapshot.all, columns: snapshot.columns)
                 .background(DS.card)
                 .clipShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
                 .padding(.horizontal, 16)
                 .padding(.bottom, 16)
         }
-        .sheet(item: Binding(get: { exportURL.map(ExportFile.init) }, set: { exportURL = $0?.url })) { file in
+        .sheet(item: Binding(get: { model.exportURL.map(ExportFile.init) }, set: { model.exportURL = $0?.url })) { file in
             ShareSheet(items: [file.url])
         }
-    }
-
-    // MARK: 資料
-
-    private func rows(stationColumns: [StationColumn]) -> [CapacityRow] {
-        let hasPoData = !library.snapshot.capacity.isEmpty
-        return library.models.compactMap { model in
-            let capacity = library.capacity(for: model)
-            // 有 PO LIST 資料時只列 PO LIST 收錄的機種
-            if hasPoData && capacity == nil { return nil }
-            var cells: [String: StationCell] = [:]
-            for column in stationColumns {
-                cells[column.id] = DrawingCapacity.cell(model: model, capacity: capacity, column: column)
-            }
-            let trimming = stationColumns.first { $0.id.contains("外剪") && cells[$0.id]?.source != StationCell.Source.missing }.flatMap { cells[$0.id] }
-            let open = DrawingCapacity.openQty(model: model, capacity: capacity)
-            let diff = cells.values.contains(where: DrawingCapacity.isDifferent) || (open.fromPoList && open.qty != open.catalogQty && model.hasCatalog)
-            return CapacityRow(
-                model: model,
-                capacity: capacity,
-                process: DrawingCapacity.process(model: model, capacity: capacity),
-                trimming: trimming,
-                open: open,
-                cells: cells,
-                theory: library.theory(for: model),
-                hasDiff: diff
-            )
-        }
-    }
-
-    private func columns(stations: [StationColumn]) -> [CapacityColumn] {
-        var result: [CapacityColumn] = [
-            CapacityColumn(kind: .number, title: "No.", unit: "", width: 40),
-            CapacityColumn(kind: .process, title: "製程", unit: "", width: 92),
-            CapacityColumn(kind: .endUser, title: "END USER", unit: "", width: 90),
-            CapacityColumn(kind: .dwg, title: "機種圖號", unit: "", width: 150),
-            CapacityColumn(kind: .size, title: "尺寸 L×W", unit: "mm", width: 100),
-            CapacityColumn(kind: .thickness, title: "厚度", unit: "mm", width: 56),
-            CapacityColumn(kind: .sid, title: "SID", unit: "", width: 86),
-            CapacityColumn(kind: .sap, title: "SAP 品號", unit: "", width: 80),
-            CapacityColumn(kind: .type, title: "型態", unit: "", width: 64),
-        ]
-        let theoryColumns: [CapacityColumn] = library.snapshot.theory.isEmpty ? [] : [
-            CapacityColumn(kind: .theory(.mold), title: "模具", unit: "", width: 72),
-            CapacityColumn(kind: .theory(.plant), title: "沖壓廠", unit: "", width: 56),
-            CapacityColumn(kind: .theory(.spm), title: "SPM", unit: "次/分", width: 56),
-            CapacityColumn(kind: .theory(.sph), title: "SPH", unit: "次/時", width: 64),
-            CapacityColumn(kind: .theory(.util), title: "稼動", unit: "%", width: 48),
-            CapacityColumn(kind: .theory(.day), title: "日班", unit: "pcs", width: 92),
-            CapacityColumn(kind: .theory(.night), title: "夜班", unit: "pcs", width: 92),
-            CapacityColumn(kind: .theory(.daily), title: "理論產能", unit: "pcs/日", width: 92),
-        ]
-        let stationCols = stations.map { CapacityColumn(kind: .station($0), title: $0.label, unit: $0.unit ?? "", width: 112) }
-        if let index = stations.firstIndex(where: { $0.id == "沖壓" }) {
-            result += Array(stationCols[...index])
-            result += theoryColumns
-            result += Array(stationCols[(index + 1)...])
-        } else {
-            result += theoryColumns + stationCols
-        }
-        result += [
-            CapacityColumn(kind: .openQty, title: "未結量", unit: "pcs", width: 96),
-            CapacityColumn(kind: .openLines, title: "未結單", unit: "張", width: 56),
-        ]
-        return result
-    }
-
-    private func filterValue(_ row: CapacityRow, _ column: CapacityColumn) -> String {
-        switch column.kind {
-        case .process: return row.process.isEmpty ? "未定" : row.process
-        case .endUser: return row.model.endUser.isEmpty ? "-" : row.model.endUser
-        case .type: return row.model.type.isEmpty ? "-" : row.model.type
-        case .theory(.mold): return row.theory?.mold.isEmpty == false ? row.theory!.mold : "-"
-        default: return ""
-        }
-    }
-
-    private func filtered(_ rows: [CapacityRow], columns: [CapacityColumn]) -> [CapacityRow] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return rows.filter { row in
-            if row.archived && !showArchived { return false }
-            if onlyDiff && !row.hasDiff { return false }
-            for column in columns where column.isFilterable {
-                if let wanted = filters[column.id], filterValue(row, column) != wanted { return false }
-            }
-            guard !query.isEmpty else { return true }
-            var parts = [row.model.dwg, row.model.sid, row.model.sap, row.model.endUser, row.model.type, row.process,
-                         DrawingCapacity.latestPo(model: row.model, capacity: row.capacity)]
-            if let theory = row.theory { parts += [theory.mold, theory.plant, theory.pressPn] }
-            parts += row.cells.values.map { "\($0.text) \($0.note)" }
-            if let orders = row.capacity?.orders { parts += orders.poNumbers + orders.salesDocs + orders.refs + orders.cases }
-            return DrawingFormat.matches(query, in: parts)
-        }
-    }
-
-    private func sortValue(_ row: CapacityRow, _ column: CapacityColumn) -> (Double?, String) {
-        switch column.kind {
-        case .number: return (nil, "")
-        case .process: return (nil, row.process)
-        case .endUser: return (nil, row.model.endUser)
-        case .dwg: return (nil, row.model.dwg)
-        case .size: return (row.length * row.width, "")
-        case .thickness: return (row.thickness, "")
-        case .sid: return (nil, row.model.sid)
-        case .sap: return (nil, row.model.sap)
-        case .type: return (nil, row.model.type)
-        case .openQty: return (row.open.qty, "")
-        case .openLines: return (Double(row.open.lines), "")
-        case .station(let station):
-            guard let cell = row.cells[station.id] else { return (-1, "") }
-            switch cell.source {
-            case .missing: return (-1, "")
-            case .present: return (0, "")
-            default:
-                let number = cell.text.range(of: #"[\d.]+"#, options: .regularExpression).flatMap { Double(cell.text[$0]) } ?? 0
-                return (number, "")
-            }
-        case .theory(let field):
-            guard let theory = row.theory else { return (field == .mold || field == .plant ? nil : -1, "") }
-            switch field {
-            case .mold: return (nil, theory.mold)
-            case .plant: return (nil, theory.plant)
-            case .spm: return (theory.spm, "")
-            case .sph: return (theory.sphUsed, "")
-            case .util: return (theory.util, "")
-            case .day: return (theory.dayQty, "")
-            case .night: return (theory.nightQty, "")
-            case .daily: return (theory.dailyQty, "")
-            }
-        }
-    }
-
-    private func sorted(_ rows: [CapacityRow], columns: [CapacityColumn]) -> [CapacityRow] {
-        guard let column = columns.first(where: { $0.id == sortID }) else { return rows }
-        return rows.sorted { a, b in
-            let (na, ta) = sortValue(a, column)
-            let (nb, tb) = sortValue(b, column)
-            if let na, let nb, na != nb { return ascending ? na < nb : na > nb }
-            if na == nil, nb == nil, ta != tb {
-                let order = ta.localizedStandardCompare(tb)
-                return ascending ? order == .orderedAscending : order == .orderedDescending
-            }
-            return a.open.qty > b.open.qty
-        }
-    }
-
-    // MARK: 工具列
-
-    private func toolbar(all: [CapacityRow], visible: [CapacityRow], columns: [CapacityColumn]) -> some View {
-        let total = visible.reduce(0) { $0 + $1.open.qty }
-        let counts = Dictionary(grouping: visible, by: { $0.process.isEmpty ? "未定" : $0.process }).mapValues(\.count)
-        let breakdown = ["沖壓", "蝕刻", "CNC", "未定"].compactMap { key in counts[key].map { "\(key) \($0)" } }.joined(separator: "・")
-        let diffCount = all.filter(\.hasDiff).count
-        let archivedCount = all.filter(\.archived).count
-        var extras: [String] = []
-        if !onlyDiff && diffCount > 0 { extras.append("不一致 \(diffCount)") }
-        if !showArchived && archivedCount > 0 { extras.append("歷史 \(archivedCount) 未顯示") }
-
-        return VStack(alignment: .leading, spacing: 10) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 10) {
-                    MetricTile(title: "在手未交", value: DrawingFormat.qty(total), detail: "pcs", pastel: .blush, valueColor: total > 0 ? DS.danger : DS.text)
-                        .frame(width: 150)
-                    MetricTile(title: "機種", value: "\(visible.count) / \(all.filter { showArchived || !$0.archived }.count)", detail: breakdown.isEmpty ? "款" : breakdown, pastel: .sky)
-                        .frame(width: 200)
-                    MetricTile(title: "與 catalog 不一致", value: "\(diffCount)", detail: extras.isEmpty ? "款" : extras.joined(separator: "・"), pastel: .butter, valueColor: diffCount > 0 ? DS.warning : DS.text)
-                        .frame(width: 180)
-                }
-            }
-            .scrollIndicators(.hidden)
-            HStack(spacing: 8) {
-                SearchField(placeholder: "搜尋圖號、SID、SAP、PO 號、機台、站別產能…", text: $query, height: 34)
-                    .frame(maxWidth: 380)
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ToggleChip(title: "僅不一致", isOn: $onlyDiff)
-                        ToggleChip(title: "歷史機種", isOn: $showArchived)
-                        ToggleChip(title: "CNC 產能", isOn: $showCNC)
-                    }
-                }
-                .scrollIndicators(.hidden)
-                Spacer(minLength: 0)
-                Menu {
-                    Button { export(visible, columns: columns, toVault: false) } label: { Label("分享 CSV（Excel 可開）", systemImage: "square.and.arrow.up") }
-                    Button { export(visible, columns: columns, toVault: true) } label: { Label("存到 vault 的 scratch 資料夾", systemImage: "tray.and.arrow.down") }
-                    Divider()
-                    Text("「重新抽取」「寫回 catalog」要在電腦的 Obsidian 執行（需要 Python）")
-                } label: {
-                    FilterChip(title: "匯出", systemImage: "square.and.arrow.up")
-                }
-            }
-            sourceLabel
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-    }
-
-    @ViewBuilder
-    private var sourceLabel: some View {
-        if let meta = library.snapshot.capacityMeta {
-            Text("PO LIST \(meta.sourceMtime)")
-                .font(.caption)
-                .foregroundStyle(DS.textTertiary)
-                .help(sourceDescription(meta))
-        } else {
-            Text("尚無 PO LIST 產能檔")
-                .font(.caption)
-                .foregroundStyle(DS.textTertiary)
-        }
-    }
-
-    private func sourceDescription(_ meta: CapacityMeta) -> String {
-        var lines = [
-            "來源：\(DrawingPaths.baseName(meta.source))",
-            "PO LIST 更新：\(meta.sourceMtime)",
-            "抽取時間：\(meta.extractedAt)（收錄 \(library.snapshot.capacityItemCount) 款）",
-        ]
-        if meta.dedupRows > 0 { lines.append("已去重 \(meta.dedupRows) 筆重複訂單行") }
-        if meta.hiddenTotalOpenQty > 0 { lines.append("隱藏分頁（結案）另有 \(DrawingFormat.qty(meta.hiddenTotalOpenQty)) pcs 未計入") }
-        return lines.joined(separator: "\n")
     }
 
     // MARK: 表格
@@ -407,7 +187,7 @@ struct CapacityTableView: View {
             }
             .buttonStyle(.plain)
             if column.isFilterable {
-                let values = Array(Set(rows.map { filterValue($0, column) })).sorted()
+                let values = Array(Set(rows.map { model.filterValue($0, column) })).sorted()
                 Menu {
                     Button("全部") { filters[column.id] = nil }
                     ForEach(values, id: \.self) { value in
@@ -608,9 +388,204 @@ struct CapacityTableView: View {
             .lineLimit(1)
     }
 
-    // MARK: 匯出
+}
 
-    private func export(_ rows: [CapacityRow], columns: [CapacityColumn], toVault: Bool) {
+/// 產能清單的狀態與資料：篩選、排序、匯出；頁面上方的工具列與表格共用。
+@MainActor
+@Observable
+final class CapacityTableModel {
+    @ObservationIgnored let library = DrawingsLibrary.shared
+    var query = ""
+    var onlyDiff = false
+    var showArchived = false
+    var showCNC = false
+    var sortID = "未結量"
+    var ascending = false
+    var filters: [String: String] = [:]
+    var exportURL: URL?
+    var notice: String?
+
+    /// 目前的欄位、全部的列、篩選排序後的列。
+    func snapshot() -> (columns: [CapacityColumn], all: [CapacityRow], visible: [CapacityRow]) {
+        let stations = DrawingCapacity.columns(models: library.models, capacity: library.snapshot.capacity, showCNC: showCNC)
+        let all = rows(stationColumns: stations)
+        let columns = columns(stations: stations)
+        return (columns, all, sorted(filtered(all, columns: columns), columns: columns))
+    }
+
+    /// 標題列的摘要：在手未交、款數、不一致。
+    func summary(compact: Bool) -> String {
+        let (_, all, visible) = snapshot()
+        let total = visible.reduce(0) { $0 + $1.open.qty }
+        let shown = all.filter { showArchived || !$0.archived }.count
+        let diff = all.filter(\.hasDiff).count
+        if compact { return "未交 \(DrawingFormat.qty(total)) · \(visible.count) 款" }
+        var parts = ["在手未交 \(DrawingFormat.qty(total)) pcs", "\(visible.count)/\(shown) 款"]
+        if diff > 0 { parts.append("不一致 \(diff)") }
+        return parts.joined(separator: " · ")
+    }
+
+    func export(toVault: Bool) {
+        let (columns, _, visible) = snapshot()
+        export(visible, columns: columns, toVault: toVault)
+    }
+
+    // MARK: 資料
+
+    func rows(stationColumns: [StationColumn]) -> [CapacityRow] {
+        let hasPoData = !library.snapshot.capacity.isEmpty
+        return library.models.compactMap { model in
+            let capacity = library.capacity(for: model)
+            // 有 PO LIST 資料時只列 PO LIST 收錄的機種
+            if hasPoData && capacity == nil { return nil }
+            var cells: [String: StationCell] = [:]
+            for column in stationColumns {
+                cells[column.id] = DrawingCapacity.cell(model: model, capacity: capacity, column: column)
+            }
+            let trimming = stationColumns.first { $0.id.contains("外剪") && cells[$0.id]?.source != StationCell.Source.missing }.flatMap { cells[$0.id] }
+            let open = DrawingCapacity.openQty(model: model, capacity: capacity)
+            let diff = cells.values.contains(where: DrawingCapacity.isDifferent) || (open.fromPoList && open.qty != open.catalogQty && model.hasCatalog)
+            return CapacityRow(
+                model: model,
+                capacity: capacity,
+                process: DrawingCapacity.process(model: model, capacity: capacity),
+                trimming: trimming,
+                open: open,
+                cells: cells,
+                theory: library.theory(for: model),
+                hasDiff: diff
+            )
+        }
+    }
+
+    func columns(stations: [StationColumn]) -> [CapacityColumn] {
+        var result: [CapacityColumn] = [
+            CapacityColumn(kind: .number, title: "No.", unit: "", width: 40),
+            CapacityColumn(kind: .process, title: "製程", unit: "", width: 92),
+            CapacityColumn(kind: .endUser, title: "END USER", unit: "", width: 90),
+            CapacityColumn(kind: .dwg, title: "機種圖號", unit: "", width: 150),
+            CapacityColumn(kind: .size, title: "尺寸 L×W", unit: "mm", width: 100),
+            CapacityColumn(kind: .thickness, title: "厚度", unit: "mm", width: 56),
+            CapacityColumn(kind: .sid, title: "SID", unit: "", width: 86),
+            CapacityColumn(kind: .sap, title: "SAP 品號", unit: "", width: 80),
+            CapacityColumn(kind: .type, title: "型態", unit: "", width: 64),
+        ]
+        let theoryColumns: [CapacityColumn] = library.snapshot.theory.isEmpty ? [] : [
+            CapacityColumn(kind: .theory(.mold), title: "模具", unit: "", width: 72),
+            CapacityColumn(kind: .theory(.plant), title: "沖壓廠", unit: "", width: 56),
+            CapacityColumn(kind: .theory(.spm), title: "SPM", unit: "次/分", width: 56),
+            CapacityColumn(kind: .theory(.sph), title: "SPH", unit: "次/時", width: 64),
+            CapacityColumn(kind: .theory(.util), title: "稼動", unit: "%", width: 48),
+            CapacityColumn(kind: .theory(.day), title: "日班", unit: "pcs", width: 92),
+            CapacityColumn(kind: .theory(.night), title: "夜班", unit: "pcs", width: 92),
+            CapacityColumn(kind: .theory(.daily), title: "理論產能", unit: "pcs/日", width: 92),
+        ]
+        let stationCols = stations.map { CapacityColumn(kind: .station($0), title: $0.label, unit: $0.unit ?? "", width: 112) }
+        if let index = stations.firstIndex(where: { $0.id == "沖壓" }) {
+            result += Array(stationCols[...index])
+            result += theoryColumns
+            result += Array(stationCols[(index + 1)...])
+        } else {
+            result += theoryColumns + stationCols
+        }
+        result += [
+            CapacityColumn(kind: .openQty, title: "未結量", unit: "pcs", width: 96),
+            CapacityColumn(kind: .openLines, title: "未結單", unit: "張", width: 56),
+        ]
+        return result
+    }
+
+    func filterValue(_ row: CapacityRow, _ column: CapacityColumn) -> String {
+        switch column.kind {
+        case .process: return row.process.isEmpty ? "未定" : row.process
+        case .endUser: return row.model.endUser.isEmpty ? "-" : row.model.endUser
+        case .type: return row.model.type.isEmpty ? "-" : row.model.type
+        case .theory(.mold): return row.theory?.mold.isEmpty == false ? row.theory!.mold : "-"
+        default: return ""
+        }
+    }
+
+    func filtered(_ rows: [CapacityRow], columns: [CapacityColumn]) -> [CapacityRow] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rows.filter { row in
+            if row.archived && !showArchived { return false }
+            if onlyDiff && !row.hasDiff { return false }
+            for column in columns where column.isFilterable {
+                if let wanted = filters[column.id], filterValue(row, column) != wanted { return false }
+            }
+            guard !query.isEmpty else { return true }
+            var parts = [row.model.dwg, row.model.sid, row.model.sap, row.model.endUser, row.model.type, row.process,
+                         DrawingCapacity.latestPo(model: row.model, capacity: row.capacity)]
+            if let theory = row.theory { parts += [theory.mold, theory.plant, theory.pressPn] }
+            parts += row.cells.values.map { "\($0.text) \($0.note)" }
+            if let orders = row.capacity?.orders { parts += orders.poNumbers + orders.salesDocs + orders.refs + orders.cases }
+            return DrawingFormat.matches(query, in: parts)
+        }
+    }
+
+    func sortValue(_ row: CapacityRow, _ column: CapacityColumn) -> (Double?, String) {
+        switch column.kind {
+        case .number: return (nil, "")
+        case .process: return (nil, row.process)
+        case .endUser: return (nil, row.model.endUser)
+        case .dwg: return (nil, row.model.dwg)
+        case .size: return (row.length * row.width, "")
+        case .thickness: return (row.thickness, "")
+        case .sid: return (nil, row.model.sid)
+        case .sap: return (nil, row.model.sap)
+        case .type: return (nil, row.model.type)
+        case .openQty: return (row.open.qty, "")
+        case .openLines: return (Double(row.open.lines), "")
+        case .station(let station):
+            guard let cell = row.cells[station.id] else { return (-1, "") }
+            switch cell.source {
+            case .missing: return (-1, "")
+            case .present: return (0, "")
+            default:
+                let number = cell.text.range(of: #"[\d.]+"#, options: .regularExpression).flatMap { Double(cell.text[$0]) } ?? 0
+                return (number, "")
+            }
+        case .theory(let field):
+            guard let theory = row.theory else { return (field == .mold || field == .plant ? nil : -1, "") }
+            switch field {
+            case .mold: return (nil, theory.mold)
+            case .plant: return (nil, theory.plant)
+            case .spm: return (theory.spm, "")
+            case .sph: return (theory.sphUsed, "")
+            case .util: return (theory.util, "")
+            case .day: return (theory.dayQty, "")
+            case .night: return (theory.nightQty, "")
+            case .daily: return (theory.dailyQty, "")
+            }
+        }
+    }
+
+    func sorted(_ rows: [CapacityRow], columns: [CapacityColumn]) -> [CapacityRow] {
+        guard let column = columns.first(where: { $0.id == sortID }) else { return rows }
+        return rows.sorted { a, b in
+            let (na, ta) = sortValue(a, column)
+            let (nb, tb) = sortValue(b, column)
+            if let na, let nb, na != nb { return ascending ? na < nb : na > nb }
+            if na == nil, nb == nil, ta != tb {
+                let order = ta.localizedStandardCompare(tb)
+                return ascending ? order == .orderedAscending : order == .orderedDescending
+            }
+            return a.open.qty > b.open.qty
+        }
+    }
+
+    func sourceDescription(_ meta: CapacityMeta) -> String {
+        var lines = [
+            "來源：\(DrawingPaths.baseName(meta.source))",
+            "PO LIST 更新：\(meta.sourceMtime)",
+            "抽取時間：\(meta.extractedAt)（收錄 \(library.snapshot.capacityItemCount) 款）",
+        ]
+        if meta.dedupRows > 0 { lines.append("已去重 \(meta.dedupRows) 筆重複訂單行") }
+        if meta.hiddenTotalOpenQty > 0 { lines.append("隱藏分頁（結案）另有 \(DrawingFormat.qty(meta.hiddenTotalOpenQty)) pcs 未計入") }
+        return lines.joined(separator: "\n")
+    }
+
+    func export(_ rows: [CapacityRow], columns: [CapacityColumn], toVault: Bool) {
         let table = CapacityExport.table(rows: rows, columns: columns, sourceMtime: library.snapshot.theorySourceMtime)
         let customer = library.snapshot.capacityMeta?.customer ?? library.scopeLabel
         let formatter = DateFormatter()

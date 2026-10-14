@@ -795,3 +795,76 @@ struct CircleIconButtonStyle: ButtonStyle {
             .contentShape(Circle())
     }
 }
+
+/// 頁面上方的工具列，最多兩列，避免壓縮內容的空間：
+/// 第一列是標題、摘要與右側的圖示按鈕（含搜尋鈕）；第二列是一排可以橫向捲動的膠囊。
+/// 搜尋平常收起來，按放大鏡才展開（暫時取代第二列），按「取消」清空並收起。
+struct PageToolbar<Actions: View, Chips: View>: View {
+    let title: String
+    var subtitle: String?
+    @Binding var query: String
+    var searchPlaceholder = "搜尋"
+    @ViewBuilder var actions: () -> Actions
+    @ViewBuilder var chips: () -> Chips
+
+    @State private var isSearching = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        query: Binding<String>,
+        searchPlaceholder: String = "搜尋",
+        @ViewBuilder actions: @escaping () -> Actions,
+        @ViewBuilder chips: @escaping () -> Chips
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        _query = query
+        self.searchPlaceholder = searchPlaceholder
+        self.actions = actions
+        self.chips = chips
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PageHeader(title, subtitle: subtitle) {
+                HStack(spacing: 8) {
+                    actions()
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { isSearching.toggle() }
+                        if !isSearching { query = "" }
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                            .symbolVariant(query.isEmpty ? .none : .circle.fill)
+                    }
+                    .buttonStyle(CircleIconButtonStyle())
+                    .accessibilityLabel(isSearching ? "收起搜尋" : "搜尋")
+                }
+            }
+            if isSearching || !query.isEmpty {
+                HStack(spacing: 10) {
+                    SearchField(placeholder: searchPlaceholder, text: $query, height: 34, autofocus: true)
+                    Button("取消") {
+                        query = ""
+                        withAnimation(.easeOut(duration: 0.2)) { isSearching = false }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(DS.text)
+                }
+                .transition(.opacity)
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        chips()
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, sizeClass == .compact ? 16 : 24)
+        .padding(.top, sizeClass == .compact ? 14 : 18)
+        .padding(.bottom, 10)
+    }
+}

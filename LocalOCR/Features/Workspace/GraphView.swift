@@ -787,36 +787,25 @@ struct GraphPage: View {
     // MARK: 上方
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            PageHeader("關聯圖", subtitle: model.map { "\($0.data.nodes.count) 則筆記 · \($0.data.edges.count) 條連結" }) {
-                if !isCompact {
-                    SearchField(placeholder: "找一則筆記", text: $query, height: 34)
-                        .frame(width: 240)
+        PageToolbar(
+            "關聯圖",
+            subtitle: model.map { "\($0.data.nodes.count) 則筆記 · \($0.data.edges.count) 條連結" },
+            query: $query,
+            searchPlaceholder: "找一則筆記"
+        ) {
+        } chips: {
+            ToggleChip(title: "孤立筆記", isOn: $options.showOrphans)
+            ToggleChip(title: "AI 對話", isOn: $options.showHistory)
+            if let groups = model?.data.groups, !groups.isEmpty {
+                Rectangle()
+                    .fill(DS.hairline)
+                    .frame(width: 1, height: 20)
+                    .padding(.horizontal, 2)
+                ForEach(groups.prefix(12)) { group in
+                    groupChip(group)
                 }
             }
-            if isCompact {
-                SearchField(placeholder: "找一則筆記", text: $query, height: 34)
-            }
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    ToggleChip(title: "孤立筆記", isOn: $options.showOrphans)
-                    ToggleChip(title: "AI 對話", isOn: $options.showHistory)
-                    if let groups = model?.data.groups, !groups.isEmpty {
-                        Rectangle()
-                            .fill(DS.hairline)
-                            .frame(width: 1, height: 20)
-                            .padding(.horizontal, 2)
-                        ForEach(groups.prefix(12)) { group in
-                            groupChip(group)
-                        }
-                    }
-                }
-            }
-            .scrollIndicators(.hidden)
         }
-        .padding(.horizontal, isCompact ? 16 : 24)
-        .padding(.top, isCompact ? 18 : 22)
-        .padding(.bottom, 8)
     }
 
     private func groupChip(_ group: GraphData.Group) -> some View {

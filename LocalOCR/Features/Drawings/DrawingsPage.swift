@@ -9,6 +9,13 @@ struct DrawingsPage: View {
         case capacity = "產能清單"
 
         var id: String { rawValue }
+
+        var shortTitle: String {
+            switch self {
+            case .drawings: return "瀏覽"
+            case .capacity: return "產能"
+            }
+        }
     }
 
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -18,6 +25,7 @@ struct DrawingsPage: View {
     @State private var filter = DrawingListFilter()
     @State private var specModel: DrawingModel?
     @State private var compactPath: [String] = []
+    @State private var capacity = CapacityTableModel()
 
     private var isCompact: Bool { sizeClass == .compact }
     private var selected: DrawingModel? { library.models.first { $0.id == selectedID } }
@@ -40,59 +48,60 @@ struct DrawingsPage: View {
         }
     }
 
-    // MARK: 上方
+    // MARK: 上方（最多兩列：標題列＋膠囊列，搜尋按放大鏡才出現）
 
     private var subtitle: String {
         if library.isLoading { return library.loadedAt == nil ? "掃描中…" : "重新掃描中…" }
+        if let error = library.error, library.models.isEmpty { return error }
         let models = library.models
         guard !models.isEmpty else { return "" }
-        return "\(models.count) 款 · \(models.reduce(0) { $0 + $1.drawings.count }) 張圖面"
+        switch mode {
+        case .drawings:
+            let visible = filter.apply(to: models, library: library).count
+            return visible == models.count ? "\(models.count) 款 · \(models.reduce(0) { $0 + $1.drawings.count }) 張" : "\(visible)/\(models.count) 款"
+        case .capacity:
+            return capacity.summary(compact: isCompact)
+        }
     }
 
     private var topBar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            PageHeader("圖面", subtitle: isCompact ? nil : subtitle) {
-                if !isCompact { controls }
-            }
-            if isCompact {
-                HStack(spacing: 8) {
-                    controls
-                    Spacer(minLength: 0)
+        PageToolbar(
+            "圖面",
+            subtitle: subtitle,
+            query: mode == .drawings ? $filter.query : $capacity.query,
+            searchPlaceholder: mode == .drawings ? "搜尋機種、SID、SAP、原廠圖號、PO 號" : "搜尋圖號、SID、PO 號、機台、站別產能"
+        ) {
+            SegmentedPills(options: Mode.allCases.map { (value: $0, title: isCompact ? $0.shortTitle : $0.rawValue) }, selection: $mode)
+        } chips: {
+            scopeMenu
+            switch mode {
+            case .drawings:
+                DrawingFilterChips(filter: $filter)
+            case .capacity:
+                ToggleChip(title: "僅不一致", isOn: $capacity.onlyDiff)
+                ToggleChip(title: "歷史機種", isOn: $capacity.showArchived)
+                ToggleChip(title: "CNC 產能", isOn: $capacity.showCNC)
+                Menu {
+                    Button { capacity.export(toVault: false) } label: { Label("分享 CSV（Excel 可開）", systemImage: "square.and.arrow.up") }
+                    Button { capacity.export(toVault: true) } label: { Label("存到 vault 的 scratch 資料夾", systemImage: "tray.and.arrow.down") }
+                    Divider()
+                    if let meta = library.snapshot.capacityMeta {
+                        Section("資料來源") {
+                            Text(capacity.sourceDescription(meta))
+                        }
+                    }
+                    Text("「重新抽取」「寫回 catalog」要在電腦的 Obsidian 執行（需要 Python）")
+                } label: {
+                    FilterChip(title: "匯出", systemImage: "square.and.arrow.up")
                 }
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(DS.textSecondary)
-                }
-            }
-            if let error = library.error, !library.isLoading {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(DS.warning)
             }
         }
-        .padding(.horizontal, isCompact ? 16 : 24)
-        .padding(.top, isCompact ? 14 : 18)
-        .padding(.bottom, 12)
     }
 
-    private var controls: some View {
-        HStack(spacing: 8) {
-            scopeMenu
-            Button {
-                Task {
-                    await DrawingFileCache.shared.removeAll()
-                    await library.reload()
-                    selectInitial()
-                }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(CircleIconButtonStyle())
-            .disabled(library.isLoading)
-            .accessibilityLabel("重新掃描")
-            SegmentedPills(options: Mode.allCases.map { (value: $0, title: $0.rawValue) }, selection: $mode)
-        }
+    private func rescan() async {
+        await DrawingFileCache.shared.removeAll()
+        await library.reload()
+        selectInitial()
     }
 
     private var scopeMenu: some View {
@@ -111,10 +120,16 @@ struct DrawingsPage: View {
                     ForEach(ends) { scope in scopeButton(scope) }
                 }
             }
+            Divider()
+            Button {
+                Task { await rescan() }
+            } label: {
+                Label("重新掃描", systemImage: "arrow.clockwise")
+            }
+            .disabled(library.isLoading)
         } label: {
             FilterChip(title: library.scopeLabel, isActive: library.scope != "all", systemImage: "building.2")
         }
-        .disabled(library.scopes.isEmpty)
         .accessibilityLabel("客戶")
     }
 
@@ -142,7 +157,7 @@ struct DrawingsPage: View {
             case .drawings:
                 if isCompact { compactBrowser } else { regularBrowser }
             case .capacity:
-                CapacityTableView { model in
+                CapacityTableView(model: capacity) { model in
                     focus(model)
                 }
             }
@@ -151,7 +166,7 @@ struct DrawingsPage: View {
 
     private var regularBrowser: some View {
         HStack(spacing: 12) {
-            DrawingModelList(models: library.models, selectedID: selectedID, filter: $filter, onSelect: select, onSpec: { specModel = $0 })
+            DrawingModelList(models: library.models, selectedID: selectedID, filter: filter, onSelect: select, onSpec: { specModel = $0 }, onRefresh: rescan)
                 .frame(width: 340)
             DrawingViewer(model: selected) { specModel = $0 }
                 .clipShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
@@ -164,10 +179,10 @@ struct DrawingsPage: View {
 
     private var compactBrowser: some View {
         NavigationStack(path: $compactPath) {
-            DrawingModelList(models: library.models, selectedID: selectedID, filter: $filter, onSelect: { model in
+            DrawingModelList(models: library.models, selectedID: selectedID, filter: filter, onSelect: { model in
                 select(model)
                 compactPath = [model.id]
-            }, onSpec: { specModel = $0 })
+            }, onSpec: { specModel = $0 }, onRefresh: rescan)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
                 DrawingViewer(model: library.models.first { $0.id == id }) { specModel = $0 }
