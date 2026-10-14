@@ -189,4 +189,39 @@ final class KnowledgeAssistantTests: XCTestCase {
         XCTAssertNil(run.error)
         XCTAssertEqual(run.sources, ["A.md"])
     }
+
+    // MARK: - 預算與模型分級
+
+    func testParsesTieredRoute() {
+        let route = AssistantClient.route(from: [
+            "kind": "task", "route": "cloud", "confidence": 0.8, "provider": "jev", "cloudAvailable": true,
+            "difficulty": "hard", "budget": "medium", "tier": "large", "model": "claude-opus-5-5", "effort": "high",
+        ])
+        XCTAssertTrue(route.isCloud)
+        XCTAssertEqual(route.tier, "large")
+        XCTAssertEqual(route.model, "claude-opus-5-5")
+        XCTAssertEqual(route.effort, "high")
+        XCTAssertEqual(route.summary, "困難的多步驟工作")
+
+        // 舊版伺服器（沒有預算欄位）
+        let legacy = AssistantClient.route(from: ["kind": "question", "route": "device", "confidence": 0.6, "provider": "heuristic", "cloudAvailable": true])
+        XCTAssertFalse(legacy.isCloud)
+        XCTAssertNil(legacy.tier)
+        XCTAssertNil(legacy.model as String?)
+        XCTAssertEqual(legacy.summary, "問題")
+    }
+
+    func testBudgetSettingAndModelLabels() {
+        XCTAssertEqual(AssistantEngineMode.from("auto"), .medium, "舊版的「自動」")
+        XCTAssertEqual(AssistantEngineMode.from("cloud"), .high, "舊版的「一律用雲端」")
+        XCTAssertEqual(AssistantEngineMode.from("device"), .device)
+        XCTAssertEqual(AssistantEngineMode.from(nil), .medium)
+        XCTAssertEqual(AssistantEngineMode.low.budget, "low")
+        XCTAssertNil(AssistantEngineMode.device.budget)
+
+        XCTAssertEqual(KnowledgeAssistant.modelLabel("claude-sonnet-5-5"), "Sonnet 5.5")
+        XCTAssertEqual(KnowledgeAssistant.modelLabel("claude-opus-4-5-20251101"), "Opus 4.5")
+        XCTAssertEqual(KnowledgeAssistant.modelLabel("claude-fable-5-1"), "Fable 5.1")
+        XCTAssertEqual(KnowledgeAssistant.modelLabel("gpt-x"), "gpt-x")
+    }
 }

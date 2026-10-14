@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { Effort, ModelTier } from "./tiers.js";
 
 // The model behind cloud runs, behind an interface so tests can script responses without network.
 
@@ -22,6 +23,8 @@ export interface ModelRequest {
   container?: string;
   /** The model this run started on (a run keeps its model even when a newer one is picked up mid-run). */
   model?: string;
+  /** Thinking effort chosen by the route (default high). */
+  effort?: Effort;
 }
 
 /** The part of a Messages API response a run uses (a real `BetaMessage` fits). */
@@ -40,6 +43,8 @@ export interface ModelResponse {
 export interface AssistantModel {
   /** Model id for a new run (may change when ASSISTANT_MODEL follows the latest release). */
   readonly model: string;
+  /** Model id of a cloud tier (small/medium/large); without it every tier uses `model`. */
+  modelFor?(tier: ModelTier): string;
   /** One Messages API call; rejects with AssistantModelError (API errors) or an abort error after `signal` fires. */
   create(request: ModelRequest, options: { signal: AbortSignal }): Promise<ModelResponse>;
   /** A file the code-execution sandbox produced (Files API). */
@@ -67,31 +72,50 @@ export const WEB_SEARCH_TOOL_BASIC = { type: "web_search_20250305", name: "web_s
 export const MAX_OUTPUT_TOKENS = 32_000;
 
 /**
- * Optional request features. Each is dropped (once, for the life of the process) when the API answers 400 naming it,
- * e.g. for a configured model that does not support it.
+ * Optional request features. Each is dropped for a model (for the life of the process) when the API answers 400
+ * naming it, e.g. a smaller model that does not support it; other models keep it.
  */
+type FeatureName = "fallbacks" | "progressUpdates" | "effort";
 interface OptionalFeature {
-  readonly name: string;
+  readonly name: FeatureName;
   readonly beta?: string;
   readonly rejected: RegExp;
-  enabled: boolean;
 }
 
 /** Claude through the official SDK (`client.beta.messages.stream(...).finalMessage()`). */
 export class AnthropicAssistantModel implements AssistantModel {
   private readonly currentModel: () => string;
+  private readonly tiers: Partial<Record<ModelTier, () => string>>;
   private readonly client: Anthropic;
-  private readonly features: Record<"fallbacks" | "progressUpdates" | "effort", OptionalFeature> = {
+  private readonly features: Record<FeatureName, OptionalFeature> = {
     // a refusal is re-run on Anthropic's recommended fallback model instead of ending the run
-    fallbacks: { name: "fallbacks", beta: "server-side-fallback-2026-07-01", rejected: /fallback/i, enabled: true },
+    fallbacks: { name: "fallbacks", beta: "server-side-fallback-2026-07-01", rejected: /fallback/i },
     // the short notes written between tool calls come back as text (the run's "message" events)
-    progressUpdates: { name: "progressUpdates", beta: "thinking-display-updates-2026-08-18", rejected: /display|updates/i, enabled: true },
-    effort: { name: "effort", rejected: /effort|output_config/i, enabled: true },
+    progressUpdates: { name: "progressUpdates", beta: "thinking-display-updates-2026-08-18", rejected: /display|updates/i },
+    effort: { name: "effort", rejected: /effort|output_config/i },
   };
+  /** Features the API rejected, per model id. */
+  private readonly rejected = new Map<string, Set<FeatureName>>();
 
-  /** `model`: a fixed id, or a function giving the current one (LatestModel). */
-  constructor({ apiKey, model, client }: { apiKey?: string; model: string | (() => string); client?: Anthropic }) {
+  /**
+   * `model`: the large tier (and the default), a fixed id or a function giving the current one (LatestModel).
+   * `tiers`: the small and medium tiers (missing tiers use `model`).
+   */
+  constructor({
+    apiKey,
+    model,
+    tiers = {},
+    client,
+  }: {
+    apiKey?: string;
+    model: string | (() => string);
+    tiers?: Partial<Record<ModelTier, string | (() => string)>>;
+    client?: Anthropic;
+  }) {
     this.currentModel = typeof model === "string" ? () => model : model;
+    this.tiers = Object.fromEntries(
+      Object.entries(tiers).map(([tier, value]) => [tier, typeof value === "string" ? () => value : value]),
+    ) as Partial<Record<ModelTier, () => string>>;
     this.client = client ?? new Anthropic({ apiKey });
   }
 
@@ -99,19 +123,28 @@ export class AnthropicAssistantModel implements AssistantModel {
     return this.currentModel();
   }
 
+  modelFor(tier: ModelTier): string {
+    return (this.tiers[tier] ?? this.currentModel)();
+  }
+
+  private enabled(model: string, feature: FeatureName): boolean {
+    return !this.rejected.get(model)?.has(feature);
+  }
+
   /** The request body (exported shape for tests and debugging; contains no credentials). */
   params(request: ModelRequest): Anthropic.Beta.MessageCreateParamsNonStreaming & { betas: string[] } {
-    const { fallbacks, progressUpdates, effort } = this.features;
+    const model = request.model ?? this.model;
+    const on = (feature: FeatureName) => this.enabled(model, feature);
     const serverTools: Anthropic.Beta.BetaToolUnion[] = [];
     if (request.codeExecution) serverTools.push({ ...CODE_EXECUTION_TOOL });
     if (request.webSearch) serverTools.push({ ...(request.codeExecution ? WEB_SEARCH_TOOL_BASIC : WEB_SEARCH_TOOL) });
     return {
-      model: request.model ?? this.model,
+      model,
       max_tokens: MAX_OUTPUT_TOKENS,
-      betas: Object.values(this.features).flatMap((feature) => (feature.enabled && feature.beta ? [feature.beta] : [])),
-      ...(fallbacks.enabled ? { fallbacks: "default" as const } : {}),
-      thinking: progressUpdates.enabled ? { type: "adaptive", display: "updates" } : { type: "adaptive" },
-      ...(effort.enabled ? { output_config: { effort: "high" as const } } : {}),
+      betas: Object.values(this.features).flatMap((feature) => (on(feature.name) && feature.beta ? [feature.beta] : [])),
+      ...(on("fallbacks") ? { fallbacks: "default" as const } : {}),
+      thinking: on("progressUpdates") ? { type: "adaptive", display: "updates" } : { type: "adaptive" },
+      ...(on("effort") ? { output_config: { effort: request.effort ?? ("high" as const) } } : {}),
       // explicit breakpoint after the tools + fixed instructions; automatic caching for the growing conversation
       cache_control: { type: "ephemeral" },
       system: [
@@ -132,10 +165,13 @@ export class AnthropicAssistantModel implements AssistantModel {
       } catch (error) {
         if (error instanceof Anthropic.APIUserAbortError) throw error;
         if (error instanceof Anthropic.BadRequestError) {
-          const feature = Object.values(this.features).find((item) => item.enabled && item.rejected.test(error.message));
+          const model = request.model ?? this.model;
+          const feature = Object.values(this.features).find((item) => this.enabled(model, item.name) && item.rejected.test(error.message));
           if (feature) {
-            console.warn(`[assistant] the API rejected optional feature ${feature.name}; continuing without it`);
-            feature.enabled = false;
+            console.warn(`[assistant] the API rejected optional feature ${feature.name} for ${model}; continuing without it`);
+            const rejected = this.rejected.get(model) ?? new Set<FeatureName>();
+            rejected.add(feature.name);
+            this.rejected.set(model, rejected);
             continue;
           }
         }

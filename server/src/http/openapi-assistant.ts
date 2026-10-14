@@ -38,17 +38,25 @@ export const assistantPaths = {
   "/v1/assistant/route": {
     post: {
       operationId: "routeAssistantRequest",
-      summary: "Decide whether a chat request runs on the device or as a cloud run",
+      summary: "Decide whether a chat request runs on the device or as a cloud run, and on which model",
       description:
         "Jev (when JEV_API_KEY is set) classifies the request as question, edit or task; without Jev, or when it fails, a keyword " +
-        'heuristic decides (confidence 0.6). route is "cloud" only for a task when cloud runs are available and the provider is ' +
-        "the heuristic or Jev's confidence is at least 0.5.",
+        "heuristic decides (confidence 0.6). Without budget: route is \"cloud\" only for a task when cloud runs are available and " +
+        "the provider is the heuristic or Jev's confidence is at least 0.5. With budget (low/medium/high): Jev also judges " +
+        "difficulty (simple/moderate/hard; an answer under 0.5 confidence is taken one step cheaper) and a fixed table picks the " +
+        "device or a cloud tier — easy requests stay on the device at every budget, a higher budget reaches a better model " +
+        "sooner for harder ones. Start the run with the returned tier and effort.",
       requestBody: {
         required: true,
         ...json({
           type: "object",
           required: ["text"],
-          properties: { text: { type: "string", minLength: 1 }, context: { type: "string" } },
+          properties: {
+            text: { type: "string", minLength: 1 },
+            context: { type: "string" },
+            budget: { type: "string", enum: ["low", "medium", "high"] },
+            deviceAvailable: { type: "boolean", default: true, description: "Whether the phone can run Apple Intelligence" },
+          },
         }),
       },
       responses: { "200": response(ref("AssistantRoute")), "400": error("Invalid body (invalid_request)"), "401": unauthorized },
@@ -191,6 +199,11 @@ export const assistantSchemas = {
       confidence: { type: "number", minimum: 0, maximum: 1 },
       provider: { type: "string", enum: ["jev", "heuristic"] },
       cloudAvailable: { type: "boolean" },
+      difficulty: { type: "string", enum: ["simple", "moderate", "hard"], description: "Only with budget" },
+      budget: { type: "string", enum: ["low", "medium", "high"], description: "Only with budget" },
+      tier: { type: "string", enum: ["device", "small", "medium", "large"], description: "Only with budget" },
+      model: { type: ["string", "null"], description: "The tier's model right now (null on the device); only with budget" },
+      effort: { type: ["string", "null"], enum: ["low", "medium", "high", null], description: "Only with budget" },
     },
   },
   AssistantRunRequest: {
@@ -210,6 +223,8 @@ export const assistantSchemas = {
       openNote: { type: "string" },
       transcriptPath: { type: "string", description: "Vault path of the chat-history note to append this turn to" },
       timeZone: { type: "string", default: "Asia/Taipei", description: "IANA time zone for the transcript and today's date" },
+      tier: { type: "string", enum: ["small", "medium", "large"], default: "large", description: "Cloud tier from the route" },
+      effort: { type: "string", enum: ["low", "medium", "high"], default: "high", description: "Thinking effort from the route" },
     },
   },
   AssistantRunStatus: { type: "string", enum: ["running", "completed", "failed", "cancelled"] },

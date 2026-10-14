@@ -9,6 +9,13 @@ import type Anthropic from "@anthropic-ai/sdk";
 export const MODELS_DEV_URL = "https://models.dev/api.json";
 /** Used until the first refresh finishes, and whenever nothing can be resolved. */
 export const DEFAULT_ASSISTANT_MODEL = "claude-opus-5-5";
+/** The same for each family. */
+export const DEFAULT_FAMILY_MODELS: Record<string, string> = {
+  "claude-opus": DEFAULT_ASSISTANT_MODEL,
+  "claude-sonnet": "claude-sonnet-5-5",
+  "claude-haiku": "claude-haiku-5-5",
+  "claude-fable": "claude-fable-5-1",
+};
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -110,6 +117,24 @@ export async function listAnthropicModels(client: Anthropic): Promise<AvailableM
   return models;
 }
 
+/**
+ * Share one fetch between callers for `ttlMs` (three tiers refresh together; the catalog is several MB).
+ * A failed fetch is not cached.
+ */
+export function shared<T>(load: () => Promise<T>, ttlMs = 10 * 60 * 1000, now: () => number = Date.now): () => Promise<T> {
+  let cached: { at: number; value: Promise<T> } | null = null;
+  return () => {
+    if (cached && now() - cached.at < ttlMs) return cached.value;
+    const value = load();
+    const entry = { at: now(), value };
+    cached = entry;
+    value.catch(() => {
+      if (cached === entry) cached = null;
+    });
+    return value;
+  };
+}
+
 function describe(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 200);
 }
@@ -131,7 +156,7 @@ export class LatestModel {
   ) {
     const parsed = parseModelSetting(setting);
     this.family = "family" in parsed ? parsed.family : null;
-    this.current = "fixed" in parsed ? parsed.fixed : (sources.fallback ?? DEFAULT_ASSISTANT_MODEL);
+    this.current = "fixed" in parsed ? parsed.fixed : (sources.fallback ?? DEFAULT_FAMILY_MODELS[parsed.family] ?? DEFAULT_ASSISTANT_MODEL);
   }
 
   /** The model id for a new run. */

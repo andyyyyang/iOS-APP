@@ -11,6 +11,8 @@ const nonEmpty = (text: string) => text.trim().length > 0;
 export const routeRequestSchema = z.object({
   text: z.string().max(100_000).refine(nonEmpty, "must not be empty"),
   context: z.string().max(100_000).optional(),
+  budget: z.enum(["low", "medium", "high"]).optional(),
+  deviceAvailable: z.boolean().optional(),
 });
 
 export const runRequestSchema = z.object({
@@ -23,6 +25,9 @@ export const runRequestSchema = z.object({
   openNote: z.string().optional(),
   transcriptPath: z.string().optional(),
   timeZone: z.string().refine(isValidTimeZone, "must be an IANA time zone such as Asia/Taipei").optional(),
+  /** Cloud tier from POST /v1/assistant/route (default large). */
+  tier: z.enum(["small", "medium", "large"]).optional(),
+  effort: z.enum(["low", "medium", "high"]).optional(),
 });
 export type RunRequest = z.infer<typeof runRequestSchema>;
 

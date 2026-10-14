@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { Config } from "../config.js";
-import { LatestModel, listAnthropicModels } from "./catalog.js";
+import { LatestModel, fetchModelsDev, listAnthropicModels, shared } from "./catalog.js";
 import { AnthropicAssistantModel } from "./model.js";
 import type { AssistantOptions } from "./service.js";
 
@@ -14,20 +14,32 @@ export { ASSISTANT_CLIENT_ID } from "./tools.js";
 
 /**
  * Cloud AI from the environment: the Anthropic model when ANTHROPIC_API_KEY is set, Jev for routing when JEV_API_KEY is.
- * With ASSISTANT_MODEL=latest (default) the model follows new releases (models.dev + the Models API, every 6 hours).
+ * Three cloud tiers (small/medium/large = newest Haiku/Sonnet/Opus by default) follow new releases
+ * (models.dev + the Models API, every 6 hours); the route picks a tier by budget and difficulty.
  */
 export function createAssistantOptions(
   config: Pick<
     Config,
-    "anthropicApiKey" | "assistantModel" | "assistantMaxTurns" | "assistantCodeExecution" | "assistantWebSearch" | "jevApiKey" | "jevModel"
+    | "anthropicApiKey"
+    | "assistantModel"
+    | "assistantModelMedium"
+    | "assistantModelSmall"
+    | "assistantMaxTurns"
+    | "assistantCodeExecution"
+    | "assistantWebSearch"
+    | "jevApiKey"
+    | "jevModel"
   >,
 ): AssistantOptions {
   let model: AnthropicAssistantModel | null = null;
   if (config.anthropicApiKey) {
     const client = new Anthropic({ apiKey: config.anthropicApiKey });
-    const latest = new LatestModel(config.assistantModel, { listAvailable: () => listAnthropicModels(client) });
-    latest.start();
-    model = new AnthropicAssistantModel({ client, model: () => latest.id });
+    const sources = { fetchCatalog: shared(() => fetchModelsDev()), listAvailable: shared(() => listAnthropicModels(client)) };
+    const large = new LatestModel(config.assistantModel, sources);
+    const medium = new LatestModel(config.assistantModelMedium, sources);
+    const small = new LatestModel(config.assistantModelSmall, sources);
+    for (const tier of [large, medium, small]) tier.start();
+    model = new AnthropicAssistantModel({ client, model: () => large.id, tiers: { medium: () => medium.id, small: () => small.id } });
   }
   return {
     model,

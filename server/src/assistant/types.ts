@@ -61,6 +61,15 @@ export interface RouteDecision {
   confidence: number;
   provider: "jev" | "heuristic";
   cloudAvailable: boolean;
+  /** The fields below are only present when the request named a budget. */
+  difficulty?: "simple" | "moderate" | "hard";
+  budget?: "low" | "medium" | "high";
+  /** "device" or the cloud tier to start the run with. */
+  tier?: "device" | "small" | "medium" | "large";
+  /** The model that tier uses right now (null on the device). */
+  model?: string | null;
+  /** Thinking effort for the run (null on the device). */
+  effort?: "low" | "medium" | "high" | null;
 }
 
 export interface UndoResult {

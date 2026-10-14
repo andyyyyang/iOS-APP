@@ -1,12 +1,17 @@
 import Foundation
 import Observation
 
-/// AI 執行的位置。
+/// AI 的預算：三個等級都由伺服器的 Jev 依要求的種類與難度自動選擇（裝置端或哪一級的雲端模型），都以成本為先；
+/// 簡單的事每個等級都在裝置端處理，預算越高，難的工作越早用上更好的模型。
 enum AssistantEngineMode: String, CaseIterable, Identifiable {
-    /// 由伺服器的 Jev 判斷：查詢、小修改用裝置端，多步驟的工作交給雲端。
-    case auto
+    /// 盡量用裝置端：只有裝置端做不好的（困難的問題、多步驟的工作）才用便宜的雲端模型。
+    case low
+    /// 依難度平衡。
+    case medium
+    /// 難的工作用最好的模型。
+    case high
+    /// 完全不用雲端。
     case device
-    case cloud
 
     static let key = "assistant.engine"
 
@@ -14,15 +19,45 @@ enum AssistantEngineMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .auto: return "自動（Jev 判斷）"
+        case .low: return "低：盡量用裝置端"
+        case .medium: return "中：依難度平衡"
+        case .high: return "高：難的工作用最好的模型"
+        case .device: return "只用裝置端（不用雲端）"
+        }
+    }
+
+    /// 「預算低／中／高」中的那個字。
+    var shortTitle: String {
+        switch self {
+        case .low: return "低"
+        case .medium: return "中"
+        case .high: return "高"
         case .device: return "只用裝置端"
-        case .cloud: return "一律用雲端"
+        }
+    }
+
+    /// 傳給伺服器的預算（只用裝置端時不問伺服器）。
+    var budget: String? { self == .device ? nil : rawValue }
+
+    /// 讀取設定；舊版的「自動」當成中、「一律用雲端」當成高。
+    static func from(_ raw: String?) -> AssistantEngineMode {
+        switch raw {
+        case "auto": return .medium
+        case "cloud": return .high
+        default: return AssistantEngineMode(rawValue: raw ?? "") ?? .medium
         }
     }
 
     static var current: AssistantEngineMode {
-        AssistantEngineMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .auto
+        from(UserDefaults.standard.string(forKey: key))
     }
+}
+
+/// 雲端工作要用的模型等級與思考程度（POST /v1/assistant/route 的判斷）。
+struct CloudPlan: Equatable {
+    /// small、medium 或 large。
+    var tier: String
+    var effort: String?
 }
 
 /// 一段以前的對話（AI 對話資料夾中的一則筆記）。
@@ -68,6 +103,8 @@ final class KnowledgeAssistant {
     private var found: [String] = []
     private var work: Task<Void, Never>?
     private var cloudChecked = false
+    /// 這一題交給雲端時的等級（chooseEngine 決定，runCloud 使用）。
+    private var cloudPlan: CloudPlan?
 
     var isServerConfigured: Bool { VaultMCPClient.configured() != nil }
 
@@ -236,34 +273,49 @@ final class KnowledgeAssistant {
         }
     }
 
-    /// 交給哪個 AI：設定為自動時，問伺服器的 Jev 這是不是需要多步驟的工作。
+    /// 交給哪個 AI：把預算告訴伺服器，由 Jev 依種類與難度選裝置端或哪一級的雲端模型（以成本為先）。
     private func chooseEngine(for question: String, context: String?) async -> AssistantMessage.Engine {
+        cloudPlan = nil
         var deviceAvailable = false
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) { deviceAvailable = OnDeviceAIStatus.current.isAvailable }
         #endif
         let mode = AssistantEngineMode.current
-        switch mode {
-        case .device:
-            return deviceAvailable ? .device : .search
-        case .cloud:
-            if cloudAvailable { return .cloud(model: "") }
-            return deviceAvailable ? .device : .search
-        case .auto:
-            guard cloudAvailable else { return deviceAvailable ? .device : .search }
-            guard deviceAvailable else {
-                updateLast { $0.steps.append(.route("這台裝置不能使用 Apple Intelligence，交給雲端 AI")) }
-                return .cloud(model: "")
-            }
-            guard let client = AssistantClient.configured(), let route = try? await client.route(question, context: context) else {
-                return .device
-            }
-            let judge = route.provider == "jev" ? "Jev" : "規則"
-            if route.isCloud {
-                updateLast { $0.steps.append(.route("\(judge)判斷是多步驟的工作，交給雲端 AI")) }
-                return .cloud(model: "")
-            }
-            return .device
+        guard let budget = mode.budget, cloudAvailable else { return deviceAvailable ? .device : .search }
+        guard let client = AssistantClient.configured(),
+              let route = try? await client.route(question, context: context, budget: budget, deviceAvailable: deviceAvailable) else {
+            // 問不到伺服器：能用裝置端就用裝置端，否則用最便宜的雲端模型
+            if deviceAvailable { return .device }
+            cloudPlan = CloudPlan(tier: "small", effort: "low")
+            return .cloud(model: "")
+        }
+        let judge = route.provider == "jev" ? "Jev" : "規則"
+        if route.isCloud {
+            let tier = route.tier ?? "large"
+            cloudPlan = CloudPlan(tier: tier, effort: route.effort)
+            let model = route.model.map(Self.modelLabel) ?? Self.tierLabel(tier)
+            updateLast { $0.steps.append(.route("\(judge)：\(route.summary) → 雲端 \(model)（預算\(mode.shortTitle)）")) }
+            return .cloud(model: route.model ?? "")
+        }
+        guard deviceAvailable else { return .search }
+        updateLast { $0.steps.append(.route("\(judge)：\(route.summary) → 裝置端 AI（免費）")) }
+        return .device
+    }
+
+    /// claude-sonnet-5-5 → Sonnet 5.5（其他名稱照原樣）。
+    nonisolated static func modelLabel(_ id: String) -> String {
+        let parts = id.split(separator: "-").map(String.init)
+        guard parts.count >= 2, parts[0] == "claude" else { return id }
+        let family = parts[1].prefix(1).uppercased() + parts[1].dropFirst()
+        let version = parts.dropFirst(2).prefix { $0.allSatisfy(\.isNumber) && $0.count <= 2 }
+        return version.isEmpty ? family : family + " " + version.joined(separator: ".")
+    }
+
+    nonisolated static func tierLabel(_ tier: String) -> String {
+        switch tier {
+        case "small": return "Haiku 級"
+        case "medium": return "Sonnet 級"
+        default: return "Opus 級"
         }
     }
 
@@ -362,7 +414,9 @@ final class KnowledgeAssistant {
                 rulesPath: rulesOverride,
                 openNote: openNote,
                 transcriptPath: transcriptPath,
-                timeZone: .current
+                timeZone: .current,
+                tier: cloudPlan?.tier,
+                effort: cloudPlan?.effort
             )
         } catch {
             finish("雲端 AI 無法開始：\(error.localizedDescription)", isError: true)

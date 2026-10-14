@@ -161,7 +161,8 @@ struct AssistantHome: View {
                 .buttonStyle(.plain)
             }
             if assistant.cloudAvailable {
-                statusLine("cloud", AssistantEngineMode.current == .device ? "只用裝置端 AI（可以在設定改成自動）" : "多步驟的整理工作會交給雲端 AI（\(AssistantEngineMode.current == .cloud ? "一律用雲端" : "Jev 自動判斷")）", tint: DS.textSecondary)
+                let mode = AssistantEngineMode.current
+                statusLine("cloud", mode == .device ? "只用裝置端 AI（可以在設定選預算，讓難的工作交給雲端）" : "預算\(mode.shortTitle)：Jev 依難度自動選裝置端或雲端模型", tint: DS.textSecondary)
             }
             if VaultBackend.storage == .webdav {
                 statusLine("externaldrive.badge.icloud", "AI 搜尋的是 LocalOCR 伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
@@ -511,7 +512,7 @@ struct AssistantMessageView: View {
 
     private func engineLabel(_ engine: AssistantMessage.Engine) -> String {
         switch engine {
-        case .cloud(let model) where !model.isEmpty: return "雲端 AI · \(model)"
+        case .cloud(let model) where !model.isEmpty: return "雲端 AI · \(KnowledgeAssistant.modelLabel(model))"
         default: return engine.label
         }
     }

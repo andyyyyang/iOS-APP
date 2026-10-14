@@ -27,7 +27,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `DELETE /v1/templates/{id}` | 刪除，回傳 204 |
 | `POST /v1/classify` | `{"text":"...","templateIds":[...]}` → `{"templateId","confidence","probabilities","provider"}`；未設定 Jev 時回傳 503 `jev_not_configured` |
 | `POST /v1/validate` | `{"templateId":"receipt","data":{...}}` → `{"valid":false,"issues":[{"path":"$.items[0].price","message":"..."}]}`（REST 版的 `validate_data`） |
-| `POST /v1/assistant/route` | `{"text","context"?}` → `{"kind":"question\|edit\|task","route":"device\|cloud","confidence","provider":"jev\|heuristic","cloudAvailable"}`：判斷聊天要求在裝置上處理還是交給雲端 AI |
+| `POST /v1/assistant/route` | `{"text","context"?,"budget"?:"low\|medium\|high","deviceAvailable"?}` → `{"kind":"question\|edit\|task","route":"device\|cloud","confidence","provider":"jev\|heuristic","cloudAvailable"}`；有 `budget` 時另外回傳 `difficulty`（simple/moderate/hard）、`tier`（device/small/medium/large）、`model`、`effort`：判斷聊天要求在裝置上處理，還是交給哪一級的雲端模型 |
 | `POST /v1/assistant/runs` | 開始雲端 AI 工作 `{"prompt","history"?,"rulesPath"?,"openNote"?,"transcriptPath"?,"timeZone"?}` → 202 `{"id","status":"running","model"}`；未設定 `ANTHROPIC_API_KEY` 時 503 `assistant_not_configured` |
 | `GET /v1/assistant/runs/{id}?after=&wait=` | 工作狀態與 `after` 之後的事件（長輪詢，`wait` 最多 25 秒）`{"id","status","model","events","answer","error","sources","edits","usage"}` |
 | `POST /v1/assistant/runs/{id}/cancel`／`/undo` | 取消工作 → `{"status"}`；復原修改 `{"editIds"?}` → `{"undone":[...],"failed":[{"id","reason"}]}` |
@@ -89,7 +89,17 @@ Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../do
 
 ### 雲端 AI（`/v1/assistant`）
 
-App 首頁的 AI 對話：簡單的問題在裝置上處理，多步驟的工作（整理資料夾、彙整多則筆記、分類搬移）由 `POST /v1/assistant/route` 判斷後交給伺服器上的 Claude（官方 `@anthropic-ai/sdk`，Messages API + 工具）。
+App 首頁的 AI 對話：簡單的問題在裝置上處理，較難的要求由 `POST /v1/assistant/route` 判斷後交給伺服器上的 Claude（官方 `@anthropic-ai/sdk`，Messages API + 工具）。
+
+**預算與模型分級**：App 帶上預算（低／中／高）時，Jev 一次判斷要求的種類（問答／小修改／多步驟工作）與難度（簡單／中等／困難），再依下表決定由誰處理；三個預算都自動選，而且都看難度，不會隨便用貴的模型。Jev 把握不到 0.5 時往便宜的一級算。雲端分三級：small＝最新 Haiku、medium＝最新 Sonnet、large＝最新 Opus（自動跟上新版本，見 `ASSISTANT_MODEL*`），思考程度（effort）隨難度 low／medium／high（低預算最多 medium）。手機不能用 Apple Intelligence 時，裝置端的工作改用 small。
+
+| 預算 | 問答、小修改：簡單／中等／困難 | 多步驟工作：簡單／中等／困難 |
+|---|---|---|
+| 低（盡量用裝置端） | 裝置／裝置／small | 裝置／small／medium |
+| 中 | 裝置／small／medium | small／medium／large |
+| 高（難的用最好的模型） | 裝置／medium／large | medium／large／large |
+
+不帶預算的舊版 App 維持原本的判斷（只有多步驟工作交給雲端，用 large）。
 Claude 把 vault 當成電腦的檔案系統操作：`list_files`、`read_file`、`search_notes`、`get_links`、`write_file`（覆寫前必須先讀過）、`edit_file`（精確字串取代）、`move_file`（同時更新其他筆記的 `[[連結]]`）、`delete_file`（移到 `.trash/`），
 以及 Anthropic 的程式沙盒（`code_execution_20260521`，產生的檔案用 `save_output` 存回 vault）與選用的網路搜尋。所有寫入的 client 都是 `assistant`，App 與 Obsidian 會從變更通知得知。
 系統提示詞與工具定義使用提示快取；vault 根目錄的編輯規則（`AGENTS.md`、`CLAUDE.md`、`規則.md` 等，或 `rulesPath` 指定的檔案）會放進提示詞並要求遵守。
@@ -112,7 +122,9 @@ Claude 把 vault 當成電腦的檔案系統操作：`list_files`、`read_file`�
 | `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl` 與 `latest.json` 的檔案網址；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
 | `GITHUB_TOKEN` | 否 | 同步插件版本時讀取 GitHub 版本清單用的權杖（只用來提高 API 次數上限，公開儲存庫不需要任何權限）；未設定時使用未驗證的請求（每小時 60 次，每 30 分鐘同步一次綽綽有餘） |
 | `ANTHROPIC_API_KEY` | 否 | 雲端 AI（`/v1/assistant/runs`）用的 Anthropic API 金鑰；未設定時該功能關閉（503 `assistant_not_configured`，`/health` 的 `assistant` 為 `false`） |
-| `ASSISTANT_MODEL` | 否 | 雲端 AI 的模型。預設 `latest`：自動使用最新的 Opus（每 6 小時查一次開源模型目錄 [models.dev](https://github.com/sst/models.dev) 與 Anthropic Models API，只選這把金鑰叫得到、支援工具的模型；查不到時用 `claude-opus-5-5`）。`latest-sonnet`、`latest-haiku`、`latest-fable` 改用該系列的最新模型；填模型 ID（例如 `claude-opus-5-5`）則固定使用。目前使用的模型見 `GET /health` 的 `assistantModel` |
+| `ASSISTANT_MODEL` | 否 | 雲端 AI 的模型。預設 `latest`：自動使用最新的 Opus（每 6 小時查一次開源模型目錄 [models.dev](https://github.com/sst/models.dev) 與 Anthropic Models API，只選這把金鑰叫得到、支援工具的模型；查不到時用 `claude-opus-5-5`）。`latest-sonnet`、`latest-haiku`、`latest-fable` 改用該系列的最新模型；填模型 ID（例如 `claude-opus-5-5`）則固定使用。目前使用的模型見 `GET /health` 的 `assistantModel`（各級見 `assistantModels`） |
+| `ASSISTANT_MODEL_MEDIUM` | 否 | 中級雲端模型，預設 `latest-sonnet`（寫法同 `ASSISTANT_MODEL`） |
+| `ASSISTANT_MODEL_SMALL` | 否 | 最便宜的雲端模型，預設 `latest-haiku`（寫法同 `ASSISTANT_MODEL`） |
 | `ASSISTANT_MAX_TURNS` | 否 | 每個工作最多呼叫模型幾次，預設 `40` |
 | `ASSISTANT_CODE_EXECUTION` | 否 | Anthropic 程式沙盒，預設開啟；`0` 關閉 |
 | `ASSISTANT_WEB_SEARCH` | 否 | Anthropic 網路搜尋，預設關閉；`1` 開啟 |

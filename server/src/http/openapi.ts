@@ -571,6 +571,11 @@ export function buildOpenApi(serverUrl?: string) {
               type: ["string", "null"],
               description: "The model a new cloud run uses (follows the newest release with ASSISTANT_MODEL=latest); null when cloud runs are off",
             },
+            assistantModels: {
+              type: "object",
+              description: "The model behind each cloud tier (present when cloud runs are available)",
+              properties: { small: { type: "string" }, medium: { type: "string" }, large: { type: "string" } },
+            },
           },
         },
         Classification: {

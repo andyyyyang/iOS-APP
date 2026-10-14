@@ -14,8 +14,12 @@ export interface Config {
   githubToken: string | undefined;
   /** ANTHROPIC_API_KEY: enables cloud AI runs (/v1/assistant/runs). Never logged. */
   anthropicApiKey: string | undefined;
-  /** ASSISTANT_MODEL: "latest" (default, newest Opus), "latest-sonnet" etc., or a fixed model id. */
+  /** ASSISTANT_MODEL: the large tier. "latest" (default, newest Opus), "latest-sonnet" etc., or a fixed model id. */
   assistantModel: string;
+  /** ASSISTANT_MODEL_MEDIUM: the medium tier (default latest-sonnet). */
+  assistantModelMedium: string;
+  /** ASSISTANT_MODEL_SMALL: the small tier (default latest-haiku). */
+  assistantModelSmall: string;
   /** ASSISTANT_MAX_TURNS: model calls per run (default 40). */
   assistantMaxTurns: number;
   /** ASSISTANT_CODE_EXECUTION: Anthropic's code-execution sandbox (default on; "0" disables). */
@@ -140,6 +144,8 @@ export function loadConfig(
     githubToken: nonEmpty(env.GITHUB_TOKEN),
     anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
     assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "latest",
+    assistantModelMedium: nonEmpty(env.ASSISTANT_MODEL_MEDIUM) ?? "latest-sonnet",
+    assistantModelSmall: nonEmpty(env.ASSISTANT_MODEL_SMALL) ?? "latest-haiku",
     assistantMaxTurns: parseMaxTurns(env.ASSISTANT_MAX_TURNS),
     assistantCodeExecution: !isFalse(env.ASSISTANT_CODE_EXECUTION),
     assistantWebSearch: isTrue(env.ASSISTANT_WEB_SEARCH),

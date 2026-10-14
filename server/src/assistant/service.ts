@@ -13,6 +13,7 @@ import type { VaultFile } from "../vault/types.js";
 import { AssistantModelError, type AssistantModel, type ModelMessage, type ModelResponse } from "./model.js";
 import { SYSTEM_PROMPT, buildRunContext, loadVaultRules } from "./prompt.js";
 import { RequestRouter } from "./routing.js";
+import type { Effort } from "./tiers.js";
 import { MAX_HISTORY_TEXT, MAX_HISTORY_TURNS, routeRequestSchema, runQuerySchema, runRequestSchema, undoRequestSchema, type RunRequest } from "./schemas.js";
 import { DEFAULT_TIME_ZONE } from "./time.js";
 import { ASSISTANT_CLIENT_ID, AssistantToolbox, sha1, type EditRecord, type NewEdit, type ToolHost } from "./tools.js";
@@ -71,6 +72,8 @@ class Run {
   readonly usage: RunUsage = { inputTokens: 0, outputTokens: 0 };
   readonly outputFileIds = new Set<string>();
   readonly abort = new AbortController();
+  /** Thinking effort chosen by the route (undefined = the model default, high). */
+  effort: Effort | undefined;
   /** The agent loop (always resolves). */
   done: Promise<void> = Promise.resolve();
   /** Undo requests run one at a time. */
@@ -195,13 +198,27 @@ export class AssistantService {
     return this.model?.model ?? null;
   }
 
+  /** The model behind each cloud tier right now. */
+  get tierModels(): Record<"small" | "medium" | "large", string> | null {
+    const model = this.model;
+    if (!model) return null;
+    const of = (tier: "small" | "medium" | "large") => model.modelFor?.(tier) ?? model.model;
+    return { small: of("small"), medium: of("medium"), large: of("large") };
+  }
+
   get available(): boolean {
     return this.model !== null && this.deps.vault.status().configured;
   }
 
   async route(body: unknown): Promise<RouteDecision> {
-    const { text, context } = parse(routeRequestSchema, body ?? {});
-    return this.router.route(text, context, this.available);
+    const { text, context, budget, deviceAvailable } = parse(routeRequestSchema, body ?? {});
+    const model = this.model;
+    return this.router.route(text, context, {
+      cloudAvailable: this.available,
+      budget,
+      deviceAvailable,
+      modelFor: model ? (tier) => model.modelFor?.(tier) ?? model.model : undefined,
+    });
   }
 
   start(body: unknown): { id: string; status: RunStatus; model: string } {
@@ -218,7 +235,8 @@ export class AssistantService {
       }
     }
     this.prune();
-    const run = new Run(randomUUID(), model.model, this.now(), () => this.now());
+    const run = new Run(randomUUID(), model.modelFor?.(request.tier ?? "large") ?? model.model, this.now(), () => this.now());
+    run.effort = request.effort;
     this.runs.set(run.id, run);
     run.done = this.execute(run, model, request).catch((error) => {
       // execute handles its own failures; this only guards against a bug leaving a rejected promise behind
@@ -311,7 +329,7 @@ export class AssistantService {
         let response: ModelResponse;
         try {
           response = await model.create(
-            { system: SYSTEM_PROMPT, context, tools: toolbox.definitions(), codeExecution, webSearch, messages, container, model: run.model },
+            { system: SYSTEM_PROMPT, context, tools: toolbox.definitions(), codeExecution, webSearch, messages, container, model: run.model, effort: run.effort },
             { signal },
           );
         } catch (error) {

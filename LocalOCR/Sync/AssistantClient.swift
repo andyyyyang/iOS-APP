@@ -23,8 +23,34 @@ struct AssistantClient: Sendable {
         /// jev 或 heuristic。
         let provider: String
         let cloudAvailable: Bool
+        /// simple、moderate 或 hard（有帶預算時）。
+        var difficulty: String?
+        /// device、small、medium 或 large（有帶預算時）。
+        var tier: String?
+        /// 那一級目前的模型。
+        var model: String?
+        /// 思考程度：low、medium 或 high。
+        var effort: String?
 
         var isCloud: Bool { route == "cloud" }
+
+        /// 「困難的多步驟工作」。
+        var summary: String {
+            let level: String
+            switch difficulty {
+            case "simple": level = "簡單的"
+            case "moderate": level = "中等的"
+            case "hard": level = "困難的"
+            default: level = ""
+            }
+            let what: String
+            switch kind {
+            case "task": what = "多步驟工作"
+            case "edit": what = "修改"
+            default: what = "問題"
+            }
+            return level + what
+        }
     }
 
     struct Edit: Equatable, Sendable {
@@ -74,21 +100,29 @@ struct AssistantClient: Sendable {
         return value["assistant"] as? Bool == true
     }
 
-    func route(_ text: String, context: String?) async throws -> Route {
+    /// 判斷這個要求交給誰。`budget`：low、medium 或 high（伺服器依種類與難度選裝置端或哪一級的雲端模型）。
+    func route(_ text: String, context: String?, budget: String? = nil, deviceAvailable: Bool = true) async throws -> Route {
         var body: [String: Any] = ["text": String(text.prefix(4000))]
         if let context { body["context"] = String(context.prefix(2000)) }
+        if let budget {
+            body["budget"] = budget
+            body["deviceAvailable"] = deviceAvailable
+        }
         let value = try await send("POST", "/v1/assistant/route", body: body, timeout: 8)
-        return Route(
-            kind: value["kind"] as? String ?? "question",
-            route: value["route"] as? String ?? "device",
-            confidence: (value["confidence"] as? NSNumber)?.doubleValue ?? 0,
-            provider: value["provider"] as? String ?? "heuristic",
-            cloudAvailable: value["cloudAvailable"] as? Bool ?? false
-        )
+        return Self.route(from: value)
     }
 
-    /// 開始一個雲端工作。`rulesPath`：nil 自動尋找、空字串不使用規則。
-    func startRun(prompt: String, history: [HistoryTurn], rulesPath: String?, openNote: String?, transcriptPath: String?, timeZone: TimeZone) async throws -> Run {
+    /// 開始一個雲端工作。`rulesPath`：nil 自動尋找、空字串不使用規則；`tier`、`effort` 來自 route 的判斷（沒有時用最好的模型）。
+    func startRun(
+        prompt: String,
+        history: [HistoryTurn],
+        rulesPath: String?,
+        openNote: String?,
+        transcriptPath: String?,
+        timeZone: TimeZone,
+        tier: String? = nil,
+        effort: String? = nil
+    ) async throws -> Run {
         var body: [String: Any] = [
             "prompt": prompt,
             "history": history.suffix(12).map { ["role": $0.role, "text": String($0.text.prefix(4000))] },
@@ -97,6 +131,8 @@ struct AssistantClient: Sendable {
         if let rulesPath { body["rulesPath"] = rulesPath.isEmpty ? NSNull() : rulesPath }
         if let openNote { body["openNote"] = openNote }
         if let transcriptPath { body["transcriptPath"] = transcriptPath }
+        if let tier { body["tier"] = tier }
+        if let effort { body["effort"] = effort }
         let value = try await send("POST", "/v1/assistant/runs", body: body, timeout: 30)
         return Self.run(from: value)
     }
@@ -122,6 +158,20 @@ struct AssistantClient: Sendable {
     }
 
     // MARK: 解析
+
+    static func route(from value: [String: Any]) -> Route {
+        Route(
+            kind: value["kind"] as? String ?? "question",
+            route: value["route"] as? String ?? "device",
+            confidence: (value["confidence"] as? NSNumber)?.doubleValue ?? 0,
+            provider: value["provider"] as? String ?? "heuristic",
+            cloudAvailable: value["cloudAvailable"] as? Bool ?? false,
+            difficulty: value["difficulty"] as? String,
+            tier: value["tier"] as? String,
+            model: value["model"] as? String,
+            effort: value["effort"] as? String
+        )
+    }
 
     static func run(from value: [String: Any]) -> Run {
         let events: [(seq: Int, event: Event)] = (value["events"] as? [[String: Any]] ?? []).compactMap { item in

@@ -5,16 +5,20 @@ struct AssistantSettingsSection: View {
     @State private var assistant = KnowledgeAssistant.shared
     @State private var customPath = KnowledgeAssistant.shared.rulesOverride ?? ""
     @State private var usesRules = KnowledgeAssistant.shared.rulesOverride != ""
-    @AppStorage(AssistantEngineMode.key) private var engine = AssistantEngineMode.auto.rawValue
+    @AppStorage(AssistantEngineMode.key) private var engine = AssistantEngineMode.medium.rawValue
     @AppStorage(KnowledgeAssistant.historyEnabledKey) private var historyEnabled = true
     @AppStorage(KnowledgeAssistant.historyFolderKey) private var historyFolder = KnowledgeAssistant.defaultHistoryFolder
 
     var body: some View {
         Section {
-            Picker("AI 執行位置", selection: $engine) {
+            Picker("AI 預算", selection: $engine) {
                 ForEach(AssistantEngineMode.allCases) { mode in
                     Text(mode.title).tag(mode.rawValue)
                 }
+            }
+            .onAppear {
+                // 舊版的「自動」「一律用雲端」換成新的等級
+                if AssistantEngineMode(rawValue: engine) == nil { engine = AssistantEngineMode.from(engine).rawValue }
             }
             LabeledContent("雲端 AI") {
                 Text(assistant.cloudAvailable ? "可以使用" : "伺服器尚未設定")
@@ -59,7 +63,7 @@ struct AssistantSettingsSection: View {
         } header: {
             Text("知識庫 AI")
         } footer: {
-            Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。「自動」時由伺服器的 Jev 判斷：查詢與小修改用裝置端的 Apple Intelligence，需要多個步驟或處理多個檔案的整理工作交給伺服器上的雲端 AI（Claude，能像操作電腦一樣整理檔案、在沙盒中執行程式；要在 Railway 的伺服器設定 ANTHROPIC_API_KEY 才能使用）。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
+            Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。三個預算都由伺服器的 Jev 依要求的種類與難度自動選擇，以成本為先：簡單的問題與修改每個等級都用裝置端的 Apple Intelligence（免費）；「低」連中等難度的也盡量留在裝置端，只有困難的才用便宜的雲端模型；「中」依難度用 Haiku、Sonnet 或 Opus 級的模型；「高」讓難的工作早一點用上最好的模型。雲端 AI 是伺服器上的 Claude，能像操作電腦一樣整理檔案、在沙盒中執行程式，模型自動跟上最新版本（要在 Railway 的伺服器設定 ANTHROPIC_API_KEY 才能使用）。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
         }
         .task {
             await assistant.loadRules()
