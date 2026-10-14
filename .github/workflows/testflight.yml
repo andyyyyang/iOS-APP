@@ -67,6 +67,16 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      # 每次在全新 runner 上自動簽署都會建立一張開發憑證，累積到上限後封存會失敗：先撤銷先前 CI 建立的
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Revoke stale CI development certificates
+        continue-on-error: true
+        run: |
+          pip install --quiet "pyjwt[crypto]" requests
+          python .github/scripts/revoke_ci_certificates.py
+
       - name: Prepare API key and export options
         id: prepare
         run: |
