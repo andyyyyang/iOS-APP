@@ -104,4 +104,89 @@ final class KnowledgeAssistantTests: XCTestCase {
         XCTAssertTrue(prompt.contains("a.md"))
         XCTAssertTrue(prompt.contains("答：y"))
     }
+
+    // MARK: - 對話紀錄
+
+    func testTranscriptTurnFormat() {
+        let taipei = TimeZone(identifier: "Asia/Taipei")!
+        let date = Date(timeIntervalSince1970: 1_760_414_100) // 2025-10-14 11:55 +08:00
+        let edits = [
+            AgentEdit(path: "收件匣/想法.md", summary: "新增筆記", previous: nil, etag: "e"),
+            AgentEdit(AssistantClient.Edit(id: "m1", op: "move", path: "專案/A.md", from: "收件匣/A.md", summary: "", undone: false), runID: "r1"),
+        ]
+        let turn = ChatTranscript.turn(question: "整理收件匣", answer: "完成了。", engine: .device, sources: ["工作/週報.md", "週報"], edits: edits, date: date, timeZone: taipei)
+        XCTAssertEqual(turn, """
+        ## 🙋 2025-10-14 11:55
+        整理收件匣
+
+        ## 🤖 裝置端 AI
+        完成了。
+
+        > 來源：[[週報]]
+        > 修改：新增 [[想法]]；搬移 [[A]] → [[A]]
+
+        """)
+    }
+
+    func testTranscriptAppendsAndParsesBack() {
+        let taipei = TimeZone(identifier: "Asia/Taipei")!
+        let date = Date(timeIntervalSince1970: 1_760_414_100)
+        let first = ChatTranscript.turn(question: "問一", answer: "答一 [[A]]", engine: .device, sources: ["A.md"], edits: [], date: date, timeZone: taipei)
+        let created = ChatTranscript.appending(first, to: nil, created: date, timeZone: taipei)
+        XCTAssertTrue(created.hasPrefix("---\ntype: ai-chat\ncreated: 2025-10-14T11:55:00+08:00\ntags: [ai-chat]\n---\n\n## 🙋"))
+        let second = ChatTranscript.turn(question: "問二", answer: "答二", engine: .cloud, sources: [], edits: [], date: date, timeZone: taipei)
+        let full = ChatTranscript.appending(second, to: created + "\n\n", created: date, timeZone: taipei)
+        XCTAssertTrue(full.contains("[[A]]\n\n## 🙋 2025-10-14 11:55\n問二"))
+
+        let messages = ChatTranscript.parse(full)
+        XCTAssertEqual(messages.map(\.role), [.user, .assistant, .user, .assistant])
+        XCTAssertEqual(messages[0].text, "問一")
+        XCTAssertEqual(messages[1].text, "答一 [[A]]")
+        XCTAssertEqual(messages[1].sources, ["A"])
+        XCTAssertEqual(messages[1].engine, .device)
+        XCTAssertEqual(messages[3].text, "答二")
+        XCTAssertEqual(messages[3].engine, .cloud(model: ""))
+    }
+
+    func testParsesEditFootnotesIntoTheAnswer() {
+        let text = "## 🙋 2025-10-14 11:55\n搬一下\n\n## 🤖 雲端 AI\n好了\n\n> 來源：[[A]]、[[B|別名]]\n> 修改：搬移 [[A]] → [[A]]\n"
+        let messages = ChatTranscript.parse(text)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[1].sources, ["A", "B"])
+        XCTAssertEqual(messages[1].text, "好了\n\n修改：搬移 [[A]] → [[A]]")
+    }
+
+    func testTranscriptFileNames() {
+        let taipei = TimeZone(identifier: "Asia/Taipei")!
+        let date = Date(timeIntervalSince1970: 1_760_414_100)
+        XCTAssertEqual(ChatTranscript.fileName(for: "把 [[會議]] 整理成表格/報告？", date: date, timeZone: taipei), "2025-10-14 1155 把 會議 整理成表格 報告.md")
+        XCTAssertEqual(ChatTranscript.fileName(for: "   ", date: date, timeZone: taipei), "2025-10-14 1155.md")
+        XCTAssertEqual(ChatTranscript.fileName(for: String(repeating: "長", count: 40), date: date, timeZone: taipei), "2025-10-14 1155 " + String(repeating: "長", count: 24) + ".md")
+    }
+
+    // MARK: - 雲端 AI
+
+    func testParsesCloudRunState() {
+        let value: [String: Any] = [
+            "id": "run1", "status": "completed", "model": "m",
+            "events": [
+                ["seq": 1, "type": "tool", "name": "search_notes", "summary": "搜尋「會議」"],
+                ["seq": 2, "type": "edit", "edit": ["id": "e1", "op": "move", "path": "專案/A.md", "from": "A.md", "summary": "搬到專案", "undone": false]],
+                ["seq": 3, "type": "message", "text": "完成"],
+                ["seq": 4, "type": "unknown"],
+            ],
+            "answer": "完成", "error": NSNull(), "sources": ["A.md"],
+            "edits": [["id": "e1", "op": "move", "path": "專案/A.md", "from": "A.md", "summary": "搬到專案", "undone": false]],
+        ]
+        let run = AssistantClient.run(from: value)
+        XCTAssertFalse(run.isRunning)
+        XCTAssertEqual(run.events.map(\.seq), [1, 2, 3])
+        XCTAssertEqual(run.events[0].event, .tool("搜尋「會議」"))
+        guard case .edit(let edit) = run.events[1].event else { return XCTFail("應該是修改") }
+        XCTAssertEqual(edit.from, "A.md")
+        XCTAssertEqual(AgentEdit(edit, runID: run.id).op, .move)
+        XCTAssertEqual(run.answer, "完成")
+        XCTAssertNil(run.error)
+        XCTAssertEqual(run.sources, ["A.md"])
+    }
 }

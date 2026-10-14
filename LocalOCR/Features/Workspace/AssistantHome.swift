@@ -31,7 +31,7 @@ struct AssistantHome: View {
                                 welcome
                             } else {
                                 ForEach(assistant.messages) { message in
-                                    AssistantMessageView(message: message, undone: assistant.undone, onOpen: openReference, onUndo: undo)
+                                    AssistantMessageView(message: message, undone: assistant.undone, onOpen: openReference, onUndo: undo, onUndoAll: undoAll)
                                 }
                             }
                         }
@@ -88,6 +88,25 @@ struct AssistantHome: View {
                 .font(.subheadline)
                 .foregroundStyle(DS.textSecondary)
             Spacer(minLength: 8)
+            if !assistant.sessions.isEmpty {
+                Menu {
+                    ForEach(assistant.sessions.prefix(20)) { session in
+                        Button(session.title) { open(session) }
+                    }
+                    Divider()
+                    Button { workspace.open(.folder(KnowledgeAssistant.historyFolder)) } label: {
+                        Label("在資料夾中查看全部", systemImage: "folder")
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(DS.text)
+                        .frame(width: 34, height: 34)
+                        .background(DS.control, in: Circle())
+                }
+                .disabled(assistant.isWorking)
+                .accessibilityLabel("對話紀錄")
+            }
             if !assistant.messages.isEmpty {
                 Button {
                     assistant.newConversation()
@@ -124,6 +143,9 @@ struct AssistantHome: View {
                 statusLines
                 suggestions
             }
+            if !assistant.sessions.isEmpty {
+                history
+            }
             recent
         }
         .padding(.top, 12)
@@ -144,6 +166,9 @@ struct AssistantHome: View {
                     statusLine("list.bullet.clipboard", "vault 最上層沒有找到編輯規則檔（可以在設定指定）", tint: DS.textTertiary)
                 }
                 .buttonStyle(.plain)
+            }
+            if assistant.cloudAvailable {
+                statusLine("cloud", AssistantEngineMode.current == .device ? "只用裝置端 AI（可以在設定改成自動）" : "多步驟的整理工作會交給雲端 AI（\(AssistantEngineMode.current == .cloud ? "一律用雲端" : "Jev 自動判斷")）", tint: DS.textSecondary)
             }
             if VaultBackend.storage == .webdav {
                 statusLine("externaldrive.badge.icloud", "AI 搜尋的是 LocalOCR 伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
@@ -190,6 +215,48 @@ struct AssistantHome: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    private var history: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("最近的對話")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(DS.text)
+                Spacer()
+                Button("全部 \(assistant.sessions.count)") { workspace.open(.folder(KnowledgeAssistant.historyFolder)) }
+                    .font(.footnote)
+                    .foregroundStyle(DS.textSecondary)
+                    .buttonStyle(.plain)
+            }
+            VStack(spacing: 0) {
+                ForEach(assistant.sessions.prefix(5)) { session in
+                    Button { open(session) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "bubble.left.and.text.bubble.right")
+                                .font(.system(size: 13))
+                                .foregroundStyle(DS.textSecondary)
+                            Text(session.title)
+                                .font(.subheadline)
+                                .foregroundStyle(DS.text)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(DS.textTertiary)
+                        }
+                        .padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if session != assistant.sessions.prefix(5).last {
+                        Divider().overlay(DS.hairline)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .card(padding: 0)
         }
     }
 
@@ -259,25 +326,22 @@ struct AssistantHome: View {
                 .onSubmit { send(draft) }
                 .padding(.vertical, 10)
             Button {
-                send(draft)
-            } label: {
-                ZStack {
-                    if assistant.isWorking {
-                        ProgressView()
-                            .tint(DS.onPrimary)
-                    } else {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(DS.onPrimary)
-                    }
+                if assistant.isWorking {
+                    assistant.stop()
+                } else {
+                    send(draft)
                 }
-                .frame(width: 36, height: 36)
-                .background(DS.primary.opacity(canSend || assistant.isWorking ? 1 : 0.3), in: Circle())
+            } label: {
+                Image(systemName: assistant.isWorking ? "stop.fill" : "arrow.up")
+                    .font(.system(size: assistant.isWorking ? 13 : 16, weight: .semibold))
+                    .foregroundStyle(DS.onPrimary)
+                    .frame(width: 36, height: 36)
+                    .background(DS.primary.opacity(canSend || assistant.isWorking ? 1 : 0.3), in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(!canSend)
+            .disabled(!canSend && !assistant.isWorking)
             .padding(.bottom, 4)
-            .accessibilityLabel("送出")
+            .accessibilityLabel(assistant.isWorking ? "停止" : "送出")
         }
         .padding(.leading, 6)
         .padding(.trailing, 6)
@@ -324,7 +388,14 @@ struct AssistantHome: View {
         draft = ""
         notice = nil
         let recentNote = workspace.tabs.last(where: { $0.notePath != nil })?.notePath
-        Task { await assistant.send(question, openNote: recentNote) }
+        assistant.send(question, openNote: recentNote)
+    }
+
+    private func open(_ session: ChatSessionInfo) {
+        notice = nil
+        Task {
+            if let error = await assistant.open(session) { notice = error }
+        }
     }
 
     /// 開啟回答中的 [[連結]] 或來源：先找這則回答的來源，再找 vault 的連結索引；找不到不建立新筆記（避免 AI 寫錯的名稱變成空白筆記）。
@@ -345,15 +416,26 @@ struct AssistantHome: View {
             if let error = await assistant.undo(edit) { notice = error }
         }
     }
+
+    private func undoAll(_ message: AssistantMessage) {
+        Task {
+            if let error = await assistant.undoAll(in: message) { notice = error }
+        }
+    }
 }
 
 // MARK: - 一則訊息
 
 struct AssistantMessageView: View {
     let message: AssistantMessage
-    let undone: Set<UUID>
+    let undone: Set<String>
     var onOpen: (String, [String]) -> Void
     var onUndo: (AgentEdit) -> Void
+    var onUndoAll: (AssistantMessage) -> Void
+
+    /// 步驟很多時（雲端的整理工作）只顯示最後幾個。
+    @State private var showsAllSteps = false
+    private static let collapsedSteps = 6
 
     var body: some View {
         switch message.role {
@@ -371,16 +453,31 @@ struct AssistantMessageView: View {
         case .assistant:
             VStack(alignment: .leading, spacing: 10) {
                 if !message.steps.isEmpty {
+                    let hidden = showsAllSteps ? 0 : max(0, message.steps.count - Self.collapsedSteps - 2)
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(message.steps.enumerated()), id: \.offset) { _, step in
+                        if hidden > 0 {
+                            Button { showsAllSteps = true } label: {
+                                stepLine("ellipsis", "顯示前面 \(hidden) 個步驟")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        ForEach(Array(message.steps.enumerated()).dropFirst(hidden), id: \.offset) { _, step in
                             stepView(step)
                         }
                     }
                 }
+                let pendingEdits = message.edits.filter { !undone.contains($0.id) }
+                if message.edits.count > 1, !pendingEdits.isEmpty, !message.text.isEmpty {
+                    Button { onUndoAll(message) } label: {
+                        Label("復原這次的 \(pendingEdits.count) 項修改", systemImage: "arrow.uturn.backward")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+                }
                 if message.text.isEmpty {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text(message.steps.isEmpty ? "思考中…" : "整理中…")
+                        Text(progressText)
                             .font(.subheadline)
                             .foregroundStyle(DS.textSecondary)
                     }
@@ -401,8 +498,25 @@ struct AssistantMessageView: View {
                 if !message.sources.isEmpty {
                     sources
                 }
+                if let engine = message.engine, !message.text.isEmpty {
+                    Text(engineLabel(engine))
+                        .font(.caption2)
+                        .foregroundStyle(DS.textTertiary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var progressText: String {
+        if case .cloud? = message.engine { return message.steps.isEmpty ? "雲端 AI 準備中…" : "雲端 AI 工作中…" }
+        return message.steps.isEmpty ? "思考中…" : "整理中…"
+    }
+
+    private func engineLabel(_ engine: AssistantMessage.Engine) -> String {
+        switch engine {
+        case .cloud(let model) where !model.isEmpty: return "雲端 AI · \(model)"
+        default: return engine.label
         }
     }
 
@@ -422,6 +536,27 @@ struct AssistantMessageView: View {
             stepLine("exclamationmark.triangle", text)
         case .edit(let edit):
             editCard(edit)
+        case .route(let text):
+            stepLine("arrow.triangle.branch", text)
+        case .tool(let text):
+            stepLine("wrench.and.screwdriver", text)
+        case .narration(let text):
+            Text(AssistantText.attributed(text))
+                .font(.subheadline)
+                .foregroundStyle(DS.textSecondary)
+                .tint(DS.link)
+                .environment(\.openURL, OpenURLAction { url in
+                    if let target = AssistantText.target(of: url) {
+                        onOpen(target, message.sources)
+                        return .handled
+                    }
+                    return .systemAction
+                })
+        case .file(let path):
+            Button { onOpen(path, [path]) } label: {
+                stepLine("doc.badge.arrow.up", "產生檔案 \(KnowledgeAssistant.title(of: path))")
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -440,27 +575,47 @@ struct AssistantMessageView: View {
     private func editCard(_ edit: AgentEdit) -> some View {
         let isUndone = undone.contains(edit.id)
         return HStack(spacing: 10) {
-            Image(systemName: edit.previous == nil ? "doc.badge.plus" : "pencil.line")
+            Image(systemName: Self.icon(for: edit.op))
                 .font(.system(size: 15))
                 .foregroundStyle(DS.text)
             VStack(alignment: .leading, spacing: 2) {
-                Text(KnowledgeAssistant.title(of: edit.path))
+                Text(edit.op == .move ? "\(KnowledgeAssistant.title(of: edit.from ?? "")) → \(KnowledgeAssistant.title(of: edit.path))" : KnowledgeAssistant.title(of: edit.path))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(DS.text)
                     .lineLimit(1)
-                Text(isUndone ? "已復原" : edit.summary)
+                Text(isUndone ? "已復原" : (edit.summary.isEmpty ? Self.verb(for: edit.op) : edit.summary))
                     .font(.caption)
                     .foregroundStyle(DS.onPastelSecondary)
             }
             Spacer(minLength: 8)
             if !isUndone {
-                Button("開啟") { onOpen(edit.path, [edit.path]) }
-                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+                if edit.op != .delete {
+                    Button("開啟") { onOpen(edit.path, [edit.path]) }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+                }
                 Button("復原") { onUndo(edit) }
                     .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
             }
         }
         .pastelCard(isUndone ? .butter : .mint, padding: 12)
+    }
+
+    static func icon(for op: AgentEdit.Op) -> String {
+        switch op {
+        case .create: return "doc.badge.plus"
+        case .update: return "pencil.line"
+        case .move: return "arrow.right.doc.on.clipboard"
+        case .delete: return "trash"
+        }
+    }
+
+    static func verb(for op: AgentEdit.Op) -> String {
+        switch op {
+        case .create: return "新增筆記"
+        case .update: return "修改內容"
+        case .move: return "搬移"
+        case .delete: return "移到垃圾桶"
+        }
     }
 
     private var sources: some View {

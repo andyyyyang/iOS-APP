@@ -12,22 +12,60 @@ import FoundationModels
 
 /// AI 改過的一則筆記（可以復原）。
 struct AgentEdit: Identifiable, Equatable, Sendable {
-    let id = UUID()
+    enum Op: String, Sendable {
+        case create, update, move, delete
+    }
+
+    /// 裝置端是自己產生的代碼，雲端是伺服器的修改代碼。
+    let id: String
+    let op: Op
+    /// 搬移時是新的位置。
     let path: String
+    var from: String?
     let summary: String
-    /// 修改前的內容；nil 表示是新增的筆記（復原時刪除）。
-    let previous: String?
-    /// 修改後的版本（復原時確認沒有被別人改過）。
-    let etag: String
+    /// 裝置端：修改前的內容（新增的筆記是 nil，復原時刪除）。
+    var previous: String?
+    /// 裝置端：修改後的版本（復原時確認沒有被別人改過）。
+    var etag: String = ""
+    /// 雲端：所屬的工作（復原由伺服器處理）。
+    var runID: String?
+
+    /// 裝置端的修改。
+    init(path: String, summary: String, previous: String?, etag: String) {
+        id = UUID().uuidString
+        op = previous == nil ? .create : .update
+        self.path = path
+        self.summary = summary
+        self.previous = previous
+        self.etag = etag
+    }
+
+    /// 雲端 AI 的修改。
+    init(_ edit: AssistantClient.Edit, runID: String) {
+        id = edit.id
+        op = Op(rawValue: edit.op) ?? .update
+        path = edit.path
+        from = edit.from
+        summary = edit.summary
+        self.runID = runID
+    }
 }
 
-/// AI 用工具做的事（畫面上顯示成一列）。
+/// AI 做的事（畫面上顯示成一列）。
 enum AgentStep: Equatable, Sendable {
     case search(query: String, count: Int)
     case read(path: String)
     case list(folder: String)
     case edit(AgentEdit)
     case failed(String)
+    /// Jev 的判斷（交給哪個 AI）。
+    case route(String)
+    /// 雲端 AI 使用的工具（伺服器給的說明）。
+    case tool(String)
+    /// 雲端 AI 在工具之間說的話。
+    case narration(String)
+    /// 雲端 AI 在沙盒中產生、存進 vault 的檔案。
+    case file(String)
 }
 
 /// 工具執行時回報的事件。
@@ -50,13 +88,54 @@ struct AssistantMessage: Identifiable, Equatable {
         case assistant
     }
 
+    /// 回答這則訊息的 AI。
+    enum Engine: Equatable {
+        case device
+        case cloud(model: String)
+        case search
+
+        init(_ engine: ChatTranscript.Engine) {
+            switch engine {
+            case .device: self = .device
+            case .cloud: self = .cloud(model: "")
+            case .search: self = .search
+            }
+        }
+
+        var transcript: ChatTranscript.Engine {
+            switch self {
+            case .device: return .device
+            case .cloud: return .cloud
+            case .search: return .search
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .device: return "裝置端 AI"
+            case .cloud: return "雲端 AI"
+            case .search: return "搜尋結果"
+            }
+        }
+    }
+
     let id = UUID()
     let role: Role
     var text: String
     var steps: [AgentStep] = []
-    /// 來源筆記的路徑。
+    /// 來源筆記的路徑（舊紀錄中是筆記名稱）。
     var sources: [String] = []
     var isError = false
+    var engine: Engine?
+    /// 雲端工作的代碼（停止、復原用）。
+    var runID: String?
+
+    var edits: [AgentEdit] {
+        steps.compactMap { step in
+            if case .edit(let edit) = step { return edit }
+            return nil
+        }
+    }
 }
 
 /// 修改筆記的純函式（方便測試）。
@@ -164,6 +243,8 @@ struct SearchNotesTool: Tool {
     let description = "在使用者的 Obsidian 知識庫中搜尋筆記的檔名與內容，回傳筆記路徑與符合處的摘錄。回答關於筆記的問題前要先搜尋。"
     let mcp: VaultMCPClient
     let sink: AgentEventSink
+    /// 不搜尋的資料夾（AI 對話紀錄，避免引用自己以前的回答）。
+    var excludedFolder: String?
 
     @Generable
     struct Arguments {
@@ -173,7 +254,11 @@ struct SearchNotesTool: Tool {
 
     func call(arguments: Arguments) async throws -> String {
         do {
-            let hits = try await mcp.search(arguments.query, limit: 5)
+            var hits = try await mcp.search(arguments.query, limit: 8)
+            if let excludedFolder, !excludedFolder.isEmpty {
+                hits.removeAll { $0.path.hasPrefix(excludedFolder + "/") }
+            }
+            hits = Array(hits.prefix(5))
             await sink.send(.step(.search(query: arguments.query, count: hits.count)))
             guard !hits.isEmpty else { return "沒有找到符合「\(arguments.query)」的筆記，可以換個關鍵字再搜尋。" }
             for hit in hits { await sink.send(.found(hit.path)) }
@@ -362,9 +447,9 @@ enum KnowledgeWrite {
 final class KnowledgeAgentSession {
     private var session: LanguageModelSession
 
-    init(rules: String?, mcp: VaultMCPClient, sink: AgentEventSink) {
+    init(rules: String?, mcp: VaultMCPClient, sink: AgentEventSink, historyFolder: String?) {
         let tools: [any Tool] = [
-            SearchNotesTool(mcp: mcp, sink: sink),
+            SearchNotesTool(mcp: mcp, sink: sink, excludedFolder: historyFolder),
             ReadNoteTool(mcp: mcp, sink: sink),
             ListFolderTool(mcp: mcp, sink: sink),
             CreateNoteTool(mcp: mcp, sink: sink),
@@ -399,267 +484,3 @@ final class KnowledgeAgentSession {
     }
 }
 #endif
-
-// MARK: - 畫面狀態
-
-@MainActor
-@Observable
-final class KnowledgeAssistant {
-    static let shared = KnowledgeAssistant()
-
-    static let rulesKey = "assistant.rulesPath"
-    /// 自動尋找的編輯規則檔（vault 最上層）。
-    static let rulesCandidates = ["agents.md", "claude.md", "ai 規則.md", "ai規則.md", "編輯規則.md", "_編輯規則.md", "規則.md", "rules.md", "_rules.md"]
-    /// 規則放進模型指示的最多字數（裝置端模型的上下文有限）。
-    static let rulesLimit = 800
-
-    private(set) var messages: [AssistantMessage] = []
-    private(set) var isWorking = false
-    private(set) var rulesPath: String?
-    private(set) var rulesTruncated = false
-    private(set) var rootNotes: [String] = []
-    private(set) var undone: Set<UUID> = []
-    private var rulesText: String?
-    private var rulesTask: Task<Void, Never>?
-    private var agent: AnyObject?
-    private var found: [String] = []
-
-    var isServerConfigured: Bool { VaultMCPClient.configured() != nil }
-
-    /// 使用者選的規則檔：nil 自動尋找、空字串不使用。
-    var rulesOverride: String? {
-        UserDefaults.standard.string(forKey: Self.rulesKey)
-    }
-
-    func setRules(_ path: String?) {
-        if let path { UserDefaults.standard.set(path, forKey: Self.rulesKey) } else { UserDefaults.standard.removeObject(forKey: Self.rulesKey) }
-        agent = nil
-        rulesTask = nil
-        Task { await loadRules() }
-    }
-
-    func newConversation() {
-        messages = []
-        agent = nil
-        found = []
-        // 新對話重新讀取規則（可能剛在 Obsidian 改過）
-        rulesTask = nil
-    }
-
-    // MARK: 規則
-
-    /// 讀取一次編輯規則（新對話或改了設定後會重新讀取）。
-    func prepare() async {
-        await loadRules(force: false)
-    }
-
-    func loadRules(force: Bool = true) async {
-        if !force, let rulesTask {
-            await rulesTask.value
-            return
-        }
-        let task = Task { await fetchRules() }
-        rulesTask = task
-        await task.value
-    }
-
-    private func fetchRules() async {
-        guard let mcp = VaultMCPClient.configured(), let root = try? await mcp.list(folder: "") else {
-            // 沒有配對或連不上：下次再試
-            rulesTask = nil
-            return
-        }
-        rootNotes = root.files.filter { $0.lowercased().hasSuffix(".md") && !$0.contains("/") }.sorted()
-        var path: String?
-        switch rulesOverride {
-        case .some(""):
-            path = nil
-        case .some(let chosen):
-            path = chosen
-        case .none:
-            path = rootNotes.first { Self.rulesCandidates.contains($0.lowercased()) }
-                ?? rootNotes.first { $0.contains("規則") || $0.lowercased().contains("rule") }
-        }
-        guard let path, let note = try? await mcp.read(path) else {
-            rulesPath = nil
-            rulesText = nil
-            rulesTruncated = false
-            return
-        }
-        rulesPath = note.path
-        rulesText = String(note.content.prefix(Self.rulesLimit))
-        rulesTruncated = note.content.count > Self.rulesLimit
-    }
-
-    // MARK: 對話
-
-    func send(_ text: String, openNote: String?) async {
-        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty, !isWorking else { return }
-        messages.append(AssistantMessage(role: .user, text: question))
-        messages.append(AssistantMessage(role: .assistant, text: ""))
-        isWorking = true
-        defer { isWorking = false }
-        found = []
-        guard let mcp = VaultMCPClient.configured() else {
-            finish("需要先與 LocalOCR 伺服器配對（設定 → 筆記與 Obsidian），AI 才能在線上搜尋你的 vault。", isError: true)
-            return
-        }
-        await prepare()
-
-        #if canImport(FoundationModels)
-        if #available(iOS 26.0, *), OnDeviceAIStatus.current.isAvailable {
-            var prompt = Self.prompt(question, openNote: openNote)
-            for attempt in 0..<2 {
-                do {
-                    let session = agentSession(mcp: mcp)
-                    let answer = try await session.respond(to: prompt)
-                    finish(answer)
-                    return
-                } catch where KnowledgeAgentSession.isContextOverflow(error) {
-                    agent = nil
-                    // 這次已經改了筆記就不重試（避免重複寫入），只回報做了什麼
-                    let edits = messages.last?.steps.compactMap { step -> String? in
-                        if case .edit(let edit) = step { return "\(edit.summary)：[[\(Self.title(of: edit.path))]]" }
-                        return nil
-                    } ?? []
-                    if !edits.isEmpty {
-                        finish("已完成：\n" + edits.map { "- \($0)" }.joined(separator: "\n") + "\n（對話太長，沒有產生完整回答；之後的問題會從新的對話開始）")
-                        return
-                    }
-                    guard attempt == 0 else { break }
-                    // 對話太長：換新的一段，只帶上一題的重點再問一次（畫面上的紀錄保留）
-                    prompt = Self.prompt(question, openNote: openNote, previous: previousExchange())
-                    updateLast { $0.steps = [] }
-                    found = []
-                } catch {
-                    finish("Apple Intelligence 無法完成：\(AIErrorDescriber.describe(error))", isError: true)
-                    return
-                }
-            }
-            finish("這個問題需要讀的內容太多，超過裝置端模型能處理的長度。可以把問題縮小一點，或指定要看哪一則筆記。", isError: true)
-            return
-        }
-        #endif
-        await searchOnly(question, mcp: mcp)
-    }
-
-    /// 不能使用 Apple Intelligence 時：直接列出搜尋結果（仍是線上搜尋）。
-    private func searchOnly(_ question: String, mcp: VaultMCPClient) async {
-        do {
-            let hits = try await mcp.search(question, limit: 10)
-            updateLast { $0.steps.append(.search(query: question, count: hits.count)) }
-            guard !hits.isEmpty else {
-                finish("沒有找到相關的筆記。（這台裝置不能使用 Apple Intelligence，所以只列出搜尋結果）")
-                return
-            }
-            let lines = hits.map { hit in
-                "- [[\(Self.title(of: hit.path))]]：\(String(hit.snippet.prefix(100)))"
-            }
-            found = hits.map(\.path)
-            finish("這台裝置不能使用 Apple Intelligence，以下是搜尋結果：\n" + lines.joined(separator: "\n"))
-        } catch {
-            finish("搜尋失敗：\(error.localizedDescription)", isError: true)
-        }
-    }
-
-    #if canImport(FoundationModels)
-    @available(iOS 26.0, *)
-    private func agentSession(mcp: VaultMCPClient) -> KnowledgeAgentSession {
-        if let existing = agent as? KnowledgeAgentSession { return existing }
-        let sink = AgentEventSink { [weak self] event in
-            await self?.handle(event)
-        }
-        let session = KnowledgeAgentSession(rules: rulesText, mcp: mcp, sink: sink)
-        agent = session
-        return session
-    }
-    #endif
-
-    static func prompt(_ question: String, openNote: String?, previous: String? = nil) -> String {
-        let date = Date().formatted(.dateTime.year().month().day().weekday(.wide).locale(Locale(identifier: "zh_Hant_TW")))
-        var lines = ["今天是 \(date)。"]
-        if let previous { lines.append("先前的對話（摘要）：\n\(previous)") }
-        if let openNote { lines.append("使用者最近開啟的筆記：\(openNote)") }
-        lines.append(question)
-        return lines.joined(separator: "\n")
-    }
-
-    /// 上一組問答的重點（換新的模型對話時帶過去）。
-    private func previousExchange() -> String? {
-        let earlier = messages.dropLast(2)
-        guard let answer = earlier.last(where: { $0.role == .assistant && !$0.isError }),
-              let question = earlier.last(where: { $0.role == .user }) else { return nil }
-        return "問：\(question.text.prefix(150))\n答：\(answer.text.prefix(300))"
-    }
-
-    static func title(of path: String) -> String {
-        ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-    }
-
-    private func handle(_ event: AgentEvent) {
-        switch event {
-        case .step(let step):
-            updateLast { $0.steps.append(step) }
-            if case .edit(let edit) = step { noteDidChange(edit.path) }
-        case .found(let path):
-            if !found.contains(path) { found.append(path) }
-        case .read(let path):
-            updateLast { message in
-                if !message.sources.contains(path) { message.sources.append(path) }
-            }
-        }
-    }
-
-    /// AI 改了筆記：開著的話馬上更新畫面；沒有即時推送時同步一次，讓筆記清單出現新的筆記。
-    private func noteDidChange(_ path: String) {
-        let sync = VaultSyncCenter.shared
-        guard VaultBackend.storage == .server else { return }
-        Task {
-            if sync.openPaths.contains(path) { await sync.refreshOpenFile(path) }
-            if !sync.isLive { await sync.syncNow() }
-        }
-    }
-
-    private func finish(_ text: String, isError: Bool = false) {
-        updateLast { message in
-            message.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            message.isError = isError
-            // 搜尋到、而且回答中提到的筆記也列為來源
-            for path in found {
-                if text.contains(Self.title(of: path)), !message.sources.contains(path) { message.sources.append(path) }
-            }
-        }
-    }
-
-    private func updateLast(_ change: (inout AssistantMessage) -> Void) {
-        guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
-        change(&messages[index])
-    }
-
-    // MARK: 復原
-
-    func undo(_ edit: AgentEdit) async -> String? {
-        guard !undone.contains(edit.id) else { return nil }
-        do {
-            if let previous = edit.previous {
-                guard let mcp = VaultMCPClient.configured() else { return "尚未配對伺服器" }
-                try await mcp.write(edit.path, content: previous, ifMatch: edit.etag)
-            } else {
-                guard let client = VaultClient.configured() else { return "尚未配對伺服器" }
-                try await client.delete(edit.path, ifMatch: edit.etag)
-            }
-            undone.insert(edit.id)
-            noteDidChange(edit.path)
-            return nil
-        } catch VaultError.notFound {
-            // 新增的筆記已經在別處刪掉了
-            undone.insert(edit.id)
-            return nil
-        } catch {
-            return error.localizedDescription.contains("precondition_failed") || error is VaultError
-                ? "這則筆記之後又被修改過，沒有復原。"
-                : "復原失敗：\(error.localizedDescription)"
-        }
-    }
-}
