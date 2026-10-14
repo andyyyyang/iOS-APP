@@ -4,11 +4,13 @@ import {
 	createPairingCode,
 	describeSetupError,
 	fetchRemotelySaveSetup,
+	findProtocolHandler,
 	formatCountdown,
 	isPluginEnabled,
 	parsePairingCode,
 	parseRemotelySaveSetup,
 	remainingMs,
+	remotelySaveImportParams,
 } from "../src/device-setup";
 import { ApiError, LocalOcrClient, type HttpFn, type HttpRequest } from "../src/sync-core";
 
@@ -179,5 +181,40 @@ describe("isPluginEnabled", () => {
 		expect(isPluginEnabled({ plugins: { enabledPlugins: ["remotely-save"] } }, "remotely-save")).toBeNull();
 		expect(isPluginEnabled({}, "remotely-save")).toBeNull();
 		expect(isPluginEnabled(null, "remotely-save")).toBeNull();
+	});
+});
+
+describe("findProtocolHandler", () => {
+	const handler = () => undefined;
+	it("finds a handler in either private registry", () => {
+		expect(findProtocolHandler({ workspace: { protocolHandlers: new Map([["remotely-save", handler]]) } }, "remotely-save")).toBe(handler);
+		expect(findProtocolHandler({ workspace: { protocolHandler: { handlers: new Map([["remotely-save", handler]]) } } }, "remotely-save")).toBe(handler);
+	});
+	it("returns null when the registry or handler is missing", () => {
+		expect(findProtocolHandler({ workspace: { protocolHandlers: new Map([["other", handler]]) } }, "remotely-save")).toBeNull();
+		expect(findProtocolHandler({ workspace: { protocolHandlers: new Map([["remotely-save", "nope"]]) } }, "remotely-save")).toBeNull();
+		expect(findProtocolHandler({ workspace: {} }, "remotely-save")).toBeNull();
+		expect(findProtocolHandler(null, "remotely-save")).toBeNull();
+	});
+});
+
+describe("remotelySaveImportParams", () => {
+	const settings = { serviceType: "s3", s3: { s3Endpoint: "https://s3.example.com", s3SecretAccessKey: "a+b/c=&d" } };
+	const data = JSON.stringify(settings);
+	const uri = `obsidian://remotely-save?func=settings&version=localocr&vault=${encodeURIComponent("andy jentech")}&data=${encodeURIComponent(data)}`;
+
+	it("decodes the URI like Obsidian does and keeps the vault Remotely Save requires", () => {
+		const params = remotelySaveImportParams({ settings, uri }, "andy jentech");
+		expect(params).toEqual({ func: "settings", version: "localocr", vault: "andy jentech", data, action: "remotely-save" });
+		expect(JSON.parse(params.data)).toEqual(settings);
+	});
+
+	it("uses the vault that is open now", () => {
+		expect(remotelySaveImportParams({ settings, uri }, "工作").vault).toBe("工作");
+	});
+
+	it("falls back to the settings object when the URI has no query", () => {
+		const params = remotelySaveImportParams({ settings, uri: "obsidian://remotely-save" }, "v");
+		expect(params).toEqual({ func: "settings", version: "localocr", data, action: "remotely-save", vault: "v" });
 	});
 });

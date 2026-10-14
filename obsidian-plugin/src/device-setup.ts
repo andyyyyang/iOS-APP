@@ -96,6 +96,47 @@ export function describeSetupError(error: unknown): string {
 	return describeError(error);
 }
 
+/** A handler registered with `registerObsidianProtocolHandler`, called with the decoded URI parameters. */
+export type ProtocolHandler = (params: Record<string, string>) => unknown;
+
+/**
+ * The protocol handler another plugin registered for obsidian://`action`, read defensively from
+ * Obsidian's private registry (`workspace.protocolHandlers`, or `workspace.protocolHandler.handlers`
+ * in newer versions); null when it cannot be found.
+ */
+export function findProtocolHandler(app: unknown, action: string): ProtocolHandler | null {
+	type Registry = { get?: unknown } | null | undefined;
+	const workspace = (app as { workspace?: { protocolHandlers?: Registry; protocolHandler?: { handlers?: Registry } } } | null | undefined)
+		?.workspace;
+	for (const registry of [workspace?.protocolHandlers, workspace?.protocolHandler?.handlers]) {
+		const get = registry?.get;
+		if (typeof get !== "function") continue;
+		const handler: unknown = get.call(registry, action);
+		if (typeof handler === "function") return handler as ProtocolHandler;
+	}
+	return null;
+}
+
+/**
+ * The parameters Remotely Save's own obsidian://remotely-save handler expects, taken from the setup URI.
+ * Desktop Obsidian drops `vault` from a link it opens through the operating system (it only uses it to pick
+ * the window), and Remotely Save rejects an import without it, so `window.open(uri)` cannot work there;
+ * calling the handler directly with the current vault name works on every platform.
+ */
+export function remotelySaveImportParams(setup: RemotelySaveSetup, vaultName: string): Record<string, string> {
+	const query = setup.uri.includes("?") ? setup.uri.slice(setup.uri.indexOf("?") + 1) : "";
+	const params: Record<string, string> = {};
+	for (const [key, value] of new URLSearchParams(query)) params[key] = value;
+	return {
+		func: "settings",
+		version: "localocr",
+		data: JSON.stringify(setup.settings),
+		...params,
+		action: REMOTELY_SAVE_PLUGIN_ID,
+		vault: vaultName,
+	};
+}
+
 /**
  * Whether the community plugin `id` is enabled, read defensively from Obsidian's private
  * `app.plugins.enabledPlugins`; null when that cannot be determined.

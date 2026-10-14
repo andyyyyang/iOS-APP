@@ -3,9 +3,11 @@ import QRCode from "qrcode";
 import {
 	REMOTELY_SAVE_PLUGIN_ID,
 	describeSetupError,
+	findProtocolHandler,
 	formatCountdown,
 	isPluginEnabled,
 	remainingMs,
+	remotelySaveImportParams,
 	type PairingCode,
 	type RemotelySaveSetup,
 } from "./device-setup";
@@ -148,7 +150,12 @@ export class RemotelySaveModal extends Modal {
 			});
 		}
 		const buttons = contentEl.createDiv({ cls: "modal-button-container" });
-		buttons.createEl("button", { text: "套用到這台裝置", cls: "mod-cta" }).addEventListener("click", () => this.apply());
+		buttons.createEl("button", { text: "複製設定連結" }).addEventListener("click", () => this.copyLink());
+		buttons.createEl("button", { text: "套用到這台裝置", cls: "mod-cta" }).addEventListener("click", () => void this.apply());
+		contentEl.createEl("p", {
+			text: "如果套用沒有反應：按「複製設定連結」，到 Remotely Save 設定頁的匯入欄位貼上。連結含有儲存桶的存取金鑰，貼上後請清除剪貼簿，勿分享。",
+			cls: "setting-item-description",
+		});
 
 		contentEl.createEl("h4", { text: "iPhone／iPad" });
 		contentEl.createEl("p", {
@@ -169,18 +176,38 @@ export class RemotelySaveModal extends Modal {
 		this.contentEl.empty();
 	}
 
-	private apply(): void {
+	private async apply(): Promise<void> {
 		// Checked again on click: the plugin may have been enabled while this dialog was open.
 		if (isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false) {
 			new Notice("LocalOCR：請先安裝並啟用 Remotely Save（設定 → 第三方外掛），再套用設定", 10_000);
 			return;
 		}
-		// Obsidian routes obsidian://remotely-save to Remotely Save's own settings import.
-		window.open(this.setup.uri);
+		// Call Remotely Save's import directly. Opening the URI through the OS loses `vault` on desktop,
+		// which Remotely Save then rejects (printing the settings, keys included, in its error).
+		const handler = findProtocolHandler(this.app, REMOTELY_SAVE_PLUGIN_ID);
+		if (handler) {
+			try {
+				await handler(remotelySaveImportParams(this.setup, this.app.vault.getName()));
+			} catch {
+				// Never show the error itself: Remotely Save's messages can contain the bucket keys.
+				new Notice("LocalOCR：Remotely Save 無法匯入設定。請按「複製設定連結」，到 Remotely Save 設定頁的匯入欄位貼上。", 15_000);
+				return;
+			}
+		} else {
+			// Older Obsidian without a reachable handler registry: mobile keeps `vault` in the link.
+			window.open(this.setup.uri);
+		}
 		new Notice(
 			"LocalOCR：已把設定交給 Remotely Save。看到 Remotely Save 的「已匯入」通知後，請重新啟動 Obsidian，自動同步才會開始。",
 			15_000,
 		);
 		this.close();
+	}
+
+	private copyLink(): void {
+		navigator.clipboard.writeText(this.setup.uri).then(
+			() => new Notice("LocalOCR：已複製設定連結。到 Remotely Save 設定頁的匯入欄位貼上，完成後請清除剪貼簿。", 12_000),
+			() => new Notice("LocalOCR：無法存取剪貼簿", 8_000),
+		);
 	}
 }

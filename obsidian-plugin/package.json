@@ -1,6 +1,6 @@
 {
   "name": "localocr-sync",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Sync scans from a LocalOCR server into your Obsidian vault as Markdown notes.",
   "main": "main.js",
   "private": true,

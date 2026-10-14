@@ -2,6 +2,11 @@
 
 每個版本由 CI 發佈為 GitHub Release「obsidian-plugin-<版本>」，再由 LocalOCR 伺服器同步到 Railway 儲存空間；插件從這裡讀取更新內容（`## <版本>` 下的文字）。
 
+## 1.3.1
+
+- 修正 Windows／Mac 版「套用到這台裝置」一定失敗的問題：桌面版 Obsidian 透過作業系統開啟連結時會拿掉保險庫名稱，Remotely Save 因此拒絕匯入；現在直接呼叫 Remotely Save 的匯入功能，各平台都能套用
+- 新增「複製設定連結」：萬一套用沒有反應，可以貼到 Remotely Save 設定頁的匯入欄位
+
 ## 1.3.0
 
 - 線上更新改由你的 Railway 伺服器提供：伺服器把每個新版本存進自己的儲存空間，插件先讀取 `<伺服器網址>/obsidian-plugin/latest.json`，下載後逐一比對 SHA-256

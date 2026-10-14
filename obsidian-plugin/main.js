@@ -3009,6 +3009,30 @@ function describeSetupError(error) {
   }
   return describeError(error);
 }
+function findProtocolHandler(app, action) {
+  var _a;
+  const workspace = app == null ? void 0 : app.workspace;
+  for (const registry of [workspace == null ? void 0 : workspace.protocolHandlers, (_a = workspace == null ? void 0 : workspace.protocolHandler) == null ? void 0 : _a.handlers]) {
+    const get2 = registry == null ? void 0 : registry.get;
+    if (typeof get2 !== "function") continue;
+    const handler = get2.call(registry, action);
+    if (typeof handler === "function") return handler;
+  }
+  return null;
+}
+function remotelySaveImportParams(setup, vaultName) {
+  const query = setup.uri.includes("?") ? setup.uri.slice(setup.uri.indexOf("?") + 1) : "";
+  const params = {};
+  for (const [key, value] of new URLSearchParams(query)) params[key] = value;
+  return {
+    func: "settings",
+    version: "localocr",
+    data: JSON.stringify(setup.settings),
+    ...params,
+    action: REMOTELY_SAVE_PLUGIN_ID,
+    vault: vaultName
+  };
+}
 function isPluginEnabled(app, id) {
   var _a;
   const enabled = (_a = app == null ? void 0 : app.plugins) == null ? void 0 : _a.enabledPlugins;
@@ -3135,7 +3159,12 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
       });
     }
     const buttons = contentEl.createDiv({ cls: "modal-button-container" });
-    buttons.createEl("button", { text: "\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E", cls: "mod-cta" }).addEventListener("click", () => this.apply());
+    buttons.createEl("button", { text: "\u8907\u88FD\u8A2D\u5B9A\u9023\u7D50" }).addEventListener("click", () => this.copyLink());
+    buttons.createEl("button", { text: "\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E", cls: "mod-cta" }).addEventListener("click", () => void this.apply());
+    contentEl.createEl("p", {
+      text: "\u5982\u679C\u5957\u7528\u6C92\u6709\u53CD\u61C9\uFF1A\u6309\u300C\u8907\u88FD\u8A2D\u5B9A\u9023\u7D50\u300D\uFF0C\u5230 Remotely Save \u8A2D\u5B9A\u9801\u7684\u532F\u5165\u6B04\u4F4D\u8CBC\u4E0A\u3002\u9023\u7D50\u542B\u6709\u5132\u5B58\u6876\u7684\u5B58\u53D6\u91D1\u9470\uFF0C\u8CBC\u4E0A\u5F8C\u8ACB\u6E05\u9664\u526A\u8CBC\u7C3F\uFF0C\u52FF\u5206\u4EAB\u3002",
+      cls: "setting-item-description"
+    });
     contentEl.createEl("h4", { text: "iPhone\uFF0FiPad" });
     contentEl.createEl("p", {
       text: "\u5728 iPhone\uFF0FiPad \u7528\u76F8\u6A5F\u6383\u63CF\uFF0C\u5373\u53EF\u5728\u90A3\u53F0\u88DD\u7F6E\u7684 Obsidian \u5957\u7528\u540C\u6A23\u8A2D\u5B9A\uFF08\u9700\u5148\u5B89\u88DD Remotely Save\uFF09"
@@ -3153,17 +3182,33 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
   onClose() {
     this.contentEl.empty();
   }
-  apply() {
+  async apply() {
     if (isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false) {
       new import_obsidian2.Notice("LocalOCR\uFF1A\u8ACB\u5148\u5B89\u88DD\u4E26\u555F\u7528 Remotely Save\uFF08\u8A2D\u5B9A \u2192 \u7B2C\u4E09\u65B9\u5916\u639B\uFF09\uFF0C\u518D\u5957\u7528\u8A2D\u5B9A", 1e4);
       return;
     }
-    window.open(this.setup.uri);
+    const handler = findProtocolHandler(this.app, REMOTELY_SAVE_PLUGIN_ID);
+    if (handler) {
+      try {
+        await handler(remotelySaveImportParams(this.setup, this.app.vault.getName()));
+      } catch (e) {
+        new import_obsidian2.Notice("LocalOCR\uFF1ARemotely Save \u7121\u6CD5\u532F\u5165\u8A2D\u5B9A\u3002\u8ACB\u6309\u300C\u8907\u88FD\u8A2D\u5B9A\u9023\u7D50\u300D\uFF0C\u5230 Remotely Save \u8A2D\u5B9A\u9801\u7684\u532F\u5165\u6B04\u4F4D\u8CBC\u4E0A\u3002", 15e3);
+        return;
+      }
+    } else {
+      window.open(this.setup.uri);
+    }
     new import_obsidian2.Notice(
       "LocalOCR\uFF1A\u5DF2\u628A\u8A2D\u5B9A\u4EA4\u7D66 Remotely Save\u3002\u770B\u5230 Remotely Save \u7684\u300C\u5DF2\u532F\u5165\u300D\u901A\u77E5\u5F8C\uFF0C\u8ACB\u91CD\u65B0\u555F\u52D5 Obsidian\uFF0C\u81EA\u52D5\u540C\u6B65\u624D\u6703\u958B\u59CB\u3002",
       15e3
     );
     this.close();
+  }
+  copyLink() {
+    navigator.clipboard.writeText(this.setup.uri).then(
+      () => new import_obsidian2.Notice("LocalOCR\uFF1A\u5DF2\u8907\u88FD\u8A2D\u5B9A\u9023\u7D50\u3002\u5230 Remotely Save \u8A2D\u5B9A\u9801\u7684\u532F\u5165\u6B04\u4F4D\u8CBC\u4E0A\uFF0C\u5B8C\u6210\u5F8C\u8ACB\u6E05\u9664\u526A\u8CBC\u7C3F\u3002", 12e3),
+      () => new import_obsidian2.Notice("LocalOCR\uFF1A\u7121\u6CD5\u5B58\u53D6\u526A\u8CBC\u7C3F", 8e3)
+    );
   }
 };
 
