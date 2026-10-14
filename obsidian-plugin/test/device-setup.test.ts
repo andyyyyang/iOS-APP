@@ -48,7 +48,7 @@ const SETTINGS = {
 		generateFolderObject: false,
 		bypassCorsLocally: true,
 	},
-	autoRunEveryMilliseconds: 300000,
+	autoRunEveryMilliseconds: 60000,
 	initRunAfterMilliseconds: 10000,
 	syncOnSaveAfterMilliseconds: 1000,
 	agreeToUseSyncV3: true,

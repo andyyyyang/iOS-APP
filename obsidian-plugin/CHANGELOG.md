@@ -2,6 +2,11 @@
 
 每個版本由 CI 發佈為 GitHub Release「obsidian-plugin-<版本>」，再由 LocalOCR 伺服器同步到 Railway 儲存空間；插件從這裡讀取更新內容（`## <版本>` 下的文字）。
 
+## 1.4.0
+
+- 即時同步：iPad 或其他裝置修改筆記後，幾秒內自動執行 Remotely Save 同步，不必再等定時同步；在這台裝置修改的筆記上傳後，也會通知 iPad 與其他裝置。可在插件設定「裝置設定 → 即時同步」關閉，並查看連線狀態（需要更新後的 LocalOCR 伺服器）
+- 「設定 Remotely Save」的自動同步改為每分鐘一次（原本每 5 分鐘）：已設定過的裝置需在「設定 Remotely Save」重新按一次「套用到這台裝置」並重新啟動 Obsidian 才會生效
+
 ## 1.3.1
 
 - 修正 Windows／Mac 版「套用到這台裝置」一定失敗的問題：桌面版 Obsidian 透過作業系統開啟連結時會拿掉保險庫名稱，Remotely Save 因此拒絕匯入；現在直接呼叫 Remotely Save 的匯入功能，各平台都能套用

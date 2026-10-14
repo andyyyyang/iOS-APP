@@ -6,6 +6,7 @@ import type { ClassificationCandidate, Classifier, ClassifierResult } from "../s
 import type { VaultConfig } from "../src/config.js";
 import { createApp } from "../src/http/app.js";
 import { ObsidianPluginService, type FetchFn } from "../src/services/obsidian-plugin.js";
+import type { VaultChangeFeed } from "../src/services/vault-changes.js";
 import { MemoryStore } from "../src/store/memory.js";
 import { PostgresStore } from "../src/store/postgres.js";
 import type { Store } from "../src/store/types.js";
@@ -62,6 +63,8 @@ export async function setup(
     vault?: VaultStore | null;
     /** Bucket credentials for /v1/vault/remotely-save; default null = not configured. */
     vaultConfig?: VaultConfig | null;
+    /** Change log behind /v1/vault/changes; default: a new one per app. */
+    vaultChanges?: VaultChangeFeed;
     publicUrl?: string;
     /** Clock in milliseconds (pairing expiry, /pair rate limit, plugin mirror timestamps). */
     now?: () => number;
@@ -83,6 +86,7 @@ export async function setup(
     apiKeys: options.apiKeys ?? [API_KEY],
     vault,
     vaultConfig: options.vaultConfig ?? null,
+    vaultChanges: options.vaultChanges,
     publicUrl: options.publicUrl,
     obsidianPlugin,
     now: options.now,

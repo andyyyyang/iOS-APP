@@ -130,6 +130,13 @@ struct RevealRequest: Equatable {
     let id = UUID()
 }
 
+/// 開啟 [[筆記#標題]]、[[筆記#^區塊]] 後要跳到的位置，由開著這則筆記的畫面處理。
+struct AnchorRequest: Equatable {
+    let path: String
+    let anchor: String
+    let id = UUID()
+}
+
 /// 右側欄對筆記內容的修改（例如把 AI 摘要加到筆記），由開著這則筆記的畫面套用。
 struct EditRequest: Equatable {
     let path: String
@@ -163,6 +170,7 @@ final class Workspace {
     /// 開著的筆記目前的文字（含尚未存檔的修改），右側大綱與 AI 使用。
     var liveText: [String: String] = [:]
     var revealRequest: RevealRequest?
+    var anchorRequest: AnchorRequest?
     var editRequest: EditRequest?
     /// Apple Intelligence 對各筆記的整理結果（切換面板時保留）。
     var insights: [String: NoteInsights] = [:]
@@ -393,17 +401,25 @@ final class Workspace {
         close(.note(note.path))
     }
 
-    /// 點 [[連結]]：開啟對應的筆記。
-    func openLink(_ target: String) {
-        if let path = NoteLinks.resolve(target, in: store.linkIndex) {
+    /// 點 [[連結]]（Obsidian 的規則）：依名稱、路徑或別名找筆記（同名時取路徑最短的），
+    /// #標題、#^區塊 開啟後跳到那裡，[[#標題]] 是同一則筆記；找不到時建立這則筆記（放在新筆記位置，寫了路徑就放在那裡）。
+    func openLink(_ target: String, from sourcePath: String? = nil) {
+        let link = NoteLinks.parse(target)
+        if link.name.isEmpty {
+            if let sourcePath, let anchor = link.anchor {
+                anchorRequest = AnchorRequest(path: sourcePath, anchor: anchor)
+            }
+            return
+        }
+        if let path = NoteLinks.resolve(link.name, in: store.linkIndex) {
+            if let anchor = link.anchor { anchorRequest = AnchorRequest(path: path, anchor: anchor) }
             openNote(path)
             return
         }
-        Task {
-            let sync = VaultSyncCenter.shared
-            if let path = await sync.engine.resolve(name: target, localFiles: sync.vault.allFiles()), path.lowercased().hasSuffix(".md") {
-                openNote(path)
-            }
-        }
+        let name = link.name.hasSuffix(".md") ? String(link.name.dropLast(3)) : link.name
+        let folder = name.contains("/") ? (name as NSString).deletingLastPathComponent : NotesSettings.defaultFolder
+        guard let path = try? store.createTextNote(in: folder, title: (name as NSString).lastPathComponent) else { return }
+        reveal(path: path)
+        openNote(path)
     }
 }

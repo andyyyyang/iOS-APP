@@ -276,6 +276,8 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `PUT /v1/vault/file?path=` | 以請求本文（原始位元組，任何 Content-Type 都原樣儲存，最多 25 MB）新增或整檔取代。選用標頭：`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`（毫秒，預設為現在）。新增回傳 **201**、覆寫回傳 **200**，本文為 `{"path","size","mtime","etag"}`，並附 `ETag` 標頭 |
 | `DELETE /v1/vault/file?path=` | 刪除，回傳 204；選用 `If-Match`。不存在時 404 `not_found`（不論是否帶 `If-Match`） |
 | `GET /v1/vault/remotely-save?vault=` | Remotely Save 的設定與匯入網址，見下方「Remotely Save 設定」 |
+| `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，最多等 25 秒），見下方「變更通知（即時同步）」 |
+| `POST /v1/vault/changes` | 回報這台裝置自己上傳到儲存桶的檔案（Remotely Save），見下方「變更通知（即時同步）」 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 在 `.md`、`.txt`、`.json`、`.canvas` 檔案中比對檔名與內容（不分大小寫，`q` 為一般文字而非正規表示式），略過 `.obsidian` 等以 `.` 開頭的資料夾與檔案。依 `mtime` 由新到舊，最多檢查最新的 3000 個檔案，超過 1 MB 的檔案只比對檔名。`limit` 預設 20、上限 100。回傳 `{"items":[{"path","mtime","snippet"}]}`，`snippet` 是第一個內容符合處前後約 120 字（只有檔名符合時為檔案開頭；空白會合併、截斷處加 `…`） |
 
 `Content-Type` 對照（`GET` 回應與寫入儲存桶時使用）：
@@ -290,6 +292,8 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | 其他 | `application/octet-stream` |
 
 `ETag`、`Last-Modified`、`X-Vault-Mtime` 已列在 CORS `Access-Control-Expose-Headers`。
+
+所有 `/v1/vault/*` 請求都可以帶選用標頭 `X-LocalOCR-Client: <裝置代碼>`（任意字串，前後空白會去掉，最多 100 字），例如 iPad App 用 `ipad-<隨機碼>`、Obsidian 插件用 `obsidian-<隨機碼>`。伺服器把它記在這次寫入或刪除的變更上，並在同一個代碼的變更通知中略過它（見「變更通知（即時同步）」）。超過 100 字時，用到它的端點（`PUT`／`DELETE /v1/vault/file`、`/v1/vault/changes`）回傳 400 `invalid_request`。
 
 ### 樂觀鎖（避免覆寫其他裝置的修改）
 
@@ -306,6 +310,50 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 - `If-Match` 接受 `"etag"`、`etag`、`W/"etag"`、逗號分隔的清單，或 `*`（檔案必須存在）。
 - 儲存桶不支援條件式寫入，伺服器是「先 HEAD 比對、再 PUT」，兩者之間仍有極短的競爭窗口。
 - Remotely Save 本身不檢查 etag；同一份筆記同時在 Obsidian 與 App 修改時，由 Remotely Save 的衝突處理設定決定保留哪一份。
+
+### 變更通知（即時同步）
+
+讓 iPad App 與各裝置的 Obsidian 在幾秒內得知其他裝置的修改，不必等 Remotely Save 的定時同步。伺服器在記憶體中保存最近 1000 筆變更：
+
+- 經過伺服器的每一次成功寫入與刪除：`PUT`／`DELETE /v1/vault/file`（`client` 為請求的 `X-LocalOCR-Client`，沒有帶時為 `null`）與 MCP 的 `vault_write`（`client` 為 `"mcp"`）。搬移或改名 = 刪除 + 寫入。伺服器自己存在 `.localocr/` 的插件發佈檔不列入。
+- 裝置以 `POST /v1/vault/changes` 回報的 `external` 變更：Obsidian 經 Remotely Save 直接上傳到儲存桶的修改伺服器看不到，由 LocalOCR 插件在上傳後回報。
+
+變更只存在記憶體中（單一 Railway 實例）：伺服器重新啟動後會換一個新的 `epoch`，舊的 cursor 一律回應 `reset: true`。
+
+#### `GET /v1/vault/changes?since=<cursor>&wait=<秒>`
+
+```json
+{
+  "cursor": "9f3c2a1b7d4e:42",
+  "reset": false,
+  "changes": [
+    { "seq": 41, "path": "Daily/2026-10-14.md", "op": "write", "client": "ipad-3F2A9C", "at": "2026-10-14T08:00:01.120Z" },
+    { "seq": 42, "path": null, "op": "external", "client": "obsidian-k3j9x2", "at": "2026-10-14T08:00:05.004Z" }
+  ]
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `cursor` | `"<epoch>:<seq>"`，一律是**最新**的 seq（包含自己的變更），下次原樣放進 `since` |
+| `reset` | `true` 代表無法列出 `since` 之後的變更，客戶端應重新整理（重新列出檔案）；此時 `changes` 為空 |
+| `changes[].seq` | 同一個 `epoch` 內每筆變更加一 |
+| `changes[].path` | 相對於 vault 根目錄；沒有列出檔案的 `external` 回報為 `null` |
+| `changes[].op` | `write`、`delete`，或 `external`（裝置自己上傳到儲存桶，可能是新增、修改或刪除） |
+| `changes[].client` | 做出變更的 `X-LocalOCR-Client`；MCP 工具為 `"mcp"`；不明時為 `null` |
+| `changes[].at` | ISO 8601 |
+
+- 沒有 `since`：立即回傳目前的 `cursor`、`reset: false`、空的 `changes`（第一次呼叫用來取得 cursor）。
+- `since` 格式錯誤、屬於其他 `epoch`（伺服器已重新啟動）或比保存的最舊一筆還舊：立即回傳 `reset: true`。
+- 其他情況回傳 `seq > since` 且 `client` 與這次請求的 `X-LocalOCR-Client` **不同**的變更（`client` 為 `null` 的變更一律包含；請求沒有帶 `X-LocalOCR-Client` 時不略過任何變更）。超過 200 筆時改回 `reset: true`。
+- 沒有符合的變更且 `wait > 0` 時，伺服器保留請求，直到有符合的變更（立即回傳）或過了 `wait` 秒（回傳空的 `changes`）。`wait` 預設 `0`，可為小數，超出 0–25 時自動限制在範圍內；不是數字時回傳 400 `invalid_request`。客戶端中途斷線時伺服器會立即釋放這個請求。
+- 回應帶 `Cache-Control: no-store`。客戶端的請求逾時應大於 `wait`（例如 `wait=25` 時設 60 秒）。
+
+建議用法：先不帶 `since` 取得 cursor，接著反覆呼叫 `GET /v1/vault/changes?since=<cursor>&wait=25`；收到變更或 `reset: true` 時重新整理對應的檔案；網路或伺服器錯誤時逐步拉長間隔重試（例如 5、15、60 秒）；舊版伺服器沒有這個端點時回傳 404。
+
+#### `POST /v1/vault/changes`
+
+請求本文（選用）：`{"paths": ["Daily/2026-10-14.md", "Inbox/想法.md"]}`，最多 100 個路徑，規則同「路徑」（不合法時 400 `invalid_path`）。每個路徑記錄一筆 `op: "external"` 的變更（重複的合併），沒有本文或 `paths` 為空時記錄一筆 `path: null`；`client` 為這次請求的 `X-LocalOCR-Client`，所以回報的裝置不會收到自己的回報。回傳 **202** `{"cursor":"9f3c2a1b7d4e:44"}`。
 
 ### Remotely Save 設定
 
@@ -329,7 +377,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
       "generateFolderObject": false,
       "bypassCorsLocally": true
     },
-    "autoRunEveryMilliseconds": 300000,
+    "autoRunEveryMilliseconds": 60000,
     "initRunAfterMilliseconds": 10000,
     "syncOnSaveAfterMilliseconds": 1000,
     "agreeToUseSyncV3": true,
@@ -340,7 +388,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 ```
 
 - `s3` 來自伺服器的 `VAULT_S3_*` 與 `VAULT_PREFIX`。Remotely Save 匯入時是淺層合併（`Object.assign({}, 目前設定, 匯入的設定)`），所以 `s3` 一律完整提供，會整個取代裝置上原本的 S3 設定；沒有列出的設定（例如加密密碼）維持不變。
-- 同步排程取 Remotely Save 設定選單中的值：每 5 分鐘自動同步（`300000`）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。`syncUnderscoreItems: true` 讓 `_` 開頭的檔案與資料夾（例如 `_attachments/`）也同步（Remotely Save 預設略過）：整個 vault 都會同步，只有 `.obsidian` 等 `.` 開頭的項目留在各裝置。
+- 同步排程取 Remotely Save 設定選單中的值：每分鐘自動同步（`60000`，選單中最短的選項；LocalOCR 插件的即時同步會在其他裝置修改後幾秒內另外觸發同步）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。`syncUnderscoreItems: true` 讓 `_` 開頭的檔案與資料夾（例如 `_attachments/`）也同步（Remotely Save 預設略過）：整個 vault 都會同步，只有 `.obsidian` 等 `.` 開頭的項目留在各裝置。
 - `uri` 與 Remotely Save 自己的「匯出 QR Code」相同格式：`obsidian://remotely-save?func=settings&version=localocr&vault=<encodeURIComponent(vault)>&data=<encodeURIComponent(JSON.stringify(settings))>`。Remotely Save 只接受與目前保險庫同名的 `vault`；沒有帶 `vault` 參數時 `uri` 為 `null`。
 - 匯入後要重新啟動 Obsidian，自動同步排程才會生效（Remotely Save 只在啟動時建立排程）。
 
@@ -351,13 +399,14 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | HTTP | `code` | 說明 |
 | --- | --- | --- |
 | 400 | `invalid_path` | `path` 或 `prefix` 不合法（見「路徑」） |
-| 400 | `invalid_request` | `recursive`、`q`、`limit`、`vault`（最多 200 字）或 `X-Vault-Mtime`（須為正整數毫秒）格式錯誤 |
+| 400 | `invalid_request` | `recursive`、`q`、`limit`、`vault`（最多 200 字）、`X-Vault-Mtime`（須為正整數毫秒）、`wait`（須為數字）、`X-LocalOCR-Client`（最多 100 字）或 `paths`（最多 100 個字串）格式錯誤 |
+| 400 | `invalid_json` | `POST /v1/vault/changes` 的本文不是有效的 JSON |
 | 401 | `unauthorized` | 缺少或錯誤的 API 金鑰 |
 | 404 | `not_found` | 檔案不存在 |
 | 412 | `precondition_failed` | `If-Match`／`If-None-Match` 不成立；含 `currentEtag` |
 | 413 | `payload_too_large` | 上傳超過 25 MB |
 | 502 | `vault_storage_error` | 儲存桶請求失敗（金鑰、bucket 名稱、網路），訊息含 S3 錯誤名稱，例如 `AccessDenied`、`SignatureDoesNotMatch` |
-| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*`（`GET /v1/vault/remotely-save` 亦同） |
+| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*`（`GET /v1/vault/remotely-save` 與 `/v1/vault/changes` 亦同） |
 
 ### MCP 工具
 
@@ -368,7 +417,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `vault_write` | `path`, `content`, `ifMatch?`, `createOnly?` | 以 UTF-8 文字整檔寫入（`mtime` 為現在）；`ifMatch` 同 `If-Match`。**沒有 `ifMatch` 時只會新增**（同 `If-None-Match: *`），檔案已存在就回傳 `precondition_failed`，agent 不會在沒讀過的情況下覆寫筆記。回傳 VaultEntry 加上 `created` |
 | `vault_search` | `query`, `prefix?`, `limit?` | 同 `GET /v1/vault/search` |
 
-刻意**不提供刪除工具**，避免代理誤刪筆記。工具說明要求 Claude：這些是使用者經 Remotely Save 同步的 Markdown 筆記；修改前先 `vault_read`，保留 frontmatter 與既有內容，寫入時帶 `ifMatch`（讀取時的 etag），新增筆記用 `createOnly`。
+`vault_write` 成功寫入時會記錄一筆 `client` 為 `"mcp"` 的變更通知，iPad App 與 Obsidian 會在幾秒內收到。刻意**不提供刪除工具**，避免代理誤刪筆記。工具說明要求 Claude：這些是使用者經 Remotely Save 同步的 Markdown 筆記；修改前先 `vault_read`，保留 frontmatter 與既有內容，寫入時帶 `ifMatch`（讀取時的 etag），新增筆記用 `createOnly`。
 
 ### 伺服器環境變數
 

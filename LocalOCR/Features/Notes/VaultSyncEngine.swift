@@ -550,6 +550,7 @@ final class VaultSyncCenter {
     let engine: VaultSyncEngine
     private var scheduled: Task<Void, Never>?
     private var periodic: Task<Void, Never>?
+    private var live: Task<Void, Never>?
     private var pushes: [String: Task<Void, Never>] = [:]
 
     init(vault: LocalVault = .shared) {
@@ -623,13 +624,13 @@ final class VaultSyncCenter {
         scheduleSync(after: 1.5)
     }
 
-    /// 編輯中的檔案存檔後呼叫：一秒內沒有再修改就直接上傳這個檔案（編輯當下同步，不必等完整同步）。
+    /// 編輯中的檔案存檔後呼叫：直接上傳這個檔案（編輯當下同步，不必等完整同步）。
     func fileDidChange(_ path: String) {
         revision += 1
         let path = LocalVault.normalize(path)
         pushes[path]?.cancel()
         pushes[path] = Task {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let client = VaultClient.configured() else { return }
             pushes[path] = nil
             do {
@@ -692,20 +693,75 @@ final class VaultSyncCenter {
         }
     }
 
-    /// App 在前景時每 3 分鐘同步一次（抓 Obsidian 端的修改）。
+    /// App 在前景時：等待伺服器的變動通知（iPad 以外的裝置修改後幾秒內同步），並每分鐘完整同步一次以防漏掉。
     func startPeriodicSync() {
         periodic?.cancel()
         periodic = Task {
             while !Task.isCancelled {
                 await syncNow()
-                try? await Task.sleep(for: .seconds(180))
+                try? await Task.sleep(for: .seconds(60))
             }
         }
+        startLiveUpdates()
     }
 
     func stopPeriodicSync() {
         periodic?.cancel()
         periodic = nil
+        live?.cancel()
+        live = nil
+    }
+
+    /// 長輪詢 /v1/vault/changes：其他裝置（Obsidian、MCP）透過伺服器修改、或 Obsidian 插件通知它用 Remotely Save 上傳了檔案時立即反應。
+    private func startLiveUpdates() {
+        live?.cancel()
+        live = Task {
+            var cursor: String?
+            var failures = 0
+            while !Task.isCancelled {
+                guard let client = VaultClient.configured() else {
+                    try? await Task.sleep(for: .seconds(30))
+                    continue
+                }
+                do {
+                    let result = try await client.changes(since: cursor, wait: 25)
+                    failures = 0
+                    let isFirst = cursor == nil
+                    cursor = result.cursor
+                    if !isFirst, result.reset || !result.changes.isEmpty {
+                        await applyRemoteChanges(result)
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    switch error {
+                    case VaultError.notFound, VaultError.notConfigured:
+                        // 舊版伺服器沒有變動通知、或還沒設定儲存空間：靠每分鐘的同步
+                        try? await Task.sleep(for: .seconds(600))
+                    default:
+                        failures += 1
+                        try? await Task.sleep(for: .seconds(min(60, 5 * failures)))
+                    }
+                }
+            }
+        }
+    }
+
+    /// 其他裝置的修改：開著的筆記直接下載新版本；其他檔案、刪除或不知道是哪些檔案時完整同步一次。
+    private func applyRemoteChanges(_ result: VaultChanges) async {
+        let paths = Set(result.changes.compactMap(\.path).map(LocalVault.normalize))
+        let open = paths.intersection(openPaths)
+        for path in open {
+            await refreshOpenFile(path)
+        }
+        let needsFullSync = result.reset
+            || result.changes.contains { $0.path == nil || $0.op != "write" }
+            || !paths.subtracting(open).isEmpty
+        guard needsFullSync else { return }
+        if isSyncing {
+            scheduleSync(after: 2)
+        } else {
+            await syncNow()
+        }
     }
 
     /// 依檔名或路徑取得本機檔案（附件需要時才下載）。

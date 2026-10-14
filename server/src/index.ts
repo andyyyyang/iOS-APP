@@ -3,6 +3,7 @@ import { createClassifier } from "./classifier/index.js";
 import { loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
 import { ObsidianPluginService, schedulePluginMirror } from "./services/obsidian-plugin.js";
+import { VaultChangeFeed } from "./services/vault-changes.js";
 import { createStore } from "./store/index.js";
 import { createVaultStore } from "./vault/index.js";
 import { VERSION } from "./version.js";
@@ -18,12 +19,14 @@ async function main() {
   const classifier = createClassifier(config);
   const vault = createVaultStore(config.vault);
   const obsidianPlugin = new ObsidianPluginService({ store, vault, githubToken: config.githubToken });
+  const vaultChanges = new VaultChangeFeed();
   const app = createApp({
     store,
     classifier,
     apiKeys: config.apiKeys,
     vault,
     vaultConfig: config.vault,
+    vaultChanges,
     publicUrl: config.publicUrl,
     obsidianPlugin,
   });
@@ -43,6 +46,7 @@ async function main() {
     shuttingDown = true;
     console.info(`[shutdown] ${signal} received; closing`);
     stopPluginMirror();
+    vaultChanges.close(); // answer held GET /v1/vault/changes long polls so server.close() is not kept waiting
     const force = setTimeout(() => process.exit(1), 10_000);
     force.unref();
     server.close(async () => {

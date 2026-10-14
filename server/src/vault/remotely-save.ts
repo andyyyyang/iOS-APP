@@ -3,8 +3,12 @@ import type { VaultConfig } from "../config.js";
 // Settings for the Obsidian plugin Remotely Save (https://github.com/remotely-save/remotely-save),
 // imported on a device through its own settings URI. Values follow its settings dropdowns (src/settings.ts).
 
-/** "Schedule For Auto Run": "every 5 minutes" (options: -1, 1, 5, 10, 30 minutes). */
-export const REMOTELY_SAVE_AUTO_RUN_MS = 5 * 60 * 1000;
+/**
+ * "Schedule For Auto Run": "every 1 minute" (options: -1, 1, 5, 10, 30 minutes), the shortest. Edits made elsewhere
+ * reach a device within seconds when the LocalOCR Sync plugin's live sync triggers a sync (GET /v1/vault/changes);
+ * this schedule is the fallback.
+ */
+export const REMOTELY_SAVE_AUTO_RUN_MS = 60 * 1000;
 /** "Run Once On Start Up Automatically": "sync once after 10 seconds of start up" (options: -1, 1 s, 10 s, 30 s). */
 export const REMOTELY_SAVE_INIT_RUN_MS = 10 * 1000;
 /** "Sync On Save": 1000 is the only "Enable" value; any value > 0 enables it (a sync ~3 s after the edit). */

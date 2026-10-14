@@ -108,4 +108,49 @@ enum NoteMarkdownEditing {
         let insertion = prefix + snippet + suffix
         return (before + insertion + after, (before as NSString).length + (insertion as NSString).length)
     }
+
+    // MARK: - AI 修改
+
+    /// 屬性區之後的內文範圍（UTF-16）：AI 修改整則筆記時不動屬性。
+    static func bodyRange(in text: String) -> NSRange {
+        let ns = text as NSString
+        let lines = text.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
+              let end = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) else {
+            return NSRange(location: 0, length: ns.length)
+        }
+        var start = (lines[0...end].joined(separator: "\n") as NSString).length
+        // 屬性後面的換行也保留
+        while start < ns.length, ns.character(at: start) == 0x0A { start += 1 }
+        return NSRange(location: start, length: ns.length - start)
+    }
+
+    /// 整理模型的輸出：去掉包住整段的 ``` 圍欄與「以下是修改後的內容：」這類開場白。
+    static func cleanAIOutput(_ output: String) -> String {
+        var text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = text.components(separatedBy: "\n")
+        if lines.count > 1, let first = lines.first?.trimmingCharacters(in: .whitespaces),
+           first.hasSuffix("：") || first.hasSuffix(":"),
+           ["以下是", "修改後", "這是", "Here is", "Here's"].contains(where: { first.hasPrefix($0) }) {
+            lines.removeFirst()
+            text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if text.hasPrefix("```"), text.hasSuffix("```"), text.count > 6 {
+            lines = text.components(separatedBy: "\n")
+            if lines.count >= 2 {
+                lines.removeFirst()
+                lines.removeLast()
+                text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return text
+    }
+
+    /// 保留原文前後的空白與換行（只取代中間的內容），選取一段文字修改時不會黏到前後文。
+    static func preservingSurroundingWhitespace(original: String, edited: String) -> String {
+        let leading = original.prefix { $0.isWhitespace || $0.isNewline }
+        let trailing = original.reversed().prefix { $0.isWhitespace || $0.isNewline }
+        guard leading.count < original.count else { return edited }
+        return String(leading) + edited.trimmingCharacters(in: .whitespacesAndNewlines) + String(trailing.reversed())
+    }
 }

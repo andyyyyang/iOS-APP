@@ -29,6 +29,20 @@ struct VaultFile {
     var text: String { String(decoding: data, as: UTF8.self) }
 }
 
+/// 伺服器記下的 vault 變動（GET /v1/vault/changes）。
+struct VaultChanges {
+    struct Change {
+        let path: String?
+        /// "write"、"delete" 或 "external"（電腦的 Obsidian 透過 Remotely Save 上傳了檔案，不知道是哪些）。
+        let op: String
+    }
+
+    let cursor: String
+    /// 伺服器重新啟動或漏掉太多變動：應該完整同步一次。
+    let reset: Bool
+    let changes: [Change]
+}
+
 struct VaultSearchHit: Identifiable, Hashable {
     let path: String
     let mtime: Date
@@ -71,6 +85,15 @@ struct VaultClient {
         guard let url = ServerSettings.baseURL, let key = ServerSettings.apiKey, !key.isEmpty else { return nil }
         return VaultClient(baseURL: url, apiKey: key)
     }
+
+    /// 這台裝置的代號（X-LocalOCR-Client）：伺服器的變動通知不會把自己做的修改再通知回來。
+    static let clientID: String = {
+        let key = "vault.clientID"
+        if let saved = UserDefaults.standard.string(forKey: key) { return saved }
+        let id = "app-" + UUID().uuidString.prefix(12).lowercased()
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }()
 
     // MARK: - Endpoints
 
@@ -139,6 +162,19 @@ struct VaultClient {
         _ = try await send("DELETE", "/v1/vault/file", query: [URLQueryItem(name: "path", value: path)], headers: headers)
     }
 
+    /// 等待其他裝置的變動（長輪詢）：沒有 `since` 時立即回傳目前的位置；否則最多等 `wait` 秒。
+    func changes(since cursor: String?, wait: Int) async throws -> VaultChanges {
+        var query = [URLQueryItem(name: "wait", value: String(cursor == nil ? 0 : min(max(wait, 0), 25)))]
+        if let cursor { query.append(URLQueryItem(name: "since", value: cursor)) }
+        let (data, _) = try await send("GET", "/v1/vault/changes", query: query)
+        let value = try JSONValue.parse(String(decoding: data, as: UTF8.self))
+        var changes: [VaultChanges.Change] = []
+        if case .array(let items)? = value["changes"] {
+            changes = items.map { VaultChanges.Change(path: $0["path"]?.stringValue, op: $0["op"]?.stringValue ?? "write") }
+        }
+        return VaultChanges(cursor: value["cursor"]?.stringValue ?? cursor ?? "", reset: value["reset"] == JSONValue.bool(true), changes: changes)
+    }
+
     func search(_ query: String, prefix: String = "", limit: Int = 30) async throws -> [VaultSearchHit] {
         let (data, _) = try await send("GET", "/v1/vault/search", query: [
             URLQueryItem(name: "q", value: query),
@@ -189,6 +225,7 @@ struct VaultClient {
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.httpMethod = method
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(Self.clientID, forHTTPHeaderField: "X-LocalOCR-Client")
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }

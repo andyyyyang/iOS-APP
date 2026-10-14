@@ -72,7 +72,7 @@ struct NotesSettingsView: View {
             } header: {
                 Text("同步")
             } footer: {
-                Text("正在編輯的筆記改完約 1 秒就上傳；開著的筆記每 15 秒檢查一次 Obsidian 那邊的修改。開啟 App 與每 3 分鐘會同步整個檔案清單，電腦的 Obsidian 再透過 Remotely Save 同步；兩邊同時修改同一個檔案時會保留兩份。")
+                Text("正在編輯的筆記停手後約 1 秒上傳，電腦的 Obsidian（LocalOCR 插件 1.4.0 以上）幾秒內就會用 Remotely Save 同步下來；電腦上修改後也會通知這台裝置。開著的筆記另外每 5 秒檢查一次，每分鐘同步整個檔案清單；兩邊同時修改同一個檔案時會保留兩份。")
             }
 
             Section {

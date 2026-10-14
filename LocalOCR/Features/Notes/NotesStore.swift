@@ -31,6 +31,8 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     let links: [String]
     /// false：只在 Railway 空間（按需模式還沒打開過），只知道路徑與修改時間，打開時下載。
     var isLocal = true
+    /// 屬性中的 aliases（[[別名]] 也能連到這則筆記）。
+    var aliases: [String] = []
 
     var id: String { path }
     var isNotebook: Bool { notebookID != nil }
@@ -165,6 +167,7 @@ final class NotesStore {
         let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         var tasks: [NoteTask] = []
         var tags: [String] = []
+        var aliases: [String] = []
         var notebookID: String?
         var snippet = ""
         var firstEmbed: String?
@@ -176,6 +179,10 @@ final class NotesStore {
                         tags = item.value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                     }
                     if item.key == NotebookFiles.frontmatterKey { notebookID = item.value }
+                    if item.key == "aliases" || item.key == "alias" {
+                        aliases = item.value.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).split(separator: ",")
+                            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"'")) }.filter { !$0.isEmpty }
+                    }
                 }
             case .paragraph(let value) where snippet.isEmpty:
                 snippet = String(value.prefix(160))
@@ -203,7 +210,8 @@ final class NotesStore {
             notebookID: notebookID?.isEmpty == false ? notebookID : nil,
             firstEmbed: firstEmbed,
             tasks: tasks,
-            links: NoteLinks.targets(in: text)
+            links: NoteLinks.targets(in: text),
+            aliases: aliases
         )
     }
 
@@ -254,6 +262,51 @@ final class NotesStore {
         notes.filter { note in
             note.path != path && note.links.contains { NoteLinks.resolve($0, in: linkIndex) == path }
         }
+    }
+
+    /// 輸入「[[」時的筆記建議：標題或別名模糊比對，最多 8 則。同名的筆記插入路徑（Obsidian 的最短路徑）。
+    func linkSuggestions(for query: String) -> [MarkdownEditor.LinkSuggestion] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        var titleCounts: [String: Int] = [:]
+        for note in notes { titleCounts[note.title.lowercased(), default: 0] += 1 }
+        let scored: [(note: NoteSummary, score: Int, alias: String?)] = notes.compactMap { note in
+            guard !query.isEmpty else { return (note, 0, nil) }
+            if let score = CommandPalette.score(note.title, query: query) { return (note, score + 10, nil) }
+            for alias in note.aliases {
+                if let score = CommandPalette.score(alias, query: query) { return (note, score, alias) }
+            }
+            if let score = CommandPalette.score(String(note.path.dropLast(3)), query: query) { return (note, score - 10, nil) }
+            return nil
+        }
+        let ranked = query.isEmpty ? scored : scored.sorted { $0.score == $1.score ? $0.note.mtime > $1.note.mtime : $0.score > $1.score }
+        return ranked.prefix(8).map { item in
+            let unique = titleCounts[item.note.title.lowercased(), default: 0] <= 1
+            let target = unique ? item.note.title : String(item.note.path.dropLast(3))
+            let linkText = item.alias.map { "\(target)|\($0)" } ?? target
+            return MarkdownEditor.LinkSuggestion(title: item.alias ?? item.note.title, detail: item.note.folder.isEmpty ? (item.alias == nil ? "" : item.note.title) : item.note.folder, linkText: linkText)
+        }
+    }
+
+    /// 改名後更新其他筆記中指到這則筆記的 [[連結]]（像 Obsidian 的「自動更新內部連結」）。
+    /// 這台裝置上的筆記直接改；還沒下載的筆記用伺服器搜尋找出來，下載後修改並上傳。回傳修改的筆記數。
+    func updateLinks(renamedFrom oldPath: String, to newPath: String, previousIndex: [String: String]) async -> Int {
+        let oldTitle = ((oldPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        var candidates = Set(notes.filter { $0.isLocal && $0.path != newPath && $0.links.contains { NoteLinks.resolve($0, in: previousIndex) == oldPath } }.map(\.path))
+        if let client = VaultClient.configured(), let hits = try? await client.search("[[\(oldTitle)", limit: 50) {
+            candidates.formUnion(hits.map { LocalVault.normalize($0.path) }.filter { $0.lowercased().hasSuffix(".md") && $0 != newPath })
+        }
+        var updated = 0
+        for path in candidates.sorted() {
+            if !vault.exists(path) {
+                _ = try? await VaultSyncCenter.shared.download(path)
+            }
+            guard let text = vault.readText(path) else { continue }
+            let changed = NoteLinks.retargeting(text, from: oldPath, to: newPath, index: previousIndex)
+            guard changed != text else { continue }
+            try? save(changed, to: path)
+            updated += 1
+        }
+        return updated
     }
 
     /// 資料夾的顯示名稱；最上層（空字串）顯示 vault 名稱。
@@ -399,22 +452,73 @@ enum NoteLinks {
         return result
     }
 
-    /// 名稱（小寫）→ 路徑：檔名與不含副檔名的完整路徑都能找到筆記；同名時取路徑較短的。
+    /// 名稱（小寫）→ 路徑：檔名、不含副檔名的完整路徑與別名都能找到筆記；同名時取路徑較短的（Obsidian 的規則）。
     static func index(_ notes: [NoteSummary]) -> [String: String] {
         var index: [String: String] = [:]
-        for note in notes.sorted(by: { $0.path.count < $1.path.count }) {
+        let sorted = notes.sorted { $0.path.count < $1.path.count }
+        for note in sorted {
             let withoutExtension = String(note.path.dropLast(3)).lowercased()
             index[withoutExtension] = index[withoutExtension] ?? note.path
             index[note.title.lowercased()] = index[note.title.lowercased()] ?? note.path
+        }
+        // 別名排在檔名之後：有同名的筆記時以筆記為準
+        for note in sorted {
+            for alias in note.aliases {
+                index[alias.lowercased()] = index[alias.lowercased()] ?? note.path
+            }
         }
         return index
     }
 
     static func resolve(_ target: String, in index: [String: String]) -> String? {
-        var key = target.lowercased()
+        var key = parse(target).name.lowercased()
         if key.hasSuffix(".md") { key = String(key.dropLast(3)) }
+        guard !key.isEmpty else { return nil }
         return index[key] ?? index[(key as NSString).lastPathComponent]
     }
+
+    /// [[名稱#標題|別名]] 拆成筆記名稱與 #後面的錨點（標題或 ^區塊）。
+    static func parse(_ target: String) -> (name: String, anchor: String?) {
+        let withoutAlias = target.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? target
+        let parts = withoutAlias.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let name = parts[0].trimmingCharacters(in: .whitespaces)
+        let anchor = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : nil
+        return (name, anchor?.isEmpty == false ? anchor : nil)
+    }
+
+    /// 錨點所在的行：「標題」比對標題文字（不分大小寫），「^區塊」找行尾的 ^區塊代碼。
+    static func line(forAnchor anchor: String, in text: String) -> Int? {
+        if anchor.hasPrefix("^") {
+            let marker = " " + anchor
+            let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+            return lines.firstIndex { $0.trimmingCharacters(in: .whitespaces).hasSuffix(marker) || $0.trimmingCharacters(in: .whitespaces) == anchor }
+        }
+        // 多層標題「#章#節」取最後一層
+        let wanted = normalizeHeading(anchor.split(separator: "#").last.map(String.init) ?? anchor)
+        return NoteOutline.headings(in: text).first { normalizeHeading($0.title) == wanted }?.line
+    }
+
+    private static func normalizeHeading(_ text: String) -> String {
+        text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: " "))).joined()
+            .split(separator: " ").joined(separator: " ")
+    }
+
+    /// 把指到 `oldPath` 的 [[連結]]、![[內嵌]] 改指到 `newPath`（保留 #標題 與 |別名；寫路徑的連結換成新路徑）。
+    static func retargeting(_ text: String, from oldPath: String, to newPath: String, index: [String: String]) -> String {
+        let ns = text as NSString
+        let newTitle = ((newPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        let newWithoutExtension = String(newPath.dropLast(3))
+        var result = text
+        for match in retargetPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let name = ns.substring(with: match.range(at: 2))
+            guard resolve(name, in: index) == oldPath, let range = Range(match.range(at: 2), in: result) else { continue }
+            let replacement = name.contains("/") ? newWithoutExtension : newTitle
+            result.replaceSubrange(range, with: replacement + (name.lowercased().hasSuffix(".md") ? ".md" : ""))
+        }
+        return result
+    }
+
+    private static let retargetPattern = try! NSRegularExpression(pattern: #"(!?)\[\[([^\]\|#\^\n]+)([^\]\n]*)\]\]"#)
 }
 
 /// 筆記中的一個標題（右側大綱）。

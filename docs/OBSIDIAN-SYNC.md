@@ -18,7 +18,7 @@ API 細節見 [API.md 的「Vault（Obsidian 筆記）」](API.md#vaultobsidian-
 
 1. **電腦：安裝 Remotely Save。** Obsidian →「設定 → 第三方外掛」→ 瀏覽，搜尋「**Remotely Save**」，安裝並啟用。第一次啟用時 Remotely Save 會詢問是否使用新版同步演算法，請勾選並同意（不同意時它會自行停用）。
 2. **電腦：在 LocalOCR 插件執行「設定 Remotely Save（同步 vault）」**（命令面板，或插件設定頁「裝置設定」的按鈕）→ 按「**套用到這台裝置**」。Remotely Save 顯示已匯入設定後，**重新啟動 Obsidian**。
-   這一步會設定 S3 連線（Remote prefix 與伺服器的 `VAULT_PREFIX` 相同）、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步，等同下方第 3、4 節的手動設定。
+   這一步會設定 S3 連線（Remote prefix 與伺服器的 `VAULT_PREFIX` 相同）、啟動 10 秒後同步一次、每分鐘自動同步、儲存時同步，等同下方第 3、4 節的手動設定。
 3. **電腦：第一次同步。** 按左側欄的 Remotely Save 同步按鈕，把筆記上傳到空的儲存桶（順序見「[5. 第一次同步的順序](#5-第一次同步的順序)」）。
 4. **iPhone／iPad：** 在 Obsidian 建立一個與電腦**同名**的空保險庫，安裝並啟用 Remotely Save（同第 1 步）。接著用 iPhone／iPad 的**相機 App** 掃描電腦上同一個對話框中的 QR Code，點開連結讓 Obsidian 套用設定，再重新啟動 Obsidian，筆記就會開始下載。
 5. **配對 LocalOCR App：** 在電腦的 LocalOCR 插件執行「**配對 iPhone／iPad**」，然後在 iPhone／iPad 的 LocalOCR App 開啟「設定 → 配對」掃描 QR Code，或輸入畫面上的配對碼（10 分鐘內有效、只能使用一次）。App 會取得伺服器網址、API 金鑰與保險庫名稱，然後同步**整個 vault**：所有資料夾的筆記、圖片、PDF 等檔案都會下載到 iPhone／iPad（`.obsidian` 設定資料夾除外），筆記可以放在任何資料夾，App 的資料夾頁面與 Obsidian 的檔案結構相同。
@@ -101,10 +101,11 @@ VAULT_S3_SECRET_ACCESS_KEY=${{obsidian-vault.SECRET_ACCESS_KEY}}
 | 選項 | 建議 |
 | --- | --- |
 | Run Once On Start Up Automatically（啟動時同步） | 開啟（例如啟動 1 秒後） |
-| Schedule For Auto Run（定時同步） | 每 1–5 分鐘 |
+| Schedule For Auto Run（定時同步） | 每 1 分鐘 |
 | Sync On Save（儲存時同步） | 開啟 |
 
 App 或 Claude 寫入的筆記，會在下一次自動同步（或手動按左側欄的同步按鈕）後出現在 Obsidian 中。
+裝有 LocalOCR 插件（1.4.0 以上）且開啟「即時同步」時，插件會等待伺服器的變更通知（`GET /v1/vault/changes`），iPad 或其他裝置修改後幾秒內就執行 Remotely Save 同步；在這台裝置修改的筆記上傳後，也會通知 iPad 與其他裝置。
 Sync Config Dir（同步 `.obsidian` 設定資料夾）可依個人需要決定；伺服器的搜尋會略過 `.obsidian`。
 
 ## 5. 第一次同步的順序

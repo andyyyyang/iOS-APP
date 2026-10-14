@@ -140,7 +140,7 @@ export class RemotelySaveModal extends Modal {
 		contentEl.createEl("h4", { text: "這台裝置" });
 		contentEl.createEl("p", {
 			text:
-				"把伺服器的儲存桶設定套用到這台裝置的 Remotely Save：S3 連線、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步。" +
+				"把伺服器的儲存桶設定套用到這台裝置的 Remotely Save：S3 連線、啟動 10 秒後同步一次、每分鐘自動同步、儲存時同步。" +
 				"Remotely Save 的其他設定（例如加密密碼，請保持空白）不會變更。",
 		});
 		if (isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false) {

@@ -78,12 +78,17 @@ function statusMessage(status: number, serverMessage?: string): string {
 	return `請求失敗（${status}）${detail}`;
 }
 
+/** Headers requestJson sets itself. */
+const RESERVED_HEADERS: ReadonlySet<string> = new Set(["accept", "authorization", "content-type"]);
+
 export interface JsonRequestOptions {
 	method?: "GET" | "POST";
 	/** Sends the API key as a bearer token (default true). */
 	authenticated?: boolean;
 	/** Serialized as the JSON request body. */
 	body?: unknown;
+	/** Extra request headers, e.g. X-LocalOCR-Client (they cannot replace Accept, Authorization or Content-Type). */
+	headers?: Record<string, string>;
 }
 
 export interface ScanQuery {
@@ -109,7 +114,11 @@ export class LocalOcrClient {
 		const { method = "GET", authenticated = true } = options;
 		if (!this.baseUrl) throw new ApiError("尚未設定伺服器網址", 0, "config");
 		if (authenticated && !this.apiKey) throw new ApiError("尚未設定 API 金鑰", 0, "config");
-		const headers: Record<string, string> = { Accept: "application/json" };
+		const headers: Record<string, string> = {};
+		for (const [name, value] of Object.entries(options.headers ?? {})) {
+			if (!RESERVED_HEADERS.has(name.toLowerCase())) headers[name] = value;
+		}
+		headers.Accept = "application/json";
 		if (authenticated) headers.Authorization = `Bearer ${this.apiKey}`;
 		const request: HttpRequest = { url: this.baseUrl + path, method, headers };
 		if (options.body !== undefined) {

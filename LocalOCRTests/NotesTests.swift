@@ -1,4 +1,5 @@
 import PencilKit
+import UIKit
 import XCTest
 @testable import LocalOCR
 
@@ -187,13 +188,74 @@ final class NotesTests: XCTestCase {
         XCTAssertNil(summary.notebookID)
     }
 
-    @MainActor
-    func testHighlighterStylesHeadingsWithoutChangingText() {
-        let storage = NSTextStorage(string: "# 標題\n**粗體** #標籤 - [x] 完成")
-        MarkdownHighlighter.apply(to: storage)
-        XCTAssertEqual(storage.string, "# 標題\n**粗體** #標籤 - [x] 完成")
+    // MARK: - 即時預覽
+
+    private func styled(_ text: String, selection: NSRange? = nil, images: [String: UIImage] = [:], resolves: @escaping (String) -> Bool = { _ in true }) -> NSTextStorage {
+        let storage = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: storage, options: LiveMarkdown.Options(selection: selection, width: 600, images: images, resolvesLink: resolves))
+        return storage
+    }
+
+    private func isHidden(_ storage: NSTextStorage, at index: Int) -> Bool {
+        (storage.attribute(.font, at: index, effectiveRange: nil) as? UIFont)?.pointSize ?? 17 < 1
+    }
+
+    func testLivePreviewHidesSyntaxExceptOnTheActiveLine() {
+        let text = "# 標題\n**粗體** 與 *斜體*"
+        let storage = styled(text)
+        XCTAssertEqual(storage.string, text, "只改顯示，不改文字")
+        XCTAssertTrue(isHidden(storage, at: 0), "沒在編輯的行藏起 #")
         let headingFont = storage.attribute(.font, at: 2, effectiveRange: nil) as? UIFont
-        XCTAssertGreaterThan(headingFont?.pointSize ?? 0, MarkdownHighlighter.bodyFont.pointSize)
+        XCTAssertGreaterThan(headingFont?.pointSize ?? 0, LiveMarkdown.Theme.bodyFont.pointSize)
+        let boldStart = (text as NSString).range(of: "**").location
+        XCTAssertTrue(isHidden(storage, at: boldStart))
+        let bold = storage.attribute(.font, at: boldStart + 2, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.traitBold) ?? false)
+
+        // 游標在標題行：顯示 #（淡色），其他行照樣藏起來
+        let editing = styled(text, selection: NSRange(location: 3, length: 0))
+        XCTAssertFalse(isHidden(editing, at: 0))
+        XCTAssertTrue(isHidden(editing, at: boldStart))
+    }
+
+    func testLivePreviewTasksLinksAndImages() {
+        let text = "- [ ] 待辦\n- [x] 完成\n見 [[專案計畫|計畫]] 與 [[不存在]]\n![[photo.png]]\n| a | b |\n| - | - |\n| 1 | 2 |"
+        let ns = text as NSString
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: 600)).image { _ in }
+        let storage = styled(text, images: ["photo.png": image], resolves: { $0 == "專案計畫" })
+        XCTAssertEqual(storage.string, text)
+        XCTAssertEqual(storage.attribute(.mdCheckbox, at: ns.range(of: "[ ]").location, effectiveRange: nil) as? Bool, false)
+        XCTAssertEqual(storage.attribute(.mdCheckbox, at: ns.range(of: "[x]").location, effectiveRange: nil) as? Bool, true)
+        let alias = ns.range(of: "計畫]]").location
+        XCTAssertEqual(storage.attribute(.mdWikiLink, at: alias, effectiveRange: nil) as? String, "專案計畫")
+        XCTAssertTrue(isHidden(storage, at: ns.range(of: "專案計畫|").location), "有別名時只顯示別名")
+        let missing = ns.range(of: "不存在").location
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: missing, effectiveRange: nil) as? UIColor, LiveMarkdown.Theme.unresolved)
+        let info = storage.attribute(.mdImage, at: ns.range(of: "![[photo").location, effectiveRange: nil) as? MarkdownImageInfo
+        XCTAssertEqual(info?.name, "photo.png")
+        XCTAssertEqual(info?.size, CGSize(width: 600, height: 300), "圖片縮到文字欄寬")
+        XCTAssertNotNil(storage.attribute(.mdTableRow, at: ns.range(of: "| 1").location + 2, effectiveRange: nil))
+        XCTAssertNotNil(storage.attribute(.mdTablePipe, at: ns.range(of: "| a").location, effectiveRange: nil))
+
+        // 還沒載入的圖片：回報要載入
+        let pending = NSTextStorage(string: "![[scan.jpg|300]]")
+        let needed = LiveMarkdown.apply(to: pending, options: LiveMarkdown.Options(selection: nil, width: 600))
+        XCTAssertEqual(needed, ["scan.jpg"])
+        XCTAssertEqual(LiveMarkdown.embed(in: "![[scan.jpg|300]]")?.width, 300)
+    }
+
+    func testOpenLinkQueryAndAIHelpers() {
+        let text = "見 [[專案"
+        XCTAssertEqual(MarkdownEditing.openLinkQuery(in: text, cursor: NSRange(location: (text as NSString).length, length: 0))?.text, "專案")
+        XCTAssertNil(MarkdownEditing.openLinkQuery(in: "見 [[專案]] 後", cursor: NSRange(location: 9, length: 0)))
+
+        let note = "---\ntags: [a]\n---\n\n內文"
+        let body = NoteMarkdownEditing.bodyRange(in: note)
+        XCTAssertEqual((note as NSString).substring(with: body), "內文", "AI 修改整則筆記時不動屬性")
+        XCTAssertEqual(NoteMarkdownEditing.bodyRange(in: "沒有屬性").location, 0)
+        XCTAssertEqual(NoteMarkdownEditing.cleanAIOutput("以下是修改後的內容：\n```markdown\n- 一\n```"), "- 一")
+        XCTAssertEqual(NoteMarkdownEditing.cleanAIOutput("```\n# 標題\n```"), "# 標題")
+        XCTAssertEqual(NoteMarkdownEditing.preservingSurroundingWhitespace(original: "\n舊的文字 \n", edited: "新的"), "\n新的 \n")
     }
 
     // MARK: - Markdown 顯示
@@ -213,13 +275,28 @@ final class NotesTests: XCTestCase {
         XCTAssertEqual(blocks[9], .rule)
     }
 
-    func testWikiLinksBecomeTappableLinks() {
-        let attributed = MarkdownInline.attributed("見 [[專案計畫|計畫]] 與 [[會議紀錄#結論]]")
-        XCTAssertEqual(String(attributed.characters), "見 計畫 與 會議紀錄#結論")
-        let links = attributed.runs.compactMap(\.link)
-        XCTAssertEqual(links.count, 2)
-        XCTAssertEqual(MarkdownInline.wikiTarget(from: links[0]), "專案計畫")
-        XCTAssertEqual(MarkdownInline.wikiTarget(from: links[1]), "會議紀錄")
+    func testObsidianLinkRules() {
+        XCTAssertEqual(NoteLinks.parse("會議紀錄#結論|看結論").name, "會議紀錄")
+        XCTAssertEqual(NoteLinks.parse("會議紀錄#結論|看結論").anchor, "結論")
+        XCTAssertEqual(NoteLinks.parse("#^abc").anchor, "^abc")
+        XCTAssertEqual(NoteLinks.parse("#^abc").name, "")
+
+        var withAlias = NotesStore.summarize(path: "工作/專案計畫.md", mtime: Date(), text: "---\naliases:\n  - 計畫書\n  - Plan\n---\n")
+        XCTAssertEqual(withAlias.aliases, ["計畫書", "Plan"])
+        withAlias.isLocal = true
+        let index = NoteLinks.index([withAlias, NotesStore.summarize(path: "計畫書.md", mtime: Date(), text: "")])
+        XCTAssertEqual(NoteLinks.resolve("plan", in: index), "工作/專案計畫.md", "別名也能連到筆記")
+        XCTAssertEqual(NoteLinks.resolve("計畫書", in: index), "計畫書.md", "同名的筆記優先於別名")
+        XCTAssertEqual(NoteLinks.resolve("專案計畫#目標", in: index), "工作/專案計畫.md")
+
+        let text = "# 目標\n內容 ^abc123\n## 時程"
+        XCTAssertEqual(NoteLinks.line(forAnchor: "時程", in: text), 2)
+        XCTAssertEqual(NoteLinks.line(forAnchor: "目標#時程", in: text), 2)
+        XCTAssertEqual(NoteLinks.line(forAnchor: "^abc123", in: text), 1)
+
+        let source = "見 [[專案計畫]]、[[專案計畫#目標|目標]]、![[工作/專案計畫]] 與 [[別的]]"
+        let renamed = NoteLinks.retargeting(source, from: "工作/專案計畫.md", to: "工作/新計畫.md", index: index)
+        XCTAssertEqual(renamed, "見 [[新計畫]]、[[新計畫#目標|目標]]、![[工作/新計畫]] 與 [[別的]]")
     }
 
     // MARK: - 配對

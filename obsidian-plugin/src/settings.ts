@@ -21,6 +21,8 @@ export interface LocalOcrSettings {
 	jsonDoneField: string;
 	/** Install new plugin versions from the LocalOCR server (or GitHub) automatically (otherwise only notify). */
 	autoUpdate: boolean;
+	/** 即時同步: run Remotely Save when the server reports changes from other devices, and report this device's edits. */
+	liveSync: boolean;
 }
 
 export const DEFAULT_SETTINGS: LocalOcrSettings = {
@@ -35,6 +37,7 @@ export const DEFAULT_SETTINGS: LocalOcrSettings = {
 	jsonPreserveFields: "docNo, done",
 	jsonDoneField: "done",
 	autoUpdate: true,
+	liveSync: true,
 };
 
 /** Merge saved settings over the defaults (never sharing the defaults' arrays). */
@@ -52,6 +55,7 @@ export function loadSettings(saved: Partial<LocalOcrSettings> | undefined): Loca
 	if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
 	if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
 	if (typeof settings.autoUpdate !== "boolean") settings.autoUpdate = DEFAULT_SETTINGS.autoUpdate;
+	if (typeof settings.liveSync !== "boolean") settings.liveSync = DEFAULT_SETTINGS.liveSync;
 	return settings;
 }
 
@@ -143,6 +147,26 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 					} finally {
 						button.setDisabled(false);
 					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("即時同步")
+			.setDesc(
+				createFragment((fragment) => {
+					fragment.appendText(
+						"iPad 或其他裝置修改後，幾秒內自動執行 Remotely Save 同步；在這台裝置修改後也會通知其他裝置。",
+					);
+					fragment.createEl("br");
+					fragment.appendText(`狀態：${this.plugin.liveSyncStatusText()}`);
+				}),
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.liveSync).onChange(async (value) => {
+					settings.liveSync = value;
+					await this.plugin.saveSettings();
+					this.plugin.refreshLiveSync();
+					this.display();
 				}),
 			);
 

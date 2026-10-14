@@ -151,6 +151,25 @@ export const vaultSearchQuerySchema = z.object({
 /** File mtime in milliseconds since the epoch (X-Vault-Mtime). */
 export const vaultMtimeSchema = queryParam(z.coerce.number().int().min(1).max(8_640_000_000_000_000));
 
+export const MAX_VAULT_CLIENT_LENGTH = 100;
+
+/** X-LocalOCR-Client: a free-form id of the calling device or app; empty = none. */
+export const vaultClientSchema = queryParam(z.string().trim().max(MAX_VAULT_CLIENT_LENGTH)).transform((value) => value || null);
+
+export const MAX_VAULT_CHANGES_WAIT_SECONDS = 25;
+export const MAX_VAULT_CHANGE_PATHS = 100;
+
+/** GET /v1/vault/changes. `since` is checked by the change feed: an unusable cursor answers reset: true, not 400. */
+export const vaultChangesQuerySchema = z.object({
+  since: z.unknown(),
+  wait: queryParam(z.coerce.number()).transform((value) => Math.min(Math.max(value ?? 0, 0), MAX_VAULT_CHANGES_WAIT_SECONDS)),
+});
+
+/** POST /v1/vault/changes: files a device just uploaded to the bucket itself (each checked with vaultPath). */
+export const vaultChangesReportSchema = z.object({
+  paths: z.array(z.string()).max(MAX_VAULT_CHANGE_PATHS).optional(),
+});
+
 /** POST /v1/pairing: what the new device should open (both optional). */
 export const pairingCreateSchema = z.object({
   vaultName: optionalNullable(z.string().min(1).max(200)),

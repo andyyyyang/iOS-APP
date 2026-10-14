@@ -1,11 +1,19 @@
 import type { VaultConfig } from "../config.js";
 import { AppError, notFound } from "../errors.js";
-import { remotelySaveQuerySchema, vaultListQuerySchema, vaultSearchQuerySchema } from "../schemas.js";
+import {
+  remotelySaveQuerySchema,
+  vaultChangesQuerySchema,
+  vaultChangesReportSchema,
+  vaultClientSchema,
+  vaultListQuerySchema,
+  vaultSearchQuerySchema,
+} from "../schemas.js";
 import type { WriteResult } from "../store/types.js";
 import { contentTypeFor, extensionOf, normalizeEtag, vaultFolder, vaultPath } from "../vault/paths.js";
 import { remotelySaveSettings, remotelySaveUri, type RemotelySaveSettings } from "../vault/remotely-save.js";
 import { VaultStorageError, type VaultEntry, type VaultFile, type VaultStore } from "../vault/types.js";
 import { parse } from "./parse.js";
+import { VaultChangeFeed, type VaultChangeInput, type VaultChangesResponse } from "./vault-changes.js";
 
 export const SEARCH_EXTENSIONS: ReadonlySet<string> = new Set(["md", "txt", "json", "canvas"]);
 export const SEARCH_MAX_FILES = 3000;
@@ -44,7 +52,12 @@ export interface VaultWriteInput {
   ifNoneMatch?: string;
   /** Milliseconds; defaults to now. */
   mtime?: number;
+  /** Who is writing (X-LocalOCR-Client, "mcp"), recorded in the change feed. */
+  client?: string | null;
 }
+
+/** HTTP header naming the calling device or app (see VaultService.clientId). */
+export const VAULT_CLIENT_HEADER = "X-LocalOCR-Client";
 
 const notConfigured = () =>
   new AppError(503, "vault_not_configured", "Vault storage is not configured (set VAULT_S3_* variables)");
@@ -98,7 +111,14 @@ export class VaultService {
     private readonly store: VaultStore | null,
     /** The bucket credentials, only for handing them to Remotely Save; null when VAULT_S3_* is not set. */
     private readonly config: VaultConfig | null = null,
+    /** Every write and delete below is recorded here for GET /v1/vault/changes. */
+    private readonly changeFeed: VaultChangeFeed = new VaultChangeFeed(),
   ) {}
+
+  /** The X-LocalOCR-Client header value (trimmed, at most 100 characters); null when absent or empty. */
+  clientId(raw: unknown): string | null {
+    return parse(vaultClientSchema, raw, `${VAULT_CLIENT_HEADER}: `);
+  }
 
   status(): VaultStatus {
     return { configured: this.store !== null, prefix: this.store?.prefix ?? "" };
@@ -150,10 +170,14 @@ export class VaultService {
   }
 
   /** Create-or-replace. `created` tells 201 from 200. Fails with 412 precondition_failed (+ currentEtag). */
-  async write(rawPath: unknown, body: Buffer, { ifMatch, ifNoneMatch, mtime }: VaultWriteInput = {}): Promise<WriteResult<VaultEntry>> {
+  async write(
+    rawPath: unknown,
+    body: Buffer,
+    { ifMatch, ifNoneMatch, mtime, client = null }: VaultWriteInput = {},
+  ): Promise<WriteResult<VaultEntry>> {
     const store = this.storage();
     const requested = vaultPath(rawPath);
-    return this.guard(async () => {
+    const result = await this.guard(async () => {
       const current = await lookup(requested, (candidate) => store.stat(candidate));
       if (ifMatch !== undefined && !etagMatches(ifMatch, current)) throw changed(current);
       if (ifNoneMatch !== undefined && etagMatches(ifNoneMatch, current)) {
@@ -163,18 +187,49 @@ export class VaultService {
       const value = await store.write(path, body, { mtime: mtime ?? Date.now(), contentType: contentTypeFor(path) });
       return { value, created: current === null };
     });
+    this.changeFeed.record([{ path: result.value.path, op: "write", client }]);
+    return result;
   }
 
   /** 404 when missing; 412 when `ifMatch` no longer matches. */
-  async delete(rawPath: unknown, { ifMatch }: { ifMatch?: string } = {}): Promise<void> {
+  async delete(rawPath: unknown, { ifMatch, client = null }: { ifMatch?: string; client?: string | null } = {}): Promise<void> {
     const store = this.storage();
     const requested = vaultPath(rawPath);
-    await this.guard(async () => {
+    const path = await this.guard(async () => {
       const current = await lookup(requested, (candidate) => store.stat(candidate));
       if (!current) throw notFound("File", requested);
       if (ifMatch !== undefined && !etagMatches(ifMatch, current)) throw changed(current);
       await store.delete(current.path);
+      return current.path;
     });
+    this.changeFeed.record([{ path, op: "delete", client }]);
+  }
+
+  /**
+   * GET /v1/vault/changes: changes made by others since the `since` cursor, waiting up to `wait` seconds (0–25)
+   * for one when there are none. 503 when the vault is not configured.
+   */
+  async changes(
+    input: { since?: unknown; wait?: unknown },
+    { client, signal }: { client: string | null; signal?: AbortSignal },
+  ): Promise<VaultChangesResponse> {
+    this.storage();
+    const { since, wait } = parse(vaultChangesQuerySchema, input);
+    return this.changeFeed.poll({ since, client, waitMs: wait * 1000, signal });
+  }
+
+  /**
+   * POST /v1/vault/changes: a device uploaded these files to the bucket itself (Remotely Save), so the other clients
+   * should look. One "external" change per path (deduplicated), or one with path null. Returns the new cursor.
+   */
+  reportExternal(body: unknown, client: string | null): { cursor: string } {
+    this.storage();
+    const { paths = [] } = parse(vaultChangesReportSchema, body ?? {});
+    const unique = [...new Set(paths.map((path) => vaultPath(path)))];
+    const changes: VaultChangeInput[] = unique.length
+      ? unique.map((path) => ({ path, op: "external", client }))
+      : [{ path: null, op: "external", client }];
+    return { cursor: this.changeFeed.record(changes) };
   }
 
   /**

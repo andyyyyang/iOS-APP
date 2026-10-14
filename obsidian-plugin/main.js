@@ -2410,7 +2410,8 @@ var DEFAULT_SETTINGS = {
   jsonMappings: [],
   jsonPreserveFields: "docNo, done",
   jsonDoneField: "done",
-  autoUpdate: true
+  autoUpdate: true,
+  liveSync: true
 };
 function loadSettings(saved) {
   const settings = { ...DEFAULT_SETTINGS, ...saved != null ? saved : {} };
@@ -2424,6 +2425,7 @@ function loadSettings(saved) {
   if (typeof settings.jsonPreserveFields !== "string") settings.jsonPreserveFields = DEFAULT_SETTINGS.jsonPreserveFields;
   if (typeof settings.jsonDoneField !== "string") settings.jsonDoneField = DEFAULT_SETTINGS.jsonDoneField;
   if (typeof settings.autoUpdate !== "boolean") settings.autoUpdate = DEFAULT_SETTINGS.autoUpdate;
+  if (typeof settings.liveSync !== "boolean") settings.liveSync = DEFAULT_SETTINGS.liveSync;
   return settings;
 }
 var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -2483,6 +2485,22 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
         } finally {
           button.setDisabled(false);
         }
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("\u5373\u6642\u540C\u6B65").setDesc(
+      createFragment((fragment) => {
+        fragment.appendText(
+          "iPad \u6216\u5176\u4ED6\u88DD\u7F6E\u4FEE\u6539\u5F8C\uFF0C\u5E7E\u79D2\u5167\u81EA\u52D5\u57F7\u884C Remotely Save \u540C\u6B65\uFF1B\u5728\u9019\u53F0\u88DD\u7F6E\u4FEE\u6539\u5F8C\u4E5F\u6703\u901A\u77E5\u5176\u4ED6\u88DD\u7F6E\u3002"
+        );
+        fragment.createEl("br");
+        fragment.appendText(`\u72C0\u614B\uFF1A${this.plugin.liveSyncStatusText()}`);
+      })
+    ).addToggle(
+      (toggle) => toggle.setValue(settings.liveSync).onChange(async (value) => {
+        settings.liveSync = value;
+        await this.plugin.saveSettings();
+        this.plugin.refreshLiveSync();
+        this.display();
       })
     );
     new import_obsidian.Setting(containerEl).setName("\u66F4\u65B0").setHeading();
@@ -2739,6 +2757,7 @@ function statusMessage(status, serverMessage) {
   if (status >= 500) return `\u4F3A\u670D\u5668\u932F\u8AA4\uFF08${status}\uFF09${detail}`;
   return `\u8ACB\u6C42\u5931\u6557\uFF08${status}\uFF09${detail}`;
 }
+var RESERVED_HEADERS = /* @__PURE__ */ new Set(["accept", "authorization", "content-type"]);
 var LocalOcrClient = class {
   constructor(baseUrl, apiKey, http, timeoutMs = REQUEST_TIMEOUT_MS) {
     this.apiKey = apiKey;
@@ -2748,10 +2767,15 @@ var LocalOcrClient = class {
   }
   /** Any JSON endpoint; non-2xx answers throw ApiError with the server's error code. */
   async requestJson(path, options = {}) {
+    var _a;
     const { method = "GET", authenticated = true } = options;
     if (!this.baseUrl) throw new ApiError("\u5C1A\u672A\u8A2D\u5B9A\u4F3A\u670D\u5668\u7DB2\u5740", 0, "config");
     if (authenticated && !this.apiKey) throw new ApiError("\u5C1A\u672A\u8A2D\u5B9A API \u91D1\u9470", 0, "config");
-    const headers = { Accept: "application/json" };
+    const headers = {};
+    for (const [name, value] of Object.entries((_a = options.headers) != null ? _a : {})) {
+      if (!RESERVED_HEADERS.has(name.toLowerCase())) headers[name] = value;
+    }
+    headers.Accept = "application/json";
     if (authenticated) headers.Authorization = `Bearer ${this.apiKey}`;
     const request = { url: this.baseUrl + path, method, headers };
     if (options.body !== void 0) {
@@ -3041,6 +3065,332 @@ function isPluginEnabled(app, id) {
   return Boolean(has.call(enabled, id));
 }
 
+// src/live-sync.ts
+var CLIENT_HEADER = "X-LocalOCR-Client";
+var CHANGES_PATH = "/v1/vault/changes";
+var REMOTELY_SAVE_SYNC_COMMAND = `${REMOTELY_SAVE_PLUGIN_ID}:start-sync`;
+var POLL_WAIT_SECONDS = 25;
+var MIN_POLL_INTERVAL_MS = 1e3;
+var REMOTE_SYNC_DEBOUNCE_MS = 1e3;
+var REMOTE_SYNC_BUSY_RETRY_MS = 3e3;
+var REMOTE_SYNC_MAX_BUSY_RETRIES = 10;
+var LOCAL_REPORT_DEBOUNCE_MS = 8e3;
+var IGNORE_AFTER_REMOTE_SYNC_MS = 2e4;
+var IGNORE_AFTER_REMOTE_SYNC_END_MS = 2e3;
+var RETRY_DELAYS_MS = [5e3, 15e3, 6e4];
+var SLOW_RETRY_MS = 10 * 6e4;
+var MAX_REPORT_PATHS = 100;
+function changesPath(since, waitSeconds = POLL_WAIT_SECONDS) {
+  if (since === null) return CHANGES_PATH;
+  return `${CHANGES_PATH}?since=${encodeURIComponent(since)}&wait=${encodeURIComponent(String(waitSeconds))}`;
+}
+var isObject2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var OPS = /* @__PURE__ */ new Set(["write", "delete", "external"]);
+function parseChange(value) {
+  if (!isObject2(value)) return null;
+  const { seq, path, op, client, at } = value;
+  if (typeof seq !== "number" || !Number.isFinite(seq)) return null;
+  if (path !== null && typeof path !== "string") return null;
+  if (typeof op !== "string" || !OPS.has(op)) return null;
+  if (client !== null && typeof client !== "string") return null;
+  return { seq, path, op, client, at: typeof at === "string" ? at : "" };
+}
+function parseVaultChanges(body) {
+  if (!isObject2(body) || typeof body.cursor !== "string" || !body.cursor || typeof body.reset !== "boolean" || !Array.isArray(body.changes)) {
+    throw new ApiError("\u4F3A\u670D\u5668 /v1/vault/changes \u56DE\u61C9\u683C\u5F0F\u4E0D\u6B63\u78BA", 200, "bad_response");
+  }
+  const changes = body.changes.map(parseChange).filter((change) => change !== null);
+  return { cursor: body.cursor, reset: body.reset, changes };
+}
+function hasRemoteChanges(response, clientId) {
+  return response.reset || response.changes.some((change) => change.client !== clientId);
+}
+function isSlowFailure(error) {
+  if (!(error instanceof ApiError)) return false;
+  return error.status === 404 || error.isAuthError || error.code === "vault_not_configured";
+}
+function retryDelay(error, failures) {
+  if (isSlowFailure(error)) return SLOW_RETRY_MS;
+  return RETRY_DELAYS_MS[Math.min(Math.max(failures, 1), RETRY_DELAYS_MS.length) - 1];
+}
+var ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+var CLIENT_ID_PATTERN = /^obsidian-[a-z0-9]{8,40}$/;
+var cryptoRandom = (length) => crypto.getRandomValues(new Uint8Array(length));
+function createClientId(randomBytes = cryptoRandom) {
+  var _a;
+  const bytes = randomBytes(12);
+  let id = "";
+  for (let i = 0; i < 12; i++) id += ID_ALPHABET[((_a = bytes[i]) != null ? _a : 0) % ID_ALPHABET.length];
+  return `obsidian-${id}`;
+}
+function isClientId(value) {
+  return typeof value === "string" && CLIENT_ID_PATTERN.test(value);
+}
+function isReportablePath(path, configDir) {
+  if (!path || path === configDir || path.startsWith(`${configDir}/`)) return false;
+  return !path.split("/").some((segment) => segment.startsWith("."));
+}
+var PathQueue = class {
+  constructor() {
+    this.paths = /* @__PURE__ */ new Set();
+  }
+  add(path) {
+    this.paths.add(path);
+  }
+  get size() {
+    return this.paths.size;
+  }
+  /** Empties the queue: null when it was empty, [] (= "something changed") when it held more than MAX_REPORT_PATHS. */
+  take() {
+    if (this.paths.size === 0) return null;
+    const paths = [...this.paths];
+    this.paths.clear();
+    return paths.length > MAX_REPORT_PATHS ? [] : paths;
+  }
+  clear() {
+    this.paths.clear();
+  }
+};
+var globalTimers = {
+  setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
+  clearTimeout: (handle) => globalThis.clearTimeout(handle)
+};
+var Debouncer = class {
+  constructor(callback, delayMs, timers = globalTimers) {
+    this.callback = callback;
+    this.delayMs = delayMs;
+    this.timers = timers;
+    this.handle = null;
+  }
+  get pending() {
+    return this.handle !== null;
+  }
+  /** (Re)starts the wait; `delayMs` overrides the default for this time. */
+  schedule(delayMs = this.delayMs) {
+    this.cancel();
+    this.handle = this.timers.setTimeout(() => {
+      this.handle = null;
+      this.callback();
+    }, delayMs);
+  }
+  cancel() {
+    if (this.handle === null) return;
+    this.timers.clearTimeout(this.handle);
+    this.handle = null;
+  }
+};
+async function startRemotelySaveSync(app) {
+  var _a, _b;
+  if (isPluginEnabled(app, REMOTELY_SAVE_PLUGIN_ID) === false) return "unavailable";
+  const host = app;
+  const plugin = (_b = (_a = host == null ? void 0 : host.plugins) == null ? void 0 : _a.plugins) == null ? void 0 : _b[REMOTELY_SAVE_PLUGIN_ID];
+  const status = plugin == null ? void 0 : plugin.syncStatus;
+  if ((plugin == null ? void 0 : plugin.isSyncing) === true || typeof status === "string" && status !== "idle" && status !== "finish") return "busy";
+  if (typeof (plugin == null ? void 0 : plugin.syncRun) === "function") {
+    await plugin.syncRun("auto");
+    return "started";
+  }
+  const commands = host == null ? void 0 : host.commands;
+  if (typeof (commands == null ? void 0 : commands.executeCommandById) === "function" && commands.executeCommandById.call(commands, REMOTELY_SAVE_SYNC_COMMAND)) {
+    return "started";
+  }
+  return "unavailable";
+}
+var LiveSync = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.generation = 0;
+    this.running = false;
+    this.wake = null;
+    this.ignoreLocalUntil = 0;
+    this.remoteSyncRunning = false;
+    this.remoteSyncAgain = false;
+    this.busyRetries = 0;
+    this.queue = new PathQueue();
+    this.current = {
+      state: "stopped",
+      lastRemoteChangeAt: null,
+      lastReportAt: null,
+      error: null,
+      remotelySaveUnavailable: false
+    };
+    var _a, _b;
+    this.timers = (_a = deps.timers) != null ? _a : globalTimers;
+    this.now = (_b = deps.now) != null ? _b : Date.now;
+    this.remoteSync = new Debouncer(() => void this.runRemoteSync(), REMOTE_SYNC_DEBOUNCE_MS, this.timers);
+    this.report = new Debouncer(() => void this.sendReport(), LOCAL_REPORT_DEBOUNCE_MS, this.timers);
+  }
+  get status() {
+    return { ...this.current };
+  }
+  get isRunning() {
+    return this.running;
+  }
+  start() {
+    if (this.running) return;
+    this.running = true;
+    const generation = ++this.generation;
+    this.update({ state: "connecting", error: null });
+    void this.loop(generation);
+  }
+  stop() {
+    var _a;
+    if (!this.running) return;
+    this.running = false;
+    this.generation++;
+    this.remoteSync.cancel();
+    this.report.cancel();
+    this.queue.clear();
+    (_a = this.wake) == null ? void 0 : _a.call(this);
+    this.update({ state: "stopped" });
+  }
+  /**
+   * Vault paths created, modified, deleted or renamed here (a rename passes both paths). Reported to the other
+   * devices LOCAL_REPORT_DEBOUNCE_MS after the last one, unless they are Remotely Save downloads this started.
+   */
+  noteLocalChange(paths) {
+    if (!this.running || this.current.state === "unsupported") return;
+    if (this.now() < this.ignoreLocalUntil) return;
+    let added = false;
+    for (const path of paths) {
+      if (!isReportablePath(path, this.deps.configDir)) continue;
+      this.queue.add(path);
+      added = true;
+    }
+    if (added) this.report.schedule();
+  }
+  headers() {
+    return { [CLIENT_HEADER]: this.deps.clientId };
+  }
+  update(patch) {
+    this.current = { ...this.current, ...patch };
+  }
+  log(message) {
+    var _a, _b;
+    (_b = (_a = this.deps).log) == null ? void 0 : _b.call(_a, message);
+  }
+  async loop(generation) {
+    let cursor = null;
+    let failures = 0;
+    while (generation === this.generation) {
+      const startedAt = this.now();
+      try {
+        const body = await this.deps.client.requestJson(changesPath(cursor), { headers: this.headers() });
+        if (generation !== this.generation) return;
+        const response = parseVaultChanges(body);
+        if (cursor !== null && hasRemoteChanges(response, this.deps.clientId)) {
+          this.update({ lastRemoteChangeAt: this.now() });
+          this.remoteSync.schedule();
+        }
+        cursor = response.cursor;
+        if (failures > 0) this.log("\u5373\u6642\u540C\u6B65\u5DF2\u91CD\u65B0\u9023\u7DDA");
+        failures = 0;
+        this.update({ state: "connected", error: null });
+        const elapsed = this.now() - startedAt;
+        if (elapsed < MIN_POLL_INTERVAL_MS) await this.sleep(MIN_POLL_INTERVAL_MS - elapsed, generation);
+      } catch (error) {
+        if (generation !== this.generation) return;
+        failures += 1;
+        const slow = isSlowFailure(error);
+        const message = describeError(error);
+        if (failures === 1) this.log(`\u5373\u6642\u540C\u6B65\u9023\u7DDA\u5931\u6557\uFF0C\u7A0D\u5F8C\u91CD\u8A66\uFF1A${message}`);
+        this.update({ state: slow ? "unsupported" : "retrying", error: message });
+        await this.sleep(retryDelay(error, failures), generation);
+      }
+    }
+  }
+  /** Resolves after `ms`, or at once when stop() is called. */
+  sleep(ms, generation) {
+    return new Promise((resolve) => {
+      if (generation !== this.generation) {
+        resolve();
+        return;
+      }
+      const done = () => {
+        this.wake = null;
+        resolve();
+      };
+      const handle = this.timers.setTimeout(done, ms);
+      this.wake = () => {
+        this.timers.clearTimeout(handle);
+        done();
+      };
+    });
+  }
+  async runRemoteSync() {
+    if (this.remoteSyncRunning) {
+      this.remoteSyncAgain = true;
+      return;
+    }
+    const generation = this.generation;
+    this.remoteSyncRunning = true;
+    const previousIgnore = this.ignoreLocalUntil;
+    this.ignoreLocalUntil = Math.max(previousIgnore, this.now() + IGNORE_AFTER_REMOTE_SYNC_MS);
+    let result;
+    try {
+      result = await this.deps.syncRemote();
+    } catch (error) {
+      this.log(`\u7121\u6CD5\u57F7\u884C Remotely Save \u540C\u6B65\uFF1A${describeError(error)}`);
+      result = "unavailable";
+    }
+    if (result === "started") {
+      this.ignoreLocalUntil = Math.max(this.ignoreLocalUntil, this.now() + IGNORE_AFTER_REMOTE_SYNC_END_MS);
+    } else {
+      this.ignoreLocalUntil = previousIgnore;
+    }
+    this.remoteSyncRunning = false;
+    if (generation !== this.generation) return;
+    this.update({ remotelySaveUnavailable: result === "unavailable" });
+    if (result === "busy" && this.busyRetries < REMOTE_SYNC_MAX_BUSY_RETRIES) {
+      this.busyRetries += 1;
+      this.remoteSync.schedule(REMOTE_SYNC_BUSY_RETRY_MS);
+      return;
+    }
+    this.busyRetries = 0;
+    if (this.remoteSyncAgain) {
+      this.remoteSyncAgain = false;
+      this.remoteSync.schedule();
+    }
+  }
+  async sendReport() {
+    const paths = this.queue.take();
+    if (paths === null || !this.running) return;
+    const generation = this.generation;
+    try {
+      await this.deps.client.requestJson(CHANGES_PATH, { method: "POST", body: { paths }, headers: this.headers() });
+      if (generation === this.generation) this.update({ lastReportAt: this.now() });
+    } catch (error) {
+      this.log(`\u7121\u6CD5\u901A\u77E5\u5176\u4ED6\u88DD\u7F6E\uFF1A${describeError(error)}`);
+    }
+  }
+};
+function describeLiveSync(status, formatTime) {
+  const parts = [];
+  switch (status.state) {
+    case "stopped":
+      parts.push("\u672A\u555F\u52D5\u3002");
+      break;
+    case "connecting":
+      parts.push("\u9023\u7DDA\u4E2D\u2026");
+      break;
+    case "connected":
+      parts.push("\u5DF2\u9023\u7DDA\uFF0C\u7B49\u5F85\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\u3002");
+      break;
+    case "retrying":
+      parts.push(`\u9023\u7DDA\u4E2D\u65B7\uFF0C\u7A0D\u5F8C\u81EA\u52D5\u91CD\u8A66${status.error ? `\uFF08${status.error}\uFF09` : ""}\u3002`);
+      break;
+    case "unsupported":
+      parts.push(
+        `\u76EE\u524D\u7121\u6CD5\u4F7F\u7528${status.error ? `\uFF08${status.error}\uFF09` : ""}\uFF1A\u4F3A\u670D\u5668\u53EF\u80FD\u662F\u820A\u7248\u6216\u5C1A\u672A\u8A2D\u5B9A\u5132\u5B58\u6876\uFF0C10 \u5206\u9418\u5F8C\u518D\u8A66\u3002`
+      );
+      break;
+  }
+  if (status.lastRemoteChangeAt !== null) parts.push(`\u4E0A\u6B21\u6536\u5230\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\uFF1A${formatTime(status.lastRemoteChangeAt)}\u3002`);
+  if (status.lastReportAt !== null) parts.push(`\u4E0A\u6B21\u901A\u77E5\u5176\u4ED6\u88DD\u7F6E\uFF1A${formatTime(status.lastReportAt)}\u3002`);
+  if (status.remotelySaveUnavailable) parts.push("\u9019\u53F0\u88DD\u7F6E\u5C1A\u672A\u555F\u7528 Remotely Save\uFF0C\u7121\u6CD5\u81EA\u52D5\u540C\u6B65\u3002");
+  return parts.join("");
+}
+
 // src/setup-modals.ts
 var import_obsidian2 = require("obsidian");
 var import_qrcode = __toESM(require_browser());
@@ -3150,7 +3500,7 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
     contentEl.empty();
     contentEl.createEl("h4", { text: "\u9019\u53F0\u88DD\u7F6E" });
     contentEl.createEl("p", {
-      text: "\u628A\u4F3A\u670D\u5668\u7684\u5132\u5B58\u6876\u8A2D\u5B9A\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E\u7684 Remotely Save\uFF1AS3 \u9023\u7DDA\u3001\u555F\u52D5 10 \u79D2\u5F8C\u540C\u6B65\u4E00\u6B21\u3001\u6BCF 5 \u5206\u9418\u81EA\u52D5\u540C\u6B65\u3001\u5132\u5B58\u6642\u540C\u6B65\u3002Remotely Save \u7684\u5176\u4ED6\u8A2D\u5B9A\uFF08\u4F8B\u5982\u52A0\u5BC6\u5BC6\u78BC\uFF0C\u8ACB\u4FDD\u6301\u7A7A\u767D\uFF09\u4E0D\u6703\u8B8A\u66F4\u3002"
+      text: "\u628A\u4F3A\u670D\u5668\u7684\u5132\u5B58\u6876\u8A2D\u5B9A\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E\u7684 Remotely Save\uFF1AS3 \u9023\u7DDA\u3001\u555F\u52D5 10 \u79D2\u5F8C\u540C\u6B65\u4E00\u6B21\u3001\u6BCF\u5206\u9418\u81EA\u52D5\u540C\u6B65\u3001\u5132\u5B58\u6642\u540C\u6B65\u3002Remotely Save \u7684\u5176\u4ED6\u8A2D\u5B9A\uFF08\u4F8B\u5982\u52A0\u5BC6\u5BC6\u78BC\uFF0C\u8ACB\u4FDD\u6301\u7A7A\u767D\uFF09\u4E0D\u6703\u8B8A\u66F4\u3002"
     });
     if (isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false) {
       contentEl.createEl("p", {
@@ -3454,6 +3804,8 @@ function describeUpdateError(error) {
 var LOG_PREFIX = "[LocalOCR Sync]";
 var STARTUP_SYNC_DELAY_MS = 5e3;
 var UPDATE_STARTUP_DELAY_MS = 2e4;
+var LIVE_SYNC_RESTART_DELAY_MS = 2e3;
+var CLIENT_ID_STORAGE_KEY = "localocr-sync-client-id";
 var obsidianDownload = async ({ url, headers }) => {
   const response = await (0, import_obsidian3.requestUrl)({ url, headers, throw: false });
   let text = "";
@@ -3508,6 +3860,12 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
     /** localocr_id → file, built lazily from the metadata cache once per sync. */
     this.frontmatterIndex = null;
     this.requestSave = (0, import_obsidian3.debounce)(() => void this.savePluginData(), 1e3, true);
+    /** 即時同步 (null while off or not configured) and the server URL + API key it runs with. */
+    this.liveSync = null;
+    this.liveSyncKey = "";
+    /** Used when localStorage is unavailable. */
+    this.sessionClientId = null;
+    this.refreshLiveSyncSoon = (0, import_obsidian3.debounce)(() => this.refreshLiveSync(), LIVE_SYNC_RESTART_DELAY_MS, true);
   }
   async onload() {
     await this.loadPluginData();
@@ -3547,6 +3905,14 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.onFileRenamed(file, oldPath)));
     this.registerEvent(this.app.vault.on("delete", (file) => this.onFileDeleted(file)));
     this.app.workspace.onLayoutReady(() => {
+      const onFileChanged = (file) => {
+        if (file instanceof import_obsidian3.TFile) this.noteLocalChange([file.path]);
+      };
+      this.registerEvent(this.app.vault.on("create", onFileChanged));
+      this.registerEvent(this.app.vault.on("modify", onFileChanged));
+      this.registerEvent(this.app.vault.on("delete", (file) => this.noteLocalChange([file.path])));
+      this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.noteLocalChange([oldPath, file.path])));
+      this.refreshLiveSync();
       this.updateTimer = window.setTimeout(() => {
         this.updateTimer = null;
         void this.checkForUpdates({ manual: false });
@@ -3562,11 +3928,15 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
     });
   }
   onunload() {
+    var _a;
     this.unloaded = true;
     this.requestSave.run();
     if (this.startupTimer !== null) window.clearTimeout(this.startupTimer);
     if (this.updateTimer !== null) window.clearTimeout(this.updateTimer);
     if (this.autoSyncTimer !== null) window.clearInterval(this.autoSyncTimer);
+    this.refreshLiveSyncSoon.cancel();
+    (_a = this.liveSync) == null ? void 0 : _a.stop();
+    this.liveSync = null;
   }
   // -------------------------------------------------------------------------
   // Persistence
@@ -3593,6 +3963,7 @@ var LocalOcrSyncPlugin = class extends import_obsidian3.Plugin {
   }
   async saveSettings() {
     await this.savePluginData();
+    this.refreshLiveSyncSoon();
   }
   // -------------------------------------------------------------------------
   // Public actions (commands, settings tab)
@@ -3659,6 +4030,64 @@ ${describeError(error)}`, 1e4);
     } catch (error) {
       new import_obsidian3.Notice(`LocalOCR\uFF1A\u4F3A\u670D\u5668\u53EF\u9023\u7DDA\uFF0C\u4F46\u8B80\u53D6\u6A23\u677F\u5931\u6557
 ${describeError(error)}`, 1e4);
+    }
+  }
+  // -------------------------------------------------------------------------
+  // 即時同步 (see live-sync.ts)
+  /** Starts, restarts (server URL or API key changed) or stops 即時同步 to match the settings. */
+  refreshLiveSync() {
+    var _a;
+    const wanted = !this.unloaded && this.settings.liveSync && this.isConfigured();
+    const key = wanted ? `${normalizeServerUrl(this.settings.serverUrl)}
+${this.settings.apiKey}` : "";
+    if (this.liveSync && key === this.liveSyncKey) return;
+    (_a = this.liveSync) == null ? void 0 : _a.stop();
+    this.liveSync = null;
+    this.liveSyncKey = key;
+    if (!wanted) return;
+    this.liveSync = new LiveSync({
+      client: this.createClient(),
+      clientId: this.deviceClientId(),
+      configDir: this.app.vault.configDir,
+      syncRemote: () => startRemotelySaveSync(this.app),
+      log: (message) => console.info(LOG_PREFIX, message)
+    });
+    this.liveSync.start();
+  }
+  /** One line for the settings tab. */
+  liveSyncStatusText() {
+    if (!this.settings.liveSync) return "\u5DF2\u95DC\u9589\u3002";
+    if (!this.isConfigured()) return "\u8ACB\u5148\u586B\u5165\u4F3A\u670D\u5668\u7DB2\u5740\u8207 API \u91D1\u9470\u3002";
+    if (!this.liveSync) return "\u555F\u52D5\u4E2D\u2026";
+    const status = this.liveSync.status;
+    const remotelySaveMissing = isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false;
+    return describeLiveSync(
+      { ...status, remotelySaveUnavailable: status.remotelySaveUnavailable || remotelySaveMissing },
+      (ms) => formatDateTime(new Date(ms).toISOString())
+    );
+  }
+  /** A vault file or folder changed here; this plugin's own scan sync writes are not reported. */
+  noteLocalChange(paths) {
+    if (!this.liveSync || this.syncing) return;
+    this.liveSync.noteLocalChange(paths);
+  }
+  /**
+   * This device's X-LocalOCR-Client, kept in this device's localStorage for the vault rather than in data.json:
+   * Remotely Save can sync the config folder, and two devices sharing one id would never hear of each other's edits.
+   */
+  deviceClientId() {
+    const app = this.app;
+    const fallbackKey = `${CLIENT_ID_STORAGE_KEY}:${this.app.vault.getName()}`;
+    try {
+      const stored = typeof app.loadLocalStorage === "function" ? app.loadLocalStorage(CLIENT_ID_STORAGE_KEY) : window.localStorage.getItem(fallbackKey);
+      if (isClientId(stored)) return stored;
+      const id = createClientId();
+      if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(CLIENT_ID_STORAGE_KEY, id);
+      else window.localStorage.setItem(fallbackKey, id);
+      return id;
+    } catch (e) {
+      if (this.sessionClientId === null) this.sessionClientId = createClientId();
+      return this.sessionClientId;
     }
   }
   // -------------------------------------------------------------------------

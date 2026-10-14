@@ -30,7 +30,14 @@ import {
 	type HttpFn,
 } from "./sync-core";
 import type { Scan, SyncCursorState, WriteOutcome } from "./types";
-import { createPairingCode, describeSetupError, fetchRemotelySaveSetup } from "./device-setup";
+import {
+	REMOTELY_SAVE_PLUGIN_ID,
+	createPairingCode,
+	describeSetupError,
+	fetchRemotelySaveSetup,
+	isPluginEnabled,
+} from "./device-setup";
+import { LiveSync, createClientId, describeLiveSync, isClientId, startRemotelySaveSync } from "./live-sync";
 import { PairingModal, RemotelySaveModal } from "./setup-modals";
 import {
 	UPDATE_CHECK_INTERVAL_MS,
@@ -71,6 +78,10 @@ interface PluginData {
 const LOG_PREFIX = "[LocalOCR Sync]";
 const STARTUP_SYNC_DELAY_MS = 5_000;
 const UPDATE_STARTUP_DELAY_MS = 20_000;
+/** Server URL / API key edits restart 即時同步 this long after the last keystroke. */
+const LIVE_SYNC_RESTART_DELAY_MS = 2_000;
+/** localStorage key of this device's X-LocalOCR-Client. */
+const CLIENT_ID_STORAGE_KEY = "localocr-sync-client-id";
 
 /** Obsidian's plugin manager (internal API: the same calls BRAT uses to reload an updated plugin). */
 interface PluginManager {
@@ -138,6 +149,12 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	/** localocr_id → file, built lazily from the metadata cache once per sync. */
 	private frontmatterIndex: Map<string, TFile> | null = null;
 	private readonly requestSave = debounce(() => void this.savePluginData(), 1000, true);
+	/** 即時同步 (null while off or not configured) and the server URL + API key it runs with. */
+	private liveSync: LiveSync | null = null;
+	private liveSyncKey = "";
+	/** Used when localStorage is unavailable. */
+	private sessionClientId: string | null = null;
+	private readonly refreshLiveSyncSoon = debounce(() => this.refreshLiveSync(), LIVE_SYNC_RESTART_DELAY_MS, true);
 
 	async onload(): Promise<void> {
 		await this.loadPluginData();
@@ -183,6 +200,16 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("delete", (file) => this.onFileDeleted(file)));
 
 		this.app.workspace.onLayoutReady(() => {
+			// After layout ready: while the vault loads, Obsidian fires "create" for every existing file.
+			const onFileChanged = (file: TAbstractFile) => {
+				if (file instanceof TFile) this.noteLocalChange([file.path]);
+			};
+			this.registerEvent(this.app.vault.on("create", onFileChanged));
+			this.registerEvent(this.app.vault.on("modify", onFileChanged));
+			this.registerEvent(this.app.vault.on("delete", (file) => this.noteLocalChange([file.path])));
+			this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.noteLocalChange([oldPath, file.path])));
+			this.refreshLiveSync();
+
 			this.updateTimer = window.setTimeout(() => {
 				this.updateTimer = null;
 				void this.checkForUpdates({ manual: false });
@@ -205,6 +232,9 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		if (this.startupTimer !== null) window.clearTimeout(this.startupTimer);
 		if (this.updateTimer !== null) window.clearTimeout(this.updateTimer);
 		if (this.autoSyncTimer !== null) window.clearInterval(this.autoSyncTimer);
+		this.refreshLiveSyncSoon.cancel();
+		this.liveSync?.stop();
+		this.liveSync = null;
 	}
 
 	// -------------------------------------------------------------------------
@@ -234,6 +264,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.savePluginData();
+		this.refreshLiveSyncSoon();
 	}
 
 	// -------------------------------------------------------------------------
@@ -304,6 +335,74 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			);
 		} catch (error) {
 			new Notice(`LocalOCR：伺服器可連線，但讀取樣板失敗\n${describeError(error)}`, 10_000);
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// 即時同步 (see live-sync.ts)
+
+	/** Starts, restarts (server URL or API key changed) or stops 即時同步 to match the settings. */
+	refreshLiveSync(): void {
+		const wanted = !this.unloaded && this.settings.liveSync && this.isConfigured();
+		const key = wanted ? `${normalizeServerUrl(this.settings.serverUrl)}\n${this.settings.apiKey}` : "";
+		if (this.liveSync && key === this.liveSyncKey) return;
+		this.liveSync?.stop();
+		this.liveSync = null;
+		this.liveSyncKey = key;
+		if (!wanted) return;
+		this.liveSync = new LiveSync({
+			client: this.createClient(),
+			clientId: this.deviceClientId(),
+			configDir: this.app.vault.configDir,
+			syncRemote: () => startRemotelySaveSync(this.app),
+			log: (message) => console.info(LOG_PREFIX, message),
+		});
+		this.liveSync.start();
+	}
+
+	/** One line for the settings tab. */
+	liveSyncStatusText(): string {
+		if (!this.settings.liveSync) return "已關閉。";
+		if (!this.isConfigured()) return "請先填入伺服器網址與 API 金鑰。";
+		if (!this.liveSync) return "啟動中…";
+		const status = this.liveSync.status;
+		const remotelySaveMissing = isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false;
+		return describeLiveSync(
+			{ ...status, remotelySaveUnavailable: status.remotelySaveUnavailable || remotelySaveMissing },
+			(ms) => formatDateTime(new Date(ms).toISOString()),
+		);
+	}
+
+	/** A vault file or folder changed here; this plugin's own scan sync writes are not reported. */
+	private noteLocalChange(paths: string[]): void {
+		if (!this.liveSync || this.syncing) return;
+		this.liveSync.noteLocalChange(paths);
+	}
+
+	/**
+	 * This device's X-LocalOCR-Client, kept in this device's localStorage for the vault rather than in data.json:
+	 * Remotely Save can sync the config folder, and two devices sharing one id would never hear of each other's edits.
+	 */
+	private deviceClientId(): string {
+		const app = this.app as unknown as {
+			loadLocalStorage?: (key: string) => unknown;
+			saveLocalStorage?: (key: string, value: unknown) => void;
+		};
+		const fallbackKey = `${CLIENT_ID_STORAGE_KEY}:${this.app.vault.getName()}`;
+		try {
+			// App.loadLocalStorage is per vault (Obsidian 1.8.7+); older versions share window.localStorage across vaults.
+			const stored =
+				typeof app.loadLocalStorage === "function"
+					? app.loadLocalStorage(CLIENT_ID_STORAGE_KEY)
+					: window.localStorage.getItem(fallbackKey);
+			if (isClientId(stored)) return stored;
+			const id = createClientId();
+			if (typeof app.saveLocalStorage === "function") app.saveLocalStorage(CLIENT_ID_STORAGE_KEY, id);
+			else window.localStorage.setItem(fallbackKey, id);
+			return id;
+		} catch {
+			if (this.sessionClientId === null) this.sessionClientId = createClientId();
+			return this.sessionClientId;
 		}
 	}
 

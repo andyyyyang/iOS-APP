@@ -5,6 +5,7 @@ import type { VaultConfig } from "../config.js";
 import { mcpRouter } from "../mcp/route.js";
 import { createServices } from "../services/index.js";
 import type { ObsidianPluginService } from "../services/obsidian-plugin.js";
+import type { VaultChangeFeed } from "../services/vault-changes.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { VERSION } from "../version.js";
@@ -28,6 +29,8 @@ export interface AppOptions {
   vault?: VaultStore | null;
   /** The bucket credentials behind `vault`, for GET /v1/vault/remotely-save (503 when null or omitted). */
   vaultConfig?: VaultConfig | null;
+  /** Change log behind GET /v1/vault/changes (index.ts passes the one it closes on shutdown); omitted = a new one. */
+  vaultChanges?: VaultChangeFeed;
   /** PUBLIC_URL (no trailing slash) for pairing links and plugin file URLs; omitted = the request's scheme and host. */
   publicUrl?: string;
   /** Mirror of the Obsidian plugin's releases (index.ts passes the one it schedules); omitted = built over store and vault. */
@@ -46,11 +49,12 @@ export function createApp({
   apiKeys,
   vault = null,
   vaultConfig = null,
+  vaultChanges,
   publicUrl,
   obsidianPlugin,
   now = Date.now,
 }: AppOptions): Express {
-  const services = createServices({ store, classifier, vault, vaultConfig, obsidianPlugin, now });
+  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, now });
   const auth = requireApiKey(apiKeys);
   const app = express();
 

@@ -17,6 +17,7 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 - **自動同步**：預設每 15 分鐘一次，也可以用指令、左側功能區圖示或點狀態列手動同步。
 - **一鍵配對 iPhone／iPad**：產生配對碼與 QR Code，LocalOCR App 掃描後就取得伺服器網址與 API 金鑰，不必手動輸入。
 - **一鍵設定 Remotely Save**：從伺服器取得 Obsidian 儲存桶的設定，套用到這台裝置的 Remotely Save，或用 QR Code 套用到 iPhone／iPad 的 Obsidian。
+- **即時同步**：iPad 或其他裝置修改筆記後，幾秒內自動執行 Remotely Save 同步；在這台裝置修改的筆記上傳後，也會通知其他裝置（見下方「即時同步」）。
 - **線上更新**：自動從你的 Railway 伺服器下載新版本、比對 SHA-256 後安裝（伺服器沒有可用版本時改用 GitHub），不必手動複製檔案。
 - 使用 Obsidian 的 `requestUrl` 連線，沒有 CORS 問題，**桌面版與行動版（iOS／Android）都能用**。
 
@@ -94,13 +95,23 @@ App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**
 
 ## 設定 Remotely Save
 
-指令或設定頁按鈕「設定 Remotely Save（同步 vault）」會呼叫 `GET /v1/vault/remotely-save?vault=<目前保險庫名稱>`，取得伺服器儲存桶的 Remotely Save 設定（S3 連線、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步），然後顯示：
+指令或設定頁按鈕「設定 Remotely Save（同步 vault）」會呼叫 `GET /v1/vault/remotely-save?vault=<目前保險庫名稱>`，取得伺服器儲存桶的 Remotely Save 設定（S3 連線、啟動 10 秒後同步一次、每分鐘自動同步、儲存時同步），然後顯示：
 
 - 「**套用到這台裝置**」：開啟 `obsidian://remotely-save?func=settings&…`，由 Remotely Save 自己匯入設定（需已安裝並啟用 Remotely Save；未啟用時會提示）。看到 Remotely Save 的匯入通知後**重新啟動 Obsidian**，自動同步排程才會生效。
 - 同一個網址的 **QR Code**：在 iPhone／iPad 用相機掃描，即可在那台裝置的 Obsidian 套用同樣設定（需先安裝 Remotely Save，且那台裝置的保險庫名稱必須相同，Remotely Save 會拒絕套用到名稱不同的保險庫）。
 
 匯入只會取代 Remotely Save 的 S3 設定、同步排程等列出的項目，其他設定（例如加密密碼，請保持空白）不變。**QR Code 含有儲存桶的存取金鑰，請勿截圖或分享。**
 伺服器未設定 `VAULT_S3_*` 時會顯示「伺服器尚未設定 Obsidian 儲存桶」。完整步驟見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
+
+## 即時同步
+
+Remotely Save 直接同步儲存桶，本身不知道其他裝置何時修改了筆記，只能定時同步。插件設定「裝置設定 → 即時同步」開啟時（預設開啟，需已填伺服器網址與 API 金鑰）：
+
+- 插件持續等待伺服器的變更通知（`GET /v1/vault/changes?since=…&wait=25`，見 [`../docs/API.md`](../docs/API.md) 的「變更通知（即時同步）」）。iPad App、Claude（MCP）或其他 Obsidian 裝置修改後，約 1 秒內執行這台裝置的 Remotely Save 同步（與 Remotely Save 的定時同步相同的方式，不會跳出進度通知；Remotely Save 正在同步時，等它完成後再執行一次）。
+- 在這台裝置新增、修改、刪除或改名筆記後（最後一次修改 8 秒後，Remotely Save 的儲存時同步已上傳），以 `POST /v1/vault/changes` 通知 iPad 與其他裝置。`.obsidian` 等 `.` 開頭的檔案、插件自己同步掃描時寫入的筆記，以及即時同步觸發的 Remotely Save 下載（20 秒內）都不會回報。
+- 每台裝置有自己的代碼（`X-LocalOCR-Client: obsidian-…`，存在這台裝置的 localStorage，不在 `data.json`，以免 Remotely Save 同步設定資料夾時多台裝置共用），自己的修改不會再通知自己。
+- 連線失敗時依 5 秒、15 秒、60 秒逐步重試；伺服器是舊版（沒有這個端點）、未設定儲存桶或 API 金鑰無效時每 10 分鐘重試一次，不會跳出通知。設定頁顯示目前狀態。
+- 這台裝置需已安裝並啟用 Remotely Save。
 
 ## 筆記格式
 

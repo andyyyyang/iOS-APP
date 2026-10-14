@@ -345,6 +345,7 @@ export class ObsidianPluginService {
     return body;
   }
 
+  /** Not recorded in the vault change feed (GET /v1/vault/changes): no client syncs the .localocr/ dot folder. */
   private async put(vault: VaultStore, version: string, name: PluginFileName, body: Buffer): Promise<void> {
     await vault.write(pluginPath(version, name), body, { mtime: this.now(), contentType: PLUGIN_CONTENT_TYPES[name] });
   }

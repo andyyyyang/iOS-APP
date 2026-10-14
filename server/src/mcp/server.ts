@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AppError, toErrorBody } from "../errors.js";
 import { MAX_TEMPLATE_RULES } from "../schemas.js";
 import type { Services } from "../services/index.js";
+import { MCP_CLIENT_ID } from "../services/vault-changes.js";
 import type { Scan } from "../types.js";
 import { contentTypeFor } from "../vault/paths.js";
 import type { VaultFile } from "../vault/types.js";
@@ -328,6 +329,7 @@ export function createMcpServer(services: Services): McpServer {
         const { value, created } = await services.vault.write(path, Buffer.from(content, "utf8"), {
           ifMatch,
           ifNoneMatch: createOnly || !ifMatch ? "*" : undefined,
+          client: MCP_CLIENT_ID, // the change feed tells the iPad and Obsidian devices about it
         });
         return { ...value, created };
       }),

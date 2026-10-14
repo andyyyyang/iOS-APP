@@ -32,6 +32,8 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/vault/files?prefix=&recursive=` | 列出 vault 檔案 `{"items":[{"path","size","mtime","etag"}],"folders":[...]}`（`folders` 只在非遞迴時回傳） |
 | `GET`／`PUT`／`DELETE /v1/vault/file?path=` | 下載／上傳（原始位元組，最多 25 MB；`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`）／刪除單一檔案 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
+| `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，`wait` 最多 25 秒）：經伺服器的寫入／刪除與裝置回報的變更 `{"cursor","reset","changes":[{"seq","path","op","client","at"}]}`；`X-LocalOCR-Client` 標頭相同的變更不列出 |
+| `POST /v1/vault/changes` | 回報裝置自己上傳到儲存桶的檔案 `{"paths"?:[...]}` → 202 `{"cursor"}`（Obsidian 插件在 Remotely Save 上傳後呼叫） |
 | `GET /v1/vault/remotely-save?vault=` | Remotely Save 的 S3 設定（含儲存桶金鑰）與匯入用的 `obsidian://remotely-save?…` 網址 `{"settings":{...},"uri":"..."}`；未設定 vault 時 503 `vault_not_configured` |
 | `POST /v1/pairing` | 建立配對碼（`XXXX-XXXX`，10 分鐘、只能用一次）：`{"vaultName"?,"notesFolder"?}` → 201 `{"code","expiresAt","pairUrl"}` |
 | `POST /pair` | **不需要金鑰**：`{"code":"XXXX-XXXX"}` → `{"apiKey","vaultName","notesFolder"}`；無效／過期／已用過 404 `invalid_code`；每個 IP 每 10 分鐘最多 10 次，超過 429 `rate_limited` |

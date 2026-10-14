@@ -1,5 +1,14 @@
-import { MAX_TEMPLATE_RULES, MAX_VAULT_SEARCH_LIMIT, RULE_TARGET_PATTERN } from "../schemas.js";
+import {
+  MAX_TEMPLATE_RULES,
+  MAX_VAULT_CHANGE_PATHS,
+  MAX_VAULT_CHANGES_WAIT_SECONDS,
+  MAX_VAULT_CLIENT_LENGTH,
+  MAX_VAULT_SEARCH_LIMIT,
+  RULE_TARGET_PATTERN,
+} from "../schemas.js";
 import { PLUGIN_CONTENT_TYPES, PLUGIN_FOLDER } from "../services/obsidian-plugin.js";
+import { MCP_CLIENT_ID, VAULT_CHANGES_CAPACITY, VAULT_CHANGES_MAX_RESPONSE } from "../services/vault-changes.js";
+import { VAULT_CLIENT_HEADER } from "../services/vault.js";
 import { CLASSIFICATION_PROVIDERS, PLUGIN_FILES, SCAN_SOURCES } from "../types.js";
 import { MAX_PATH_BYTES } from "../vault/paths.js";
 import {
@@ -51,6 +60,15 @@ const vaultPrefixParam = {
   schema: { type: "string" },
 };
 const ifMatchHeader = (description: string) => ({ name: "If-Match", in: "header", description, schema: { type: "string" } });
+const vaultClientHeader = {
+  name: VAULT_CLIENT_HEADER,
+  in: "header",
+  description:
+    "Free-form id of the calling device or app (e.g. ipad-3F2A…, obsidian-k3j9…), trimmed; empty = none. " +
+    "Recorded with the change in GET /v1/vault/changes, and changes made with the same id are left out of that client's own feed. " +
+    "Accepted on every /v1/vault request; longer than 100 characters answers 400 invalid_request where it is used.",
+  schema: { type: "string", maxLength: MAX_VAULT_CLIENT_LENGTH },
+};
 const vaultErrors = {
   "400": errorResponse("Invalid path (invalid_path) or parameter (invalid_request)"),
   "401": commonErrors["401"],
@@ -261,6 +279,7 @@ export function buildOpenApi(serverUrl?: string) {
               description: "File mtime in ms since the epoch (default: now)",
               schema: { type: "integer", minimum: 1 },
             },
+            vaultClientHeader,
           ],
           requestBody: { required: false, description: "Raw file bytes", content: { "*/*": { schema: binary } } },
           responses: {
@@ -274,7 +293,7 @@ export function buildOpenApi(serverUrl?: string) {
         delete: {
           operationId: "deleteVaultFile",
           summary: "Delete a vault file",
-          parameters: [ifMatchHeader("Etag from a previous read; 412 if the file no longer matches")],
+          parameters: [ifMatchHeader("Etag from a previous read; 412 if the file no longer matches"), vaultClientHeader],
           responses: {
             "204": { description: "Deleted" },
             ...vaultErrors,
@@ -296,6 +315,62 @@ export function buildOpenApi(serverUrl?: string) {
             { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: MAX_VAULT_SEARCH_LIMIT, default: 20 } },
           ],
           responses: { "200": response(ref("VaultSearchResult")), ...vaultErrors },
+        },
+      },
+      "/v1/vault/changes": {
+        get: {
+          operationId: "getVaultChanges",
+          summary: "Changes to vault files made through this server or reported by devices (long poll)",
+          description:
+            `An in-memory log of the last ${VAULT_CHANGES_CAPACITY} changes: every write and delete made through /v1/vault and the MCP ` +
+            `vault tools (client "${MCP_CLIENT_ID}"), plus "external" reports from devices that upload to the bucket themselves ` +
+            "(POST /v1/vault/changes). A move is a delete plus a write. Changes Remotely Save makes directly in the bucket are only " +
+            'known when a device reports them. cursor is "<epoch>:<seq>"; the epoch changes when the server restarts. ' +
+            "Without since: the current cursor, no changes. A malformed cursor, one from another epoch, or one older than the " +
+            "oldest kept change: reset true (reload everything you show), no changes. Otherwise the changes after since whose " +
+            "client differs from this request's X-LocalOCR-Client (null-client changes always count; without the header nothing " +
+            "is left out). When there are none and wait > 0 the request is held until one arrives or wait seconds pass (then no " +
+            `changes). More than ${VAULT_CHANGES_MAX_RESPONSE} changes answer reset true. The returned cursor is always the latest seq, ` +
+            "including your own changes, so pass it back as since.",
+          parameters: [
+            {
+              name: "since",
+              in: "query",
+              description: "Cursor from a previous response",
+              schema: { type: "string", examples: ["9f3c2a1b7d4e:42"] },
+            },
+            {
+              name: "wait",
+              in: "query",
+              description: `Seconds to wait for a change when there is none yet; clamped to 0–${MAX_VAULT_CHANGES_WAIT_SECONDS}`,
+              schema: { type: "number", minimum: 0, maximum: MAX_VAULT_CHANGES_WAIT_SECONDS, default: 0 },
+            },
+            vaultClientHeader,
+          ],
+          responses: {
+            "200": { description: "OK", headers: noStoreHeader, ...json(ref("VaultChanges")) },
+            "400": errorResponse("wait is not a number, or X-LocalOCR-Client is too long (invalid_request)"),
+            "401": commonErrors["401"],
+            "503": vaultErrors["503"],
+          },
+        },
+        post: {
+          operationId: "reportVaultChanges",
+          summary: "Report files this device uploaded to the bucket itself (e.g. by Remotely Save)",
+          description:
+            `Records one "external" change per path (duplicates merged), or a single one with path null when paths is missing ` +
+            "or empty, under this request's X-LocalOCR-Client, and wakes the other clients' long polls.",
+          parameters: [vaultClientHeader],
+          requestBody: { required: false, ...json(ref("VaultChangesReport")) },
+          responses: {
+            "202": response(ref("VaultChangesCursor"), "Recorded"),
+            "400": errorResponse(
+              `A path is invalid (invalid_path), more than ${MAX_VAULT_CHANGE_PATHS} paths or a bad X-LocalOCR-Client (invalid_request), ` +
+                "or bad JSON (invalid_json)",
+            ),
+            "401": commonErrors["401"],
+            "503": vaultErrors["503"],
+          },
         },
       },
       "/v1/pairing": {
@@ -656,6 +731,49 @@ export function buildOpenApi(serverUrl?: string) {
             },
           },
         },
+        VaultChange: {
+          type: "object",
+          required: ["seq", "path", "op", "client", "at"],
+          properties: {
+            seq: { type: "integer", minimum: 1 },
+            path: { type: ["string", "null"], description: "Relative to the vault root; null for an external report without paths" },
+            op: {
+              type: "string",
+              enum: ["write", "delete", "external"],
+              description: "external = a device uploaded the file to the bucket itself (it may be a write or a delete)",
+            },
+            client: {
+              type: ["string", "null"],
+              description: `X-LocalOCR-Client of the request that made it, "${MCP_CLIENT_ID}" for MCP tools, null when unknown`,
+            },
+            at: { type: "string", format: "date-time" },
+          },
+        },
+        VaultChanges: {
+          type: "object",
+          required: ["cursor", "reset", "changes"],
+          properties: {
+            cursor: { type: "string", description: '"<epoch>:<latest seq>"; send it back as since' },
+            reset: { type: "boolean", description: "The changes since since cannot be listed: reload everything you show" },
+            changes: { type: "array", maxItems: VAULT_CHANGES_MAX_RESPONSE, items: ref("VaultChange") },
+          },
+        },
+        VaultChangesReport: {
+          type: "object",
+          properties: {
+            paths: {
+              type: "array",
+              maxItems: MAX_VAULT_CHANGE_PATHS,
+              items: { type: "string", maxLength: MAX_PATH_BYTES },
+              description: "Vault-relative files that changed (same rules as the path parameter)",
+            },
+          },
+        },
+        VaultChangesCursor: {
+          type: "object",
+          required: ["cursor"],
+          properties: { cursor: { type: "string", description: "The cursor after the recorded changes" } },
+        },
         PairingCreateRequest: {
           type: "object",
           properties: {
@@ -747,7 +865,7 @@ export function buildOpenApi(serverUrl?: string) {
                 bypassCorsLocally: { type: "boolean", const: true },
               },
             },
-            autoRunEveryMilliseconds: { type: "integer", const: REMOTELY_SAVE_AUTO_RUN_MS, description: "Schedule For Auto Run: every 5 minutes" },
+            autoRunEveryMilliseconds: { type: "integer", const: REMOTELY_SAVE_AUTO_RUN_MS, description: "Schedule For Auto Run: every 1 minute" },
             initRunAfterMilliseconds: {
               type: "integer",
               const: REMOTELY_SAVE_INIT_RUN_MS,

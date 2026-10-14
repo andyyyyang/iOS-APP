@@ -1,107 +1,23 @@
 import SwiftUI
 import UIKit
 
-/// Markdown 原始碼的即時樣式：標題、粗體、斜體、程式碼、連結、待辦、標籤、引用、屬性。
-/// 文字本身完全不變（仍是 Markdown），只改顯示的字型與顏色。
-enum MarkdownHighlighter {
-    private static let rules: [(pattern: NSRegularExpression, style: Style)] = {
-        func regex(_ pattern: String, _ options: NSRegularExpression.Options = [.anchorsMatchLines]) -> NSRegularExpression {
-            // 樣式規則是固定字串，編譯失敗代表程式錯誤
-            try! NSRegularExpression(pattern: pattern, options: options)
-        }
-        return [
-            (regex(#"^(#{1,6})\s.*$"#), .heading),
-            (regex(#"^\s*[-*+]\s\[[xX]\]\s.*$"#), .doneTask),
-            (regex(#"^\s*[-*+]\s\[\s\]"#), .taskMarker),
-            (regex(#"^\s*([-*+]|\d+\.)\s"#), .listMarker),
-            (regex(#"^>.*$"#), .quote),
-            (regex(#"\*\*[^*\n]+\*\*"#), .bold),
-            (regex(#"(?<![*\w])\*[^*\n]+\*(?![*\w])|(?<![_\w])_[^_\n]+_(?![_\w])"#), .italic),
-            (regex(#"==[^=\n]+=="#), .highlight),
-            (regex(#"`[^`\n]+`"#), .code),
-            (regex(#"!?\[\[[^\]\n]+\]\]|\[[^\]\n]+\]\([^)\n]+\)"#), .link),
-            (regex(#"(?<![^\s])#[^\s#\d][^\s#]*"#), .tag),
-            (regex(#"^```[\s\S]*?^```"#, [.anchorsMatchLines]), .codeBlock),
-            (regex(#"\A---\n[\s\S]*?\n---"#, []), .frontmatter),
-        ]
-    }()
-
-    enum Style {
-        case heading, doneTask, taskMarker, listMarker, quote, bold, italic, highlight, code, link, tag, codeBlock, frontmatter
-    }
-
-    static var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: .body) }
-    /// 連結與標籤的顏色。
-    static let accent = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x9DAEFF) : UIColor(hex: 0x3D5BD9) }
-    /// 清單符號與待辦方框（灰色）。
-    static let marker = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x8A8A94) : UIColor(hex: 0x8A8A94) }
-    /// 游標與選取（黑色；深色模式為白色）。
-    static let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xF2F2F4) : UIColor(hex: 0x111113) }
-
-    static func apply(to storage: NSTextStorage) {
-        let text = storage.string as NSString
-        let full = NSRange(location: 0, length: text.length)
-        let body = bodyFont
-        storage.beginEditing()
-        storage.setAttributes([.font: body, .foregroundColor: UIColor.label], range: full)
-        for (pattern, style) in rules {
-            for match in pattern.matches(in: storage.string, range: full) {
-                apply(style, match: match, text: text, storage: storage, body: body)
-            }
-        }
-        storage.endEditing()
-    }
-
-    private static func apply(_ style: Style, match: NSTextCheckingResult, text: NSString, storage: NSTextStorage, body: UIFont) {
-        let range = match.range
-        switch style {
-        case .heading:
-            let level = match.range(at: 1).length
-            let sizes: [UIFont.TextStyle] = [.title1, .title2, .title3, .headline, .headline, .headline]
-            let font = UIFont.preferredFont(forTextStyle: sizes[min(level, 6) - 1])
-            storage.addAttribute(.font, value: font.withTraits(.traitBold), range: range)
-            storage.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: match.range(at: 1))
-        case .doneTask:
-            storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
-            storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
-        case .taskMarker:
-            storage.addAttribute(.foregroundColor, value: marker, range: range)
-        case .listMarker:
-            storage.addAttribute(.foregroundColor, value: marker, range: range)
-        case .quote:
-            storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
-        case .bold:
-            storage.addAttribute(.font, value: body.withTraits(.traitBold), range: range)
-        case .italic:
-            storage.addAttribute(.font, value: body.withTraits(.traitItalic), range: range)
-        case .highlight:
-            storage.addAttribute(.backgroundColor, value: UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x3D3418) : UIColor(hex: 0xFCF0C8) }, range: range)
-        case .code, .codeBlock:
-            storage.addAttribute(.font, value: UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.92, weight: .regular), range: range)
-            storage.addAttribute(.backgroundColor, value: UIColor.secondarySystemFill, range: range)
-        case .link, .tag:
-            storage.addAttribute(.foregroundColor, value: accent, range: range)
-        case .frontmatter:
-            storage.addAttribute(.font, value: UIFont.preferredFont(forTextStyle: .footnote), range: range)
-            storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
-        }
-    }
+/// 點一下會有動作的東西：待辦方框、連結、[[連結]]、內嵌圖片。
+enum MarkdownTapTarget: Equatable {
+    case checkbox(NSRange)
+    case link(String)
+    case wikiLink(String)
+    case image(String)
 }
 
-private extension UIFont {
-    func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
-        guard let descriptor = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits)) else { return self }
-        return UIFont(descriptor: descriptor, size: pointSize)
-    }
-}
-
-/// 讓 SwiftUI 對編輯器下指令（插入內容、加上格式）。
+/// 讓 SwiftUI 對編輯器下指令（插入內容、加上格式、AI 修改後取代文字）。
 @MainActor
 final class MarkdownEditorController {
-    fileprivate weak var textView: UITextView?
+    fileprivate weak var textView: NoteTextView?
     fileprivate var onTextChange: ((String) -> Void)?
+    fileprivate var restyle: (() -> Void)?
 
     var cursorLocation: Int { textView?.selectedRange.location ?? 0 }
+    var selectedRange: NSRange { textView?.selectedRange ?? NSRange(location: 0, length: 0) }
 
     /// 在游標所在處插入一個獨立的一行（例如內嵌的手寫區塊或照片）。
     func insertBlock(_ snippet: String) {
@@ -110,14 +26,13 @@ final class MarkdownEditorController {
         replaceAll(with: result.text, cursor: result.cursor)
     }
 
-    /// 用前後標記包住選取的文字（粗體、斜體…）。
-    func wrapSelection(_ marker: String) {
+    /// 用前後標記包住選取的文字（粗體、斜體、[[連結]]…）。
+    func wrapSelection(_ marker: String, closing: String? = nil) {
         guard let textView else { return }
         let range = textView.selectedRange
         let selected = (textView.text as NSString).substring(with: range)
-        textView.textStorage.replaceCharacters(in: range, with: marker + selected + marker)
+        replace(range: range, with: marker + selected + (closing ?? marker))
         textView.selectedRange = NSRange(location: range.location + (marker as NSString).length, length: range.length)
-        changed()
     }
 
     /// 切換目前這一行的開頭（標題、清單、待辦）。
@@ -135,9 +50,19 @@ final class MarkdownEditorController {
             break
         }
         let newLine = removed == prefix ? stripped : prefix + stripped
-        textView.textStorage.replaceCharacters(in: lineRange, with: newLine)
+        let cursor = textView.selectedRange.location
+        replace(range: lineRange, with: newLine)
         let delta = (newLine as NSString).length - (line as NSString).length
-        textView.selectedRange = NSRange(location: max(lineRange.location, textView.selectedRange.location + delta), length: 0)
+        textView.selectedRange = NSRange(location: max(lineRange.location, cursor + delta), length: 0)
+    }
+
+    /// 取代一段文字（可以復原），例如 AI 修改的結果、點待辦方框。
+    func replace(range: NSRange, with replacement: String) {
+        guard let textView,
+              let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+              let end = textView.position(from: start, offset: range.length),
+              let textRange = textView.textRange(from: start, to: end) else { return }
+        textView.replace(textRange, withText: replacement)
         changed()
     }
 
@@ -145,7 +70,7 @@ final class MarkdownEditorController {
         textView?.becomeFirstResponder()
     }
 
-    /// 捲動到第 `line` 行並把游標放在那裡（右側大綱跳轉）。
+    /// 捲動到第 `line` 行並把游標放在那裡（右側大綱、[[筆記#標題]] 跳轉）。
     func reveal(line: Int) {
         guard let textView else { return }
         let text = textView.text as NSString
@@ -167,35 +92,59 @@ final class MarkdownEditorController {
     private func replaceAll(with text: String, cursor: Int) {
         guard let textView else { return }
         textView.text = text
-        MarkdownHighlighter.apply(to: textView.textStorage)
         textView.selectedRange = NSRange(location: min(cursor, (text as NSString).length), length: 0)
+        changed()
         textView.scrollRangeToVisible(textView.selectedRange)
-        onTextChange?(text)
     }
 
     fileprivate func changed() {
         guard let textView else { return }
-        MarkdownHighlighter.apply(to: textView.textStorage)
-        textView.typingAttributes = [.font: MarkdownHighlighter.bodyFont, .foregroundColor: UIColor.label]
+        restyle?()
         onTextChange?(textView.text)
     }
 }
 
-/// 筆記編輯器的文字區：內容欄與閱讀模式相同（最寬 760、左右 32），切換閱讀／編輯時文字不會移動。
-/// 工作區不隨鍵盤縮放（版面才不會跑來跑去），所以由這裡依鍵盤蓋住的高度加大捲動範圍、讓游標保持可見。
+/// 筆記編輯器的文字區（TextKit 1，方框、圓點、圖片等由 LiveMarkdownLayoutManager 畫出）。
+/// 內容欄最寬 760、左右 32；工作區不隨鍵盤縮放（版面才不會跑來跑去），所以由這裡依鍵盤蓋住的高度加大捲動範圍。
 final class NoteTextView: UITextView {
     static let columnWidth: CGFloat = 760
     static let horizontalPadding: CGFloat = 32
-    /// 與閱讀模式標題和內文之間的距離相同。
+    /// 與標題之間的距離。
     static let topInset: CGFloat = 14
-    static let bottomInset: CGFloat = 140
+    static let bottomInset: CGFloat = 160
+
+    var onTap: ((MarkdownTapTarget) -> Void)?
+    var onWidthChange: (() -> Void)?
 
     private var keyboardOverlap: CGFloat = 0
+    private var lastWidth: CGFloat = 0
+    private var prioritized: Set<ObjectIdentifier> = []
+    private let tapDelegate = TapDelegate()
+    private lazy var interactionTap: UITapGestureRecognizer = {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleInteractionTap(_:)))
+        tap.delegate = tapDelegate
+        return tap
+    }()
+
+    var markdownLayout: LiveMarkdownLayoutManager? { layoutManager as? LiveMarkdownLayoutManager }
+
+    /// 使用 TextKit 1 與自訂的版面管理（才能畫出方框、表格與圖片）。
+    static func make() -> NoteTextView {
+        let storage = NSTextStorage()
+        let layout = LiveMarkdownLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        return NoteTextView(frame: .zero, textContainer: container)
+    }
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         contentInsetAdjustmentBehavior = .never
         self.textContainer.lineFragmentPadding = 0
+        tapDelegate.target = self
+        addGestureRecognizer(interactionTap)
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         center.addObserver(self, selector: #selector(keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification, object: nil)
@@ -212,7 +161,106 @@ final class NoteTextView: UITextView {
         if textContainerInset != insets {
             textContainerInset = insets
         }
+        if abs(bounds.width - lastWidth) > 0.5 {
+            lastWidth = bounds.width
+            onWidthChange?()
+        }
+        prioritizeInteractionTap()
     }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        prioritizeInteractionTap()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        prioritizeInteractionTap()
+        return became
+    }
+
+    /// 點方框、連結時不要移動游標或叫出鍵盤：系統的點擊手勢要等這個手勢確定不處理才動作。
+    private func prioritizeInteractionTap() {
+        for recognizer in gestureRecognizers ?? [] where recognizer !== interactionTap && recognizer is UITapGestureRecognizer {
+            guard prioritized.insert(ObjectIdentifier(recognizer)).inserted else { continue }
+            recognizer.require(toFail: interactionTap)
+        }
+    }
+
+    // MARK: 點擊
+
+    /// 某個位置上會有動作的東西。正在編輯的那一行裡的連結不算（點了是要移動游標）。
+    func tapTarget(at point: CGPoint) -> MarkdownTapTarget? {
+        let storage = textStorage
+        guard storage.length > 0 else { return nil }
+        let inContainer = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
+        var fraction: CGFloat = 0
+        let index = layoutManager.characterIndex(for: inContainer, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        guard index < storage.length else { return nil }
+        let glyph = layoutManager.glyphIndexForCharacter(at: index)
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        guard line.contains(inContainer) else { return nil }
+
+        func hitRect(_ range: NSRange, slop: CGFloat) -> Bool {
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            return layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer).insetBy(dx: -slop, dy: -slop).contains(inContainer)
+        }
+
+        var range = NSRange(location: 0, length: 0)
+        if storage.attribute(.mdCheckbox, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil, hitRect(range, slop: 10) {
+            return .checkbox(range)
+        }
+        // 方框在行首：點在方框左右也算
+        let lineStart = (storage.string as NSString).lineRange(for: NSRange(location: index, length: 0)).location
+        for offset in 0..<min(8, storage.length - lineStart) {
+            let candidate = lineStart + offset
+            if storage.attribute(.mdCheckbox, at: candidate, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil, hitRect(range, slop: 10) {
+                return .checkbox(range)
+            }
+        }
+        if let info = storage.attribute(.mdImage, at: index, effectiveRange: nil) as? MarkdownImageInfo {
+            return .image(info.name)
+        }
+        guard !isEditingLine(containing: index) else { return nil }
+        if let target = storage.attribute(.mdWikiLink, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) as? String, hitRect(range, slop: 4) {
+            return .wikiLink(target)
+        }
+        if let url = storage.attribute(.mdLink, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) as? String, hitRect(range, slop: 4) {
+            return .link(url)
+        }
+        return nil
+    }
+
+    /// 游標或選取範圍是否在這一行（正在編輯、顯示原始語法的行）。
+    private func isEditingLine(containing index: Int) -> Bool {
+        guard isFirstResponder else { return false }
+        let text = textStorage.string as NSString
+        let line = text.lineRange(for: NSRange(location: index, length: 0))
+        let endsWithNewline = line.length > 0 && text.character(at: NSMaxRange(line) - 1) == 0x0A
+        let contentEnd = NSMaxRange(line) - (endsWithNewline ? 1 : 0)
+        let selection = selectedRange
+        return selection.location <= contentEnd && NSMaxRange(selection) >= line.location
+    }
+
+    @objc private func handleInteractionTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended, let target = tapTarget(at: recognizer.location(in: self)) else { return }
+        onTap?(target)
+    }
+
+    private final class TapDelegate: NSObject, UIGestureRecognizerDelegate {
+        weak var target: NoteTextView?
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let target else { return false }
+            return target.tapTarget(at: gestureRecognizer.location(in: target)) != nil
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            !(other is UITapGestureRecognizer)
+        }
+    }
+
+    // MARK: 鍵盤
 
     @objc private func keyboardWillChangeFrame(_ notification: Notification) {
         guard let window, let end = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
@@ -244,20 +292,81 @@ final class NoteTextView: UITextView {
     }
 }
 
-/// Markdown 編輯器（UITextView）：即時樣式、鍵盤上方的格式工具列、系統書寫工具與 Apple Pencil 隨手寫。
+/// 輸入「[[」時鍵盤上方的筆記建議（取代格式工具列）。
+private final class LinkSuggestionBar: UIInputView {
+    private let stack = UIStackView()
+    var onSelect: ((String) -> Void)?
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 46), inputViewStyle: .keyboard)
+        allowsSelfSizing = true
+        let scroll = UIScrollView()
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scroll)
+        scroll.addSubview(stack)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 46),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -10),
+            stack.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(_ suggestions: [MarkdownEditor.LinkSuggestion]) {
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for suggestion in suggestions {
+            var configuration = UIButton.Configuration.gray()
+            configuration.title = suggestion.title
+            configuration.subtitle = suggestion.detail.isEmpty ? nil : suggestion.detail
+            configuration.cornerStyle = .medium
+            configuration.baseForegroundColor = .label
+            configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onSelect?(suggestion.linkText) })
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            stack.addArrangedSubview(button)
+        }
+    }
+}
+
+/// Markdown 筆記編輯器：只有一種模式，打字的同時直接顯示排版後的樣子（游標所在的行顯示原始語法）。
+/// 點待辦方框打勾、點 [[連結]] 開啟筆記、點手寫區塊繼續編輯；輸入「[[」時列出筆記；
+/// 鍵盤上方有格式工具列（AI、手寫、照片）；系統書寫工具與 Apple Pencil 隨手寫照常可用。
 struct MarkdownEditor: UIViewRepresentable {
+    struct LinkSuggestion: Equatable {
+        let title: String
+        let detail: String
+        /// 插入 [[ ]] 中的文字。
+        let linkText: String
+    }
+
     @Binding var text: String
     let controller: MarkdownEditorController
     var onInsertInk: () -> Void
     var onInsertPhoto: () -> Void
+    var onAIEdit: () -> Void
+    var onOpenLink: (MarkdownTapTarget) -> Void
+    var loadImage: (String) async -> UIImage?
+    var resolvesLink: (String) -> Bool
+    var linkSuggestions: (String) -> [LinkSuggestion]
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = NoteTextView()
+    func makeUIView(context: Context) -> NoteTextView {
+        let textView = NoteTextView.make()
         textView.delegate = context.coordinator
-        textView.font = MarkdownHighlighter.bodyFont
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
-        textView.tintColor = MarkdownHighlighter.ink
+        textView.tintColor = LiveMarkdown.Theme.ink
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
         // Markdown 不需要智慧引號與破折號
@@ -265,20 +374,32 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.smartDashesType = .no
         textView.writingToolsBehavior = .complete
         textView.text = text
-        MarkdownHighlighter.apply(to: textView.textStorage)
-        textView.inputAccessoryView = context.coordinator.makeToolbar()
+        textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
+        let coordinator = context.coordinator
+        coordinator.toolbar = coordinator.makeToolbar()
+        textView.inputAccessoryView = coordinator.toolbar
+        textView.onTap = { [weak coordinator] target in coordinator?.handleTap(target) }
+        textView.onWidthChange = { [weak coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.restyle(textView)
+        }
         controller.textView = textView
-        controller.onTextChange = { context.coordinator.parent.text = $0 }
+        controller.onTextChange = { [weak coordinator] in coordinator?.parent.text = $0 }
+        controller.restyle = { [weak coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.restyle(textView)
+        }
+        coordinator.restyle(textView)
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: NoteTextView, context: Context) {
         context.coordinator.parent = self
         if textView.text != text {
             let selection = textView.selectedRange
             textView.text = text
-            MarkdownHighlighter.apply(to: textView.textStorage)
             textView.selectedRange = NSRange(location: min(selection.location, (text as NSString).length), length: 0)
+            context.coordinator.restyle(textView)
         }
     }
 
@@ -286,22 +407,147 @@ struct MarkdownEditor: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
+    @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: MarkdownEditor
+        var toolbar: UIToolbar?
+        private var images: [String: UIImage] = [:]
+        private var loading: Set<String> = []
+        private var styledSelectionKey: String?
+        private var suggestionBar: LinkSuggestionBar?
+        private var linkQuery: (range: NSRange, text: String)?
 
         init(parent: MarkdownEditor) {
             self.parent = parent
         }
 
-        func textViewDidChange(_ textView: UITextView) {
-            let selection = textView.selectedRange
-            MarkdownHighlighter.apply(to: textView.textStorage)
-            textView.selectedRange = selection
-            textView.typingAttributes = [.font: MarkdownHighlighter.bodyFont, .foregroundColor: UIColor.label]
-            parent.text = textView.text
+        // MARK: 樣式
+
+        func restyle(_ textView: NoteTextView) {
+            // 輸入中文等組字時不能改動文字屬性，組字完成後會再呼叫
+            guard textView.markedTextRange == nil else { return }
+            let selection = textView.isFirstResponder ? textView.selectedRange : nil
+            styledSelectionKey = selectionKey(textView)
+            let width = max(textView.bounds.width - textView.textContainerInset.left - textView.textContainerInset.right, 100)
+            textView.markdownLayout?.images = images
+            let missing = LiveMarkdown.apply(to: textView.textStorage, options: LiveMarkdown.Options(
+                selection: selection,
+                width: width,
+                images: images,
+                resolvesLink: parent.resolvesLink
+            ))
+            textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
+            for name in missing where !loading.contains(name) {
+                loading.insert(name)
+                Task { [weak self, weak textView] in
+                    guard let self else { return }
+                    let image = await self.parent.loadImage(name)
+                    self.loading.remove(name)
+                    guard let image, let textView else { return }
+                    self.images[name] = image
+                    self.restyle(textView)
+                }
+            }
         }
 
-        @MainActor
+        /// 游標所在的行有沒有變（換行時才需要重新排版，同一行內移動不用）。
+        private func selectionKey(_ textView: UITextView) -> String {
+            guard textView.isFirstResponder else { return "-" }
+            let text = textView.text as NSString
+            let selection = textView.selectedRange
+            guard selection.location <= text.length else { return "-" }
+            let start = text.lineRange(for: NSRange(location: selection.location, length: 0))
+            let end = text.lineRange(for: NSRange(location: min(NSMaxRange(selection), text.length), length: 0))
+            // 游標在清單符號上時顯示原始文字，所以也要記下是否在行首附近
+            let nearStart = selection.location - start.location < 8
+            return "\(start.location)-\(NSMaxRange(end))-\(nearStart)"
+        }
+
+        // MARK: UITextViewDelegate
+
+        func textViewDidChange(_ textView: UITextView) {
+            guard let textView = textView as? NoteTextView else { return }
+            restyle(textView)
+            parent.text = textView.text
+            updateLinkSuggestions(textView)
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard let textView = textView as? NoteTextView else { return }
+            if selectionKey(textView) != styledSelectionKey {
+                restyle(textView)
+            }
+            updateLinkSuggestions(textView)
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            guard let textView = textView as? NoteTextView else { return }
+            restyle(textView)
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            guard let textView = textView as? NoteTextView else { return }
+            restyle(textView)
+            showSuggestions(nil, in: textView)
+        }
+
+        // MARK: 點擊
+
+        func handleTap(_ target: MarkdownTapTarget) {
+            guard let textView = parent.controller.textView else { return }
+            switch target {
+            case .checkbox(let range):
+                let current = (textView.text as NSString).substring(with: range)
+                parent.controller.replace(range: range, with: current.lowercased() == "[x]" ? "[ ]" : "[x]")
+            case .link, .wikiLink, .image:
+                parent.onOpenLink(target)
+            }
+        }
+
+        // MARK: [[ 連結建議
+
+        private func updateLinkSuggestions(_ textView: NoteTextView) {
+            guard textView.isFirstResponder, textView.markedTextRange == nil, let query = MarkdownEditing.openLinkQuery(in: textView.text, cursor: textView.selectedRange) else {
+                linkQuery = nil
+                showSuggestions(nil, in: textView)
+                return
+            }
+            linkQuery = query
+            showSuggestions(parent.linkSuggestions(query.text), in: textView)
+        }
+
+        private func showSuggestions(_ suggestions: [LinkSuggestion]?, in textView: NoteTextView) {
+            if let suggestions, !suggestions.isEmpty {
+                let bar = suggestionBar ?? LinkSuggestionBar()
+                bar.onSelect = { [weak self, weak textView] linkText in
+                    guard let self, let textView else { return }
+                    self.insertLink(linkText, in: textView)
+                }
+                bar.update(suggestions)
+                suggestionBar = bar
+                if textView.inputAccessoryView !== bar {
+                    textView.inputAccessoryView = bar
+                    textView.reloadInputViews()
+                }
+            } else if textView.inputAccessoryView !== toolbar {
+                textView.inputAccessoryView = toolbar
+                textView.reloadInputViews()
+            }
+        }
+
+        private func insertLink(_ linkText: String, in textView: NoteTextView) {
+            guard let query = linkQuery else { return }
+            let text = textView.text as NSString
+            let after = NSMaxRange(query.range)
+            let closed = after + 2 <= text.length && text.substring(with: NSRange(location: after, length: 2)) == "]]"
+            parent.controller.replace(range: query.range, with: linkText + (closed ? "" : "]]"))
+            textView.selectedRange = NSRange(location: query.range.location + (linkText as NSString).length + 2, length: 0)
+            linkQuery = nil
+            showSuggestions(nil, in: textView)
+        }
+
+        // MARK: 工具列
+
         func makeToolbar() -> UIToolbar {
             let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
             func item(_ symbol: String, _ label: String, _ action: @escaping @MainActor () -> Void) -> UIBarButtonItem {
@@ -316,13 +562,17 @@ struct MarkdownEditor: UIViewRepresentable {
                 UIAction(title: "標題 3") { _ in controller.toggleLinePrefix("### ") },
             ]))
             heading.accessibilityLabel = "標題"
+            let ai = UIBarButtonItem(title: "AI", primaryAction: UIAction { [weak self] _ in self?.parent.onAIEdit() })
+            ai.accessibilityLabel = "請 AI 修改"
             toolbar.items = [
                 heading,
                 item("bold", "粗體") { controller.wrapSelection("**") },
                 item("italic", "斜體") { controller.wrapSelection("*") },
                 item("list.bullet", "清單") { controller.toggleLinePrefix("- ") },
                 item("checklist", "待辦") { controller.toggleLinePrefix("- [ ] ") },
+                item("link", "連結") { controller.wrapSelection("[[", closing: "]]") },
                 .flexibleSpace(),
+                ai,
                 item("pencil.tip.crop.circle", "手寫區塊") { [weak self] in self?.parent.onInsertInk() },
                 item("photo", "照片") { [weak self] in self?.parent.onInsertPhoto() },
                 item("keyboard.chevron.compact.down", "收起鍵盤") { controller.dismissKeyboard() },
@@ -330,5 +580,22 @@ struct MarkdownEditor: UIViewRepresentable {
             toolbar.sizeToFit()
             return toolbar
         }
+    }
+}
+
+/// 編輯器用的純函式（方便測試）。
+enum MarkdownEditing {
+    /// 游標前面有還沒關閉的「[[」時，回傳 [[ 後面到游標的範圍與文字（輸入中的連結）。
+    static func openLinkQuery(in text: String, cursor: NSRange) -> (range: NSRange, text: String)? {
+        guard cursor.length == 0 else { return nil }
+        let ns = text as NSString
+        guard cursor.location <= ns.length else { return nil }
+        let lineStart = ns.lineRange(for: NSRange(location: cursor.location, length: 0)).location
+        let before = ns.substring(with: NSRange(location: lineStart, length: cursor.location - lineStart))
+        guard let open = before.range(of: "[[", options: .backwards) else { return nil }
+        let query = String(before[open.upperBound...])
+        guard !query.contains("]"), !query.contains("|"), (query as NSString).length <= 80 else { return nil }
+        let start = lineStart + (String(before[..<open.upperBound]) as NSString).length
+        return (NSRange(location: start, length: cursor.location - start), query)
     }
 }
