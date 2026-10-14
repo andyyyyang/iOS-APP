@@ -24,6 +24,7 @@ struct NoteView: View {
     @State private var showsPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @State private var toast: String?
+    @State private var header = NoteHeaderState()
     @FocusState private var titleFocused: Bool
     private let sync = VaultSyncCenter.shared
     private let store = NotesStore.shared
@@ -81,13 +82,8 @@ struct NoteView: View {
         if !didLoad {
             ProgressView()
         } else {
-            VStack(spacing: 0) {
-                headerBar
-                titleField
-                    .padding(.horizontal, NoteTextView.horizontalPadding)
-                    .padding(.top, 10)
-                    .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
-                    .frame(maxWidth: .infinity)
+            // 內容捲到標題後面：標題列浮在上方，下緣漸層淡出；往下捲時大標題縮小收進上方一列
+            ZStack(alignment: .top) {
                 MarkdownEditor(
                     text: $text,
                     controller: controller,
@@ -97,10 +93,24 @@ struct NoteView: View {
                     onOpenLink: { handleTap($0) },
                     loadImage: { await Self.loadImage(named: $0) },
                     resolvesLink: { NoteLinks.resolve($0, in: store.linkIndex) != nil },
-                    linkSuggestions: { store.linkSuggestions(for: $0) }
+                    linkSuggestions: { store.linkSuggestions(for: $0) },
+                    headerHeights: (header.barHeight + header.titleHeight, header.barHeight),
+                    onScroll: { [header] in header.scroll = $0 }
                 )
                 .overlay(alignment: .top) { placeholder }
                 .ignoresSafeArea(.container, edges: .bottom)
+                NoteTitleHeader(
+                    state: header,
+                    compactTitle: title,
+                    meta: headerMeta,
+                    actions: headerActions,
+                    title: titleField
+                        .padding(.horizontal, NoteTextView.horizontalPadding)
+                        .padding(.top, 6)
+                        .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity),
+                    onTapCompact: { controller.scrollToTop() }
+                )
             }
         }
     }
@@ -112,27 +122,30 @@ struct NoteView: View {
                 .font(.body)
                 .foregroundStyle(DS.textTertiary)
                 .padding(.horizontal, NoteTextView.horizontalPadding)
-                .padding(.top, NoteTextView.topInset)
+                .padding(.top, header.barHeight + header.titleHeight + NoteTextView.topInset)
                 .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
                 .allowsHitTesting(false)
         }
     }
 
-    /// 上方一列：所在資料夾與修改時間，右邊是 AI 與更多。
-    private var headerBar: some View {
-        HStack(spacing: 8) {
-            let folder = (path as NSString).deletingLastPathComponent
-            HStack(spacing: 4) {
-                Text(folder.isEmpty ? NotesStore.folderTitle("") : folder.replacingOccurrences(of: "/", with: " / "))
-                if let mtime = store.notes.first(where: { $0.path == path })?.mtime {
-                    Text("· \(mtime.formatted(.relative(presentation: .named)))編輯")
-                }
+    /// 上方一列的左邊：所在資料夾與修改時間（標題收合後換成標題）。
+    private var headerMeta: some View {
+        let folder = (path as NSString).deletingLastPathComponent
+        return HStack(spacing: 4) {
+            Text(folder.isEmpty ? NotesStore.folderTitle("") : folder.replacingOccurrences(of: "/", with: " / "))
+            if let mtime = store.notes.first(where: { $0.path == path })?.mtime {
+                Text("· \(mtime.formatted(.relative(presentation: .named)))編輯")
             }
-            .font(.footnote)
-            .foregroundStyle(DS.textTertiary)
-            .lineLimit(1)
-            Spacer(minLength: 8)
+        }
+        .font(.footnote)
+        .foregroundStyle(DS.textTertiary)
+        .lineLimit(1)
+    }
+
+    /// 上方一列的右邊：AI 與更多。
+    private var headerActions: some View {
+        HStack(spacing: 8) {
             Button("AI") { startAIEdit() }
                 .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
                 .accessibilityLabel("請 AI 修改")
@@ -171,9 +184,6 @@ struct NoteView: View {
             }
             .accessibilityLabel("更多")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 4)
     }
 
     /// 大標題，點一下可以改名（改名會改檔名，同步到 Obsidian，並更新其他筆記中的連結）。
@@ -355,5 +365,90 @@ struct NoteView: View {
             guard let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil as UIImage? }
             return image.preparingThumbnail(of: CGSize(width: 1600, height: 1600 * image.size.height / max(image.size.width, 1))) ?? image
         }.value
+    }
+}
+
+// MARK: - 標題列
+
+/// 筆記標題列的捲動狀態：只有標題列讀取捲動距離，捲動時不會重畫整個筆記頁。
+@Observable
+final class NoteHeaderState {
+    /// 上方一列（資料夾、AI、更多）的高度。
+    var barHeight: CGFloat = 46
+    /// 大標題那一列的高度。
+    var titleHeight: CGFloat = 46
+    /// 內容往下捲的距離（0 = 最上面）。
+    var scroll: CGFloat = 0
+
+    /// 0 = 展開的大標題，1 = 收合成上方一列的小標題。
+    var progress: CGFloat {
+        guard titleHeight > 0 else { return 0 }
+        return min(max(scroll / titleHeight, 0), 1)
+    }
+}
+
+/// 浮在筆記上方的標題列：往下捲時大標題縮小、淡出，小標題出現在上方一列（點一下捲回最上面）；
+/// 下緣有一段漸層，內容捲到標題後面時慢慢淡出，不會被一刀切掉。
+struct NoteTitleHeader<Meta: View, Actions: View, Title: View>: View {
+    let state: NoteHeaderState
+    let compactTitle: String
+    let meta: Meta
+    let actions: Actions
+    let title: Title
+    var onTapCompact: () -> Void
+
+    static var fadeHeight: CGFloat { 22 }
+
+    var body: some View {
+        let progress = state.progress
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                ZStack(alignment: .leading) {
+                    meta
+                        .opacity(1 - min(progress * 1.6, 1))
+                    Button(action: onTapCompact) {
+                        Text(compactTitle)
+                            .font(.headline)
+                            .foregroundStyle(DS.text)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(max(progress * 2 - 1, 0))
+                    .allowsHitTesting(progress > 0.6)
+                    .accessibilityHidden(progress < 0.6)
+                    .accessibilityHint("捲回最上面")
+                }
+                Spacer(minLength: 8)
+                actions
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.barHeight = $0 }
+            title
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.titleHeight = $0 }
+                .scaleEffect(1 - 0.18 * progress, anchor: .bottomLeading)
+                .opacity(1 - min(progress * 1.4, 1))
+                .frame(height: max(state.titleHeight * (1 - progress), 0), alignment: .bottom)
+                .clipped()
+                .allowsHitTesting(progress < 0.5)
+        }
+        .background(DS.pane)
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                stops: [
+                    .init(color: DS.pane, location: 0),
+                    .init(color: DS.pane.opacity(0.75), location: 0.3),
+                    .init(color: DS.pane.opacity(0), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: Self.fadeHeight)
+            .offset(y: Self.fadeHeight)
+            .allowsHitTesting(false)
+        }
     }
 }

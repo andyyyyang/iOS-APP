@@ -89,6 +89,12 @@ final class MarkdownEditorController {
         textView?.resignFirstResponder()
     }
 
+    /// 捲回最上面（點收合後的標題）。
+    func scrollToTop() {
+        guard let textView else { return }
+        textView.setContentOffset(CGPoint(x: textView.contentOffset.x, y: -textView.contentInset.top), animated: true)
+    }
+
     private func replaceAll(with text: String, cursor: Int) {
         guard let textView else { return }
         textView.text = text
@@ -109,12 +115,21 @@ final class MarkdownEditorController {
 final class NoteTextView: UITextView {
     static let columnWidth: CGFloat = 760
     static let horizontalPadding: CGFloat = 32
-    /// 與標題之間的距離。
-    static let topInset: CGFloat = 14
+    /// 與標題之間的距離（標題下緣的漸層淡出也在這段距離內）。
+    static let topInset: CGFloat = 18
     static let bottomInset: CGFloat = 160
 
     var onTap: ((MarkdownTapTarget) -> Void)?
     var onWidthChange: (() -> Void)?
+    /// 浮在上方的標題列：展開時與收合後的高度。內容從展開的標題下方開始，往下捲時標題縮小、內容捲到標題後面；
+    /// 捲動範圍只扣掉收合後的高度，游標與跳轉才不會停在標題後面。
+    var headerHeights: (expanded: CGFloat, collapsed: CGFloat) = (0, 0) {
+        didSet {
+            if headerHeights != oldValue { setNeedsLayout() }
+        }
+    }
+    /// 標題已經收合了多少（0 = 在最上面，捲動的距離）。
+    var headerScroll: CGFloat { contentOffset.y + contentInset.top }
 
     private var keyboardOverlap: CGFloat = 0
     private var lastWidth: CGFloat = 0
@@ -157,9 +172,15 @@ final class NoteTextView: UITextView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let side = max((bounds.width - Self.columnWidth) / 2, 0) + Self.horizontalPadding
-        let insets = UIEdgeInsets(top: Self.topInset, left: side, bottom: Self.bottomInset, right: side)
+        let insets = UIEdgeInsets(top: Self.topInset + max(headerHeights.expanded - headerHeights.collapsed, 0), left: side, bottom: Self.bottomInset, right: side)
         if textContainerInset != insets {
             textContainerInset = insets
+        }
+        if abs(contentInset.top - headerHeights.collapsed) > 0.5 {
+            let atTop = contentOffset.y <= -contentInset.top + 1
+            contentInset.top = headerHeights.collapsed
+            verticalScrollIndicatorInsets.top = headerHeights.collapsed
+            if atTop { contentOffset.y = -headerHeights.collapsed }
         }
         if abs(bounds.width - lastWidth) > 0.5 {
             lastWidth = bounds.width
@@ -365,6 +386,10 @@ struct MarkdownEditor: UIViewRepresentable {
     var loadImage: (String) async -> UIImage?
     var resolvesLink: (String) -> Bool
     var linkSuggestions: (String) -> [LinkSuggestion]
+    /// 浮在上方的標題列高度（見 NoteTextView.headerHeights）。
+    var headerHeights: (expanded: CGFloat, collapsed: CGFloat) = (0, 0)
+    /// 捲動距離（0 = 最上面），讓標題跟著縮小。
+    var onScroll: (CGFloat) -> Void = { _ in }
 
     func makeUIView(context: Context) -> NoteTextView {
         let textView = NoteTextView.make()
@@ -380,6 +405,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.writingToolsBehavior = .complete
         textView.text = text
         textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
+        textView.headerHeights = headerHeights
         let coordinator = context.coordinator
         coordinator.toolbar = coordinator.makeToolbar()
         textView.inputAccessoryView = coordinator.toolbar
@@ -400,6 +426,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
     func updateUIView(_ textView: NoteTextView, context: Context) {
         context.coordinator.parent = self
+        textView.headerHeights = headerHeights
         if textView.text != text {
             let selection = textView.selectedRange
             textView.text = text
@@ -469,6 +496,11 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         // MARK: UITextViewDelegate
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? NoteTextView else { return }
+            parent.onScroll(textView.headerScroll)
+        }
 
         func textViewDidChange(_ textView: UITextView) {
             guard let textView = textView as? NoteTextView else { return }
