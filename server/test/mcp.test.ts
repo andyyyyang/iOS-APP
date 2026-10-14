@@ -35,7 +35,7 @@ const parse = (result: Awaited<ReturnType<Client["callTool"]>>) => {
 };
 
 describe("MCP /mcp", () => {
-  it("lists the 13 tools", async () => {
+  it("lists the 14 tools", async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
@@ -49,6 +49,7 @@ describe("MCP /mcp", () => {
         "update_scan_data",
         "upsert_template",
         "validate_data",
+        "vault_links",
         "vault_list",
         "vault_read",
         "vault_search",
@@ -171,7 +172,7 @@ describe("MCP /mcp", () => {
     await expect(connect({}, {})).rejects.toThrow();
     await expect(connect({}, { Authorization: "Bearer wrong" })).rejects.toThrow();
     const { client } = await connect({}, { Authorization: `Bearer ${API_KEY}` });
-    expect((await client.listTools()).tools).toHaveLength(13);
+    expect((await client.listTools()).tools).toHaveLength(14);
   });
 
   it("rejects GET and DELETE in stateless mode", async () => {

@@ -8,7 +8,7 @@ describe("auth", () => {
     const { app } = await setup();
     const res = await request(app).get("/health").expect(200);
     const database = process.env.TEST_DATABASE_URL ? "postgres" : "memory";
-    expect(res.body).toEqual({ status: "ok", version: "1.0.0", database, jev: false });
+    expect(res.body).toEqual({ status: "ok", version: "1.0.0", database, jev: false, assistant: false });
   });
 
   it("rejects /v1 requests without a key", async () => {

@@ -1,3 +1,4 @@
+import { AssistantService, type AssistantOptions } from "../assistant/service.js";
 import type { Classifier } from "../classifier/types.js";
 import type { VaultConfig } from "../config.js";
 import type { Store } from "../store/types.js";
@@ -10,6 +11,7 @@ import { TemplateService } from "./templates.js";
 import { ValidateService } from "./validate.js";
 import { VaultService } from "./vault.js";
 import { VaultChangeFeed } from "./vault-changes.js";
+import { VaultIndexService } from "./vault-index.js";
 
 /** Business logic shared by the REST routes and the MCP tools. */
 export interface Services {
@@ -23,6 +25,10 @@ export interface Services {
   vaultChanges: VaultChangeFeed;
   pairing: PairingService;
   obsidianPlugin: ObsidianPluginService;
+  /** Parsed links, tags and tasks of every note (GET /v1/vault/index, vault_links, the assistant's link tools). */
+  vaultIndex: VaultIndexService;
+  /** Cloud AI runs over the vault (/v1/assistant). */
+  assistant: AssistantService;
 }
 
 export function createServices({
@@ -32,6 +38,7 @@ export function createServices({
   vaultConfig = null,
   vaultChanges = new VaultChangeFeed(),
   obsidianPlugin,
+  assistant = { model: null },
   now = Date.now,
 }: {
   store: Store;
@@ -44,19 +51,25 @@ export function createServices({
   vaultChanges?: VaultChangeFeed;
   /** Plugin release mirror (index.ts builds it to schedule mirroring); default: one over `store` and `vault` with fetch(). */
   obsidianPlugin?: ObsidianPluginService;
+  /** Cloud AI (model, Jev routing, limits); default: off. */
+  assistant?: AssistantOptions;
   /** Clock in milliseconds (pairing code expiry). */
   now?: () => number;
 }): Services {
+  const vaultService = new VaultService(vault, vaultConfig, vaultChanges);
+  const vaultIndex = new VaultIndexService(vaultService, vaultChanges);
   return {
     store,
     scans: new ScanService(store),
     templates: new TemplateService(store),
     classify: new ClassifyService(store, classifier),
     validate: new ValidateService(store),
-    vault: new VaultService(vault, vaultConfig, vaultChanges),
+    vault: vaultService,
     vaultChanges,
     pairing: new PairingService({ now }),
     obsidianPlugin: obsidianPlugin ?? new ObsidianPluginService({ store, vault, now }),
+    vaultIndex,
+    assistant: new AssistantService({ vault: vaultService, vaultIndex, now }, assistant),
   };
 }
 

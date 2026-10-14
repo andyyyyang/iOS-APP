@@ -15,7 +15,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 
 | 方法與路徑 | 說明 |
 | --- | --- |
-| `GET /health` | `{"status":"ok","version":"1.0.0","database":"postgres","jev":true}`；`database` 為 `postgres` 或 `memory`，`jev` 表示伺服器端分類是否可用 |
+| `GET /health` | `{"status":"ok","version":"1.0.0","database":"postgres","jev":true,"assistant":true}`；`database` 為 `postgres` 或 `memory`，`jev` 表示伺服器端分類是否可用，`assistant` 表示雲端 AI 是否可用（需要 `ANTHROPIC_API_KEY` 與 vault） |
 | `PUT /v1/scans/{id}` | 新增（201）或更新（200）掃描，冪等。`id` 為 UUID（不分大小寫，儲存為大寫）。`updatedAt` 由伺服器設定；`createdAt` 以第一次寫入為準，之後不會改變 |
 | `GET /v1/scans` | 列表：`limit`（預設 50，上限 200）、`templateId`、`q`（全文搜尋，不分大小寫）、`updatedAfter`（ISO 8601）、`cursor`。回傳 `{"items":[...],"nextCursor":...}` |
 | `GET /v1/scans/{id}` | 取得單筆 |
@@ -27,11 +27,16 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `DELETE /v1/templates/{id}` | 刪除，回傳 204 |
 | `POST /v1/classify` | `{"text":"...","templateIds":[...]}` → `{"templateId","confidence","probabilities","provider"}`；未設定 Jev 時回傳 503 `jev_not_configured` |
 | `POST /v1/validate` | `{"templateId":"receipt","data":{...}}` → `{"valid":false,"issues":[{"path":"$.items[0].price","message":"..."}]}`（REST 版的 `validate_data`） |
+| `POST /v1/assistant/route` | `{"text","context"?}` → `{"kind":"question\|edit\|task","route":"device\|cloud","confidence","provider":"jev\|heuristic","cloudAvailable"}`：判斷聊天要求在裝置上處理還是交給雲端 AI |
+| `POST /v1/assistant/runs` | 開始雲端 AI 工作 `{"prompt","history"?,"rulesPath"?,"openNote"?,"transcriptPath"?,"timeZone"?}` → 202 `{"id","status":"running","model"}`；未設定 `ANTHROPIC_API_KEY` 時 503 `assistant_not_configured` |
+| `GET /v1/assistant/runs/{id}?after=&wait=` | 工作狀態與 `after` 之後的事件（長輪詢，`wait` 最多 25 秒）`{"id","status","model","events","answer","error","sources","edits","usage"}` |
+| `POST /v1/assistant/runs/{id}/cancel`／`/undo` | 取消工作 → `{"status"}`；復原修改 `{"editIds"?}` → `{"undone":[...],"failed":[{"id","reason"}]}` |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
 | `GET /v1/vault/status` | `{"configured":true,"prefix":""}`：Obsidian 筆記庫（儲存桶）是否已設定 |
 | `GET /v1/vault/files?prefix=&recursive=` | 列出 vault 檔案 `{"items":[{"path","size","mtime","etag"}],"folders":[...]}`（`folders` 只在非遞迴時回傳） |
 | `GET`／`PUT`／`DELETE /v1/vault/file?path=` | 下載／上傳（原始位元組，最多 25 MB；`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`）／刪除單一檔案 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
+| `GET /v1/vault/index` | 所有筆記的標題、aliases、tags、連結、第一個嵌入、待辦、摘要與 `localocr-notebook`，以及其他檔案 `{"version":1,"notes":[...],"files":[...]}`；支援 `ETag`／`If-None-Match`（304）與 gzip，筆記的 etag 沒變就不重新讀取 |
 | `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，`wait` 最多 25 秒）：經伺服器的寫入／刪除與裝置回報的變更 `{"cursor","reset","changes":[{"seq","path","op","client","at"}]}`；`X-LocalOCR-Client` 標頭相同的變更不列出 |
 | `POST /v1/vault/changes` | 回報裝置自己上傳到儲存桶的檔案 `{"paths"?:[...]}` → 202 `{"cursor"}`（Obsidian 插件在 Remotely Save 上傳後呼叫） |
 | `GET /v1/vault/stream`（WebSocket） | 即時推送變更（取代長輪詢，見下方「Vault 即時推送」）：第一個訊息 `{"type":"auth","token","client","since"?}` → `{"type":"ready","cursor","reset"}`，之後其他用戶端的變更即時送來 `{"type":"changes","cursor","reset":false,"changes":[...]}` |
@@ -78,9 +83,18 @@ Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../do
 ### MCP 工具
 
 `list_scans`、`get_scan`、`update_scan_data`、`list_templates`、`get_template`、`upsert_template`、`delete_template`、`classify_text`、`validate_data`，
-以及 Obsidian 筆記的 `vault_list`、`vault_read`、`vault_write`、`vault_search`（沒有刪除工具）。
+以及 Obsidian 筆記的 `vault_list`、`vault_read`、`vault_write`、`vault_search`、`vault_links`（對外連結與反向連結，依 Obsidian 的方式解析；沒有刪除工具）。
 工具結果是格式化的 JSON 文字；失敗時 `isError: true`，內容為 `{"error":{"code","message"}}`。
 `list_scans` 另外接受選用的 `cursor` 參數以翻頁；`upsert_template` 接受選用的 `rules`（工具說明中列出支援的操作）。
+
+### 雲端 AI（`/v1/assistant`）
+
+App 首頁的 AI 對話：簡單的問題在裝置上處理，多步驟的工作（整理資料夾、彙整多則筆記、分類搬移）由 `POST /v1/assistant/route` 判斷後交給伺服器上的 Claude（官方 `@anthropic-ai/sdk`，Messages API + 工具）。
+Claude 把 vault 當成電腦的檔案系統操作：`list_files`、`read_file`、`search_notes`、`get_links`、`write_file`（覆寫前必須先讀過）、`edit_file`（精確字串取代）、`move_file`（同時更新其他筆記的 `[[連結]]`）、`delete_file`（移到 `.trash/`），
+以及 Anthropic 的程式沙盒（`code_execution_20260521`，產生的檔案用 `save_output` 存回 vault）與選用的網路搜尋。所有寫入的 client 都是 `assistant`，App 與 Obsidian 會從變更通知得知。
+系統提示詞與工具定義使用提示快取；vault 根目錄的編輯規則（`AGENTS.md`、`CLAUDE.md`、`規則.md` 等，或 `rulesPath` 指定的檔案）會放進提示詞並要求遵守。
+工作狀態只存在記憶體（24 小時）；`undo` 以 etag 檢查，修改後又被別人改過的檔案不會被覆蓋。指定 `transcriptPath` 時，每次工作結束後把這一輪（問題、回答、來源、修改）附加到該筆記。
+測試以腳本化的假模型執行（`AssistantModel` 介面），不連網路。
 
 ## 環境變數
 
@@ -97,6 +111,11 @@ Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../do
 | `VAULT_PREFIX` | 否 | 物件鍵前綴，需與 Remotely Save 的 Remote prefix 相同；預設空白，有值時必須以 `/` 結尾 |
 | `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl` 與 `latest.json` 的檔案網址；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
 | `GITHUB_TOKEN` | 否 | 同步插件版本時讀取 GitHub 版本清單用的權杖（只用來提高 API 次數上限，公開儲存庫不需要任何權限）；未設定時使用未驗證的請求（每小時 60 次，每 30 分鐘同步一次綽綽有餘） |
+| `ANTHROPIC_API_KEY` | 否 | 雲端 AI（`/v1/assistant/runs`）用的 Anthropic API 金鑰；未設定時該功能關閉（503 `assistant_not_configured`，`/health` 的 `assistant` 為 `false`） |
+| `ASSISTANT_MODEL` | 否 | 雲端 AI 的模型，預設 `claude-opus-5-5` |
+| `ASSISTANT_MAX_TURNS` | 否 | 每個工作最多呼叫模型幾次，預設 `40` |
+| `ASSISTANT_CODE_EXECUTION` | 否 | Anthropic 程式沙盒，預設開啟；`0` 關閉 |
+| `ASSISTANT_WEB_SEARCH` | 否 | Anthropic 網路搜尋，預設關閉；`1` 開啟 |
 
 參考 [`.env.example`](.env.example)。
 
@@ -259,6 +278,7 @@ src/
   store/              Store 介面、PostgresStore（含 migrations.ts）、MemoryStore
   services/           商業邏輯：scans、templates、classify、validate、vault、pairing（配對碼）、obsidian-plugin（插件版本同步與提供）
   classifier/         Classifier 介面與 Jev 實作
+  assistant/          雲端 AI：路由判斷、Claude 工作迴圈、vault 工具、復原、對話紀錄
   vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證、Remotely Save 設定
   templates/builtin.ts 內建樣板
   templates/managed.ts 讀取並同步 templates/managed/*.json

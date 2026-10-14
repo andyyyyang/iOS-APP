@@ -1,3 +1,4 @@
+import { createAssistantOptions } from "./assistant/index.js";
 import { bootstrapStore } from "./bootstrap.js";
 import { createClassifier } from "./classifier/index.js";
 import { loadConfig } from "./config.js";
@@ -30,6 +31,7 @@ async function main() {
     vaultChanges,
     publicUrl: config.publicUrl,
     obsidianPlugin,
+    assistant: createAssistantOptions(config),
   });
   // Mirrors the Obsidian plugin's GitHub releases into the bucket: shortly after startup, then every 30 minutes
   const stopPluginMirror = vault ? schedulePluginMirror(obsidianPlugin) : () => {};
