@@ -130,6 +130,12 @@ final class NoteTextView: UITextView {
     }
     /// 標題已經收合了多少（0 = 在最上面，捲動的距離）。
     var headerScroll: CGFloat { contentOffset.y + contentInset.top }
+    /// 這則筆記的路徑（DataviewJS 的 dv.current()）。
+    var notePath = ""
+    /// DataviewJS 的內容高度改變：(區塊, 新的內容高度)，要重新排版保留空間。
+    var onDataviewHeight: ((String, CGFloat) -> Void)?
+    private var dataviewBlocks: [(range: NSRange, info: DataviewBlockInfo)] = []
+    private var dataviewViews: [String: DataviewView] = [:]
 
     private var keyboardOverlap: CGFloat = 0
     private var lastWidth: CGFloat = 0
@@ -187,6 +193,102 @@ final class NoteTextView: UITextView {
             onWidthChange?()
         }
         prioritizeInteractionTap()
+        positionDataviewViews()
+    }
+
+    // MARK: DataviewJS
+
+    /// 重新排版後：為每個 ```dataviewjs 區塊建立（或沿用）執行畫面，移除不再顯示的。
+    func refreshDataviewBlocks() {
+        var blocks: [(range: NSRange, info: DataviewBlockInfo)] = []
+        textStorage.enumerateAttribute(.mdDataview, in: NSRange(location: 0, length: textStorage.length)) { value, range, _ in
+            if let info = value as? DataviewBlockInfo { blocks.append((range, info)) }
+        }
+        dataviewBlocks = blocks
+        let keys = Set(blocks.map(\.info.key))
+        for (key, view) in dataviewViews where !keys.contains(key) {
+            view.removeFromSuperview()
+            dataviewViews[key] = nil
+        }
+        for block in blocks where dataviewViews[block.info.key] == nil {
+            let view = makeDataviewView(for: block.info)
+            dataviewViews[block.info.key] = view
+            addSubview(view)
+        }
+        positionDataviewViews()
+    }
+
+    /// 執行畫面疊在區塊第一行保留的空間上（跟著文字捲動）。
+    private func positionDataviewViews() {
+        guard !dataviewBlocks.isEmpty else { return }
+        let width = textContainer.size.width
+        for block in dataviewBlocks {
+            guard let view = dataviewViews[block.info.key], block.range.location < textStorage.length else { continue }
+            let glyph = layoutManager.glyphIndexForCharacter(at: block.range.location)
+            let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let spacing = (textStorage.attribute(.paragraphStyle, at: block.range.location, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0
+            let frame = CGRect(x: textContainerInset.left + line.minX, y: textContainerInset.top + line.minY + spacing, width: width, height: block.info.height)
+            if view.frame != frame { view.frame = frame }
+        }
+    }
+
+    private func makeDataviewView(for info: DataviewBlockInfo) -> DataviewView {
+        let view = DataviewView()
+        let key = info.key
+        view.onHeight = { [weak self, weak view] content in
+            guard let self, let view else { return }
+            // 很高的內容（整頁的儀表板）只顯示到畫面的八成，裡面自己捲動
+            let limit = max(320, (self.window?.bounds.height ?? 800) * 0.8)
+            view.setScrollsContent(content > limit)
+            let height = min(max(content, 40), limit)
+            if abs(height - (DataviewBlockInfo.heights[key] ?? -1)) > 2 {
+                self.onDataviewHeight?(key, height)
+            }
+        }
+        view.onOpenLink = { [weak self] link in self?.onTap?(.wikiLink(link)) }
+        view.onEdit = { [weak self] in self?.editDataview(key) }
+        view.onFullScreen = { [weak self] in self?.presentDataview(key) }
+        view.load(code: info.code, sourcePath: notePath)
+        return view
+    }
+
+    /// 編輯程式碼：游標移到區塊的第一行程式碼（區塊改回顯示原始文字）。
+    private func editDataview(_ key: String) {
+        guard let block = dataviewBlocks.first(where: { $0.info.key == key }) else { return }
+        let text = textStorage.string as NSString
+        let fenceLine = text.lineRange(for: NSRange(location: block.range.location, length: 0))
+        _ = becomeFirstResponder()
+        selectedRange = NSRange(location: min(NSMaxRange(fenceLine), text.length), length: 0)
+        delegate?.textViewDidChangeSelection?(self)
+    }
+
+    private func presentDataview(_ key: String) {
+        guard let block = dataviewBlocks.first(where: { $0.info.key == key }), let presenter = nearestViewController() else { return }
+        let controller = DataviewFullScreenController(code: block.info.code, sourcePath: notePath)
+        controller.onOpenLink = { [weak self] link in self?.onTap?(.wikiLink(link)) }
+        presenter.present(controller, animated: true)
+    }
+
+    private func nearestViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if var controller = current as? UIViewController {
+                while let presented = controller.presentedViewController { controller = presented }
+                return controller
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    /// 點在執行畫面上：交給網頁（不移動游標、不選取文字）；上下拖曳仍然捲動筆記。
+    func isOverDataview(_ point: CGPoint) -> Bool {
+        dataviewViews.values.contains { !$0.isHidden && $0.frame.contains(point) }
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer !== panGestureRecognizer, isOverDataview(gestureRecognizer.location(in: self)) { return false }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
 
     override func didMoveToWindow() {
@@ -213,7 +315,7 @@ final class NoteTextView: UITextView {
     /// 某個位置上會有動作的東西。正在編輯的那一行裡的連結不算（點了是要移動游標）。
     func tapTarget(at point: CGPoint) -> MarkdownTapTarget? {
         let storage = textStorage
-        guard storage.length > 0 else { return nil }
+        guard storage.length > 0, !isOverDataview(point) else { return nil }
         let inContainer = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
         var fraction: CGFloat = 0
         let index = layoutManager.characterIndex(for: inContainer, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
@@ -388,6 +490,8 @@ struct MarkdownEditor: UIViewRepresentable {
     var linkSuggestions: (String) -> [LinkSuggestion]
     /// 浮在上方的標題列高度（見 NoteTextView.headerHeights）。
     var headerHeights: (expanded: CGFloat, collapsed: CGFloat) = (0, 0)
+    /// 這則筆記的路徑（DataviewJS 用）。
+    var notePath = ""
     /// 捲動距離（0 = 最上面），讓標題跟著縮小。
     var onScroll: (CGFloat) -> Void = { _ in }
 
@@ -406,7 +510,13 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.text = text
         textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
         textView.headerHeights = headerHeights
+        textView.notePath = notePath
         let coordinator = context.coordinator
+        textView.onDataviewHeight = { [weak coordinator, weak textView] key, height in
+            DataviewBlockInfo.heights[key] = height
+            guard let textView else { return }
+            coordinator?.restyle(textView)
+        }
         coordinator.toolbar = coordinator.makeToolbar()
         textView.inputAccessoryView = coordinator.toolbar
         textView.onTap = { [weak coordinator] target in coordinator?.handleTap(target) }
@@ -427,6 +537,7 @@ struct MarkdownEditor: UIViewRepresentable {
     func updateUIView(_ textView: NoteTextView, context: Context) {
         context.coordinator.parent = self
         textView.headerHeights = headerHeights
+        textView.notePath = notePath
         if textView.text != text {
             let selection = textView.selectedRange
             textView.text = text
@@ -466,9 +577,12 @@ struct MarkdownEditor: UIViewRepresentable {
                 selection: selection,
                 width: width,
                 images: images,
-                resolvesLink: parent.resolvesLink
+                resolvesLink: parent.resolvesLink,
+                dataviewHeights: DataviewBlockInfo.heights,
+                rendersDataview: true
             ))
             textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
+            textView.refreshDataviewBlocks()
             for name in missing where !loading.contains(name) {
                 loading.insert(name)
                 Task { [weak self, weak textView] in

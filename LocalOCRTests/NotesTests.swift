@@ -348,6 +348,41 @@ final class NotesTests: XCTestCase {
         XCTAssertTrue(isHidden(math, at: 0))
     }
 
+    func testDataviewBlocksAreReservedForTheRunner() {
+        let text = "前言\n```dataviewjs\ndv.paragraph(\"hi\")\n```\n後記"
+        let ns = text as NSString
+        let fence = ns.range(of: "```dataviewjs").location
+        let storage = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: storage, options: LiveMarkdown.Options(selection: nil, width: 600, rendersDataview: true))
+        let info = storage.attribute(.mdDataview, at: fence, effectiveRange: nil) as? DataviewBlockInfo
+        XCTAssertEqual(info?.code, "dv.paragraph(\"hi\")")
+        XCTAssertEqual(info?.height, DataviewBlockInfo.defaultContentHeight + DataviewBlockInfo.headerHeight)
+        XCTAssertTrue(isHidden(storage, at: ns.range(of: "dv.paragraph").location), "程式碼藏起來，疊上執行畫面")
+        XCTAssertFalse(isHidden(storage, at: ns.range(of: "後記").location))
+
+        // 回報內容高度後保留對應的空間
+        let sized = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: sized, options: LiveMarkdown.Options(selection: nil, width: 600, dataviewHeights: [info?.key ?? "": 420], rendersDataview: true))
+        XCTAssertEqual((sized.attribute(.mdDataview, at: fence, effectiveRange: nil) as? DataviewBlockInfo)?.height, 420 + DataviewBlockInfo.headerHeight)
+
+        // 游標在區塊裡：顯示程式碼
+        let editing = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: editing, options: LiveMarkdown.Options(selection: NSRange(location: ns.range(of: "dv.").location, length: 0), width: 600, rendersDataview: true))
+        XCTAssertNil(editing.attribute(.mdDataview, at: fence, effectiveRange: nil))
+        XCTAssertFalse(isHidden(editing, at: ns.range(of: "dv.paragraph").location))
+
+        // 沒有結尾的區塊、或編輯器沒有執行畫面時：一般程式碼
+        let open = NSTextStorage(string: "```dataviewjs\ndv.paragraph(1)")
+        LiveMarkdown.apply(to: open, options: LiveMarkdown.Options(selection: nil, width: 600, rendersDataview: true))
+        XCTAssertNil(open.attribute(.mdDataview, at: 0, effectiveRange: nil))
+        XCTAssertNil(styled(text).attribute(.mdDataview, at: fence, effectiveRange: nil))
+
+        // 程式碼裡的 </script> 不會提早結束網頁中的 <script>
+        let html = DataviewShim.html(code: "dv.paragraph('</script><b>x</b>')", sourcePath: "a.md", vaultName: "v")
+        XCTAssertFalse(html.contains("</script><b>"))
+        XCTAssertTrue(html.contains("<\\/script><b>"))
+    }
+
     func testAssistantTableText() {
         let table = MarkdownTableText(rows: ["| 機種 | 數量 |", "|:---:|---:|", "| **K3** | 1 \\| 2 |", "| A<br>B |"])
         XCTAssertTrue(table.hasHeader)

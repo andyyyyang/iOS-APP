@@ -95,6 +95,7 @@ struct NoteView: View {
                     resolvesLink: { NoteLinks.resolve($0, in: store.linkIndex) != nil },
                     linkSuggestions: { store.linkSuggestions(for: $0) },
                     headerHeights: (header.barHeight + header.titleHeight, header.barHeight),
+                    notePath: path,
                     onScroll: { [header] in header.scroll = $0 }
                 )
                 .overlay(alignment: .top) { placeholder }

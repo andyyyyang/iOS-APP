@@ -220,11 +220,12 @@ describe("GET /v1/vault/index", () => {
         tasks: [{ text: "follow up", done: false }],
         snippet: "See [[Plan]] and ![[img/sketch.png|200]]",
         notebook: null,
+        properties: { tags: ["idea"], aliases: ["點子"] },
       },
-      expect.objectContaining({ path: "Projects/Plan.md", title: "Plan", links: ["Idea"], snippet: "Plan body [[Idea]]" }),
+      expect.objectContaining({ path: "Projects/Plan.md", title: "Plan", links: ["Idea"], snippet: "Plan body [[Idea]]", properties: {} }),
     ]);
     expect(Object.keys(res.body.notes[0])).toEqual([
-      "path", "mtime", "size", "etag", "title", "aliases", "tags", "links", "firstEmbed", "tasks", "snippet", "notebook",
+      "path", "mtime", "size", "etag", "title", "aliases", "tags", "links", "firstEmbed", "tasks", "snippet", "notebook", "properties",
     ]);
     expect(res.body.files).toEqual([{ path: "img/sketch.png", mtime: expect.any(Number), size: 4 }]);
 

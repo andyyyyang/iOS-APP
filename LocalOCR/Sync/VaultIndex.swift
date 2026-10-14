@@ -9,6 +9,44 @@ struct VaultIndex: Codable, Sendable, Equatable {
         var done: Bool
     }
 
+    /// 屬性（frontmatter）的一個值：文字、文字清單，或空值（空白或巢狀）。
+    enum Property: Codable, Sendable, Equatable {
+        case text(String)
+        case list([String])
+        case empty
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() {
+                self = .empty
+            } else if let text = try? container.decode(String.self) {
+                self = .text(text)
+            } else if let list = try? container.decode([String].self) {
+                self = .list(list)
+            } else {
+                self = .empty
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .text(let text): try container.encode(text)
+            case .list(let list): try container.encode(list)
+            case .empty: try container.encodeNil()
+            }
+        }
+
+        /// JSONSerialization 用的值。
+        var jsonObject: Any {
+            switch self {
+            case .text(let text): return text
+            case .list(let list): return list
+            case .empty: return NSNull()
+            }
+        }
+    }
+
     struct Note: Codable, Sendable, Equatable {
         var path: String
         /// 毫秒。
@@ -23,9 +61,12 @@ struct VaultIndex: Codable, Sendable, Equatable {
         var tasks: [TaskItem]
         var snippet: String
         var notebook: String?
+        /// 屬性（frontmatter），DataviewJS 的頁面欄位。
+        var properties: [String: Property]
 
         init(path: String, mtime: Double, size: Int = 0, etag: String = "", title: String? = nil, aliases: [String] = [], tags: [String] = [],
-             links: [String] = [], firstEmbed: String? = nil, tasks: [TaskItem] = [], snippet: String = "", notebook: String? = nil) {
+             links: [String] = [], firstEmbed: String? = nil, tasks: [TaskItem] = [], snippet: String = "", notebook: String? = nil,
+             properties: [String: Property] = [:]) {
             self.path = path
             self.mtime = mtime
             self.size = size
@@ -38,6 +79,7 @@ struct VaultIndex: Codable, Sendable, Equatable {
             self.tasks = tasks
             self.snippet = snippet
             self.notebook = notebook
+            self.properties = properties
         }
 
         // 欄位缺少時用預設值（伺服器之後加欄位或省略空欄位都能解析）
@@ -56,7 +98,8 @@ struct VaultIndex: Codable, Sendable, Equatable {
                 firstEmbed: try container.decodeIfPresent(String.self, forKey: .firstEmbed),
                 tasks: try container.decodeIfPresent([TaskItem].self, forKey: .tasks) ?? [],
                 snippet: try container.decodeIfPresent(String.self, forKey: .snippet) ?? "",
-                notebook: try container.decodeIfPresent(String.self, forKey: .notebook)
+                notebook: try container.decodeIfPresent(String.self, forKey: .notebook),
+                properties: (try? container.decodeIfPresent([String: Property].self, forKey: .properties)) ?? [:]
             )
         }
 

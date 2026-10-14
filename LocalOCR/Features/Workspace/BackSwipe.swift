@@ -2,6 +2,7 @@ import PDFKit
 import PencilKit
 import SwiftUI
 import UIKit
+import WebKit
 
 // MARK: - 往右滑回上一頁
 
@@ -83,7 +84,7 @@ struct BackSwipeArea: UIViewRepresentable {
             guard let view = touch.view, let root = window.rootViewController?.view, view.isDescendant(of: root) else { return false }
             var current: UIView? = view
             while let candidate = current {
-                if candidate is PKCanvasView || candidate is PDFView { return false }
+                if candidate is PKCanvasView || candidate is PDFView || candidate is WKWebView { return false }
                 if let text = candidate as? UITextView, text.isFirstResponder { return false }
                 if let scroll = candidate as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 1, scroll.contentOffset.x > 0.5 {
                     return false

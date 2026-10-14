@@ -36,7 +36,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/vault/files?prefix=&recursive=` | 列出 vault 檔案 `{"items":[{"path","size","mtime","etag"}],"folders":[...]}`（`folders` 只在非遞迴時回傳） |
 | `GET`／`PUT`／`DELETE /v1/vault/file?path=` | 下載／上傳（原始位元組，最多 25 MB；`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`）／刪除單一檔案 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
-| `GET /v1/vault/index` | 所有筆記的標題、aliases、tags、連結、第一個嵌入、待辦、摘要與 `localocr-notebook`，以及其他檔案 `{"version":1,"notes":[...],"files":[...]}`；支援 `ETag`／`If-None-Match`（304）與 gzip，筆記的 etag 沒變就不重新讀取 |
+| `GET /v1/vault/index` | 所有筆記的標題、aliases、tags、連結、第一個嵌入、待辦、摘要、`localocr-notebook` 與屬性（`properties`，frontmatter 的值：文字、文字清單或 null；App 的 DataviewJS 用來當頁面欄位），以及其他檔案 `{"version":1,"notes":[...],"files":[...]}`；支援 `ETag`／`If-None-Match`（304）與 gzip，筆記的 etag 沒變就不重新讀取 |
 | `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，`wait` 最多 25 秒）：經伺服器的寫入／刪除與裝置回報的變更 `{"cursor","reset","changes":[{"seq","path","op","client","at"}]}`；`X-LocalOCR-Client` 標頭相同的變更不列出 |
 | `POST /v1/vault/changes` | 回報裝置自己上傳到儲存桶的檔案 `{"paths"?:[...]}` → 202 `{"cursor"}`（Obsidian 插件在 Remotely Save 上傳後呼叫） |
 | `GET /v1/vault/stream`（WebSocket） | 即時推送變更（取代長輪詢，見下方「Vault 即時推送」）：第一個訊息 `{"type":"auth","token","client","since"?}` → `{"type":"ready","cursor","reset"}`，之後其他用戶端的變更即時送來 `{"type":"changes","cursor","reset":false,"changes":[...]}` |

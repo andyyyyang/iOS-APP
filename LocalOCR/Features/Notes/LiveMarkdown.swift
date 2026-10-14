@@ -22,6 +22,8 @@ extension NSAttributedString.Key {
     static let mdImage = NSAttributedString.Key("localocr.md.image")
     /// 整個表格畫成格線表（值：MarkdownTableInfo），放在表格第一行。
     static let mdTable = NSAttributedString.Key("localocr.md.table")
+    /// ```dataviewjs 區塊的執行畫面位置（值：DataviewBlockInfo），放在區塊第一行；畫面由 NoteTextView 疊上去。
+    static let mdDataview = NSAttributedString.Key("localocr.md.dataview")
     /// 連結（值：網址或路徑字串），點一下開啟。
     static let mdLink = NSAttributedString.Key("localocr.md.link")
     /// [[連結]]（值：連結目標，可能含 #標題）。
@@ -44,6 +46,30 @@ final class MarkdownImageInfo: NSObject {
     }
 
     override var hash: Int { name.hashValue }
+}
+
+/// ```dataviewjs 區塊：程式碼與保留的高度（含上方一列）。
+final class DataviewBlockInfo: NSObject {
+    /// 還不知道內容多高時的高度。
+    static let defaultContentHeight: CGFloat = 160
+    /// 上方一列（DataviewJS 標籤與按鈕）。
+    static let headerHeight: CGFloat = 34
+    /// 各區塊上次的內容高度（重新打開筆記時不跳動）。
+    @MainActor static var heights: [String: CGFloat] = [:]
+
+    let code: String
+    let key: String
+    let height: CGFloat
+
+    init(code: String, height: CGFloat) {
+        self.code = code
+        self.key = Self.key(for: code)
+        self.height = height
+    }
+
+    static func key(for code: String) -> String {
+        "\((code as NSString).length):\(code.hashValue)"
+    }
 }
 
 /// 畫成格線表的 Markdown 表格：每格已套好行內樣式（粗體、連結、程式碼…），欄寬依內容與文字欄寬分配，放不下的儲存格自動換行。
@@ -320,6 +346,10 @@ enum LiveMarkdown {
         var images: [String: UIImage] = [:]
         /// [[連結]] 的目標是否存在（不存在的連結顏色較淡，點了會建立新筆記）。
         var resolvesLink: (String) -> Bool = { _ in true }
+        /// ```dataviewjs 區塊執行後的內容高度（依 DataviewBlockInfo.key）。
+        var dataviewHeights: [String: CGFloat] = [:]
+        /// 執行 ```dataviewjs 區塊（編輯器有疊上執行畫面時才開啟）。
+        var rendersDataview = false
     }
 
     // MARK: 樣式
@@ -538,7 +568,13 @@ enum LiveMarkdown {
                     var end = index + 1
                     while end < lines.count, !trimmed(end).hasPrefix(fence) { end += 1 }
                     let last = min(end, lines.count - 1)
-                    styleCode(index...last)
+                    let language = value.dropFirst(3).trimmingCharacters(in: .whitespaces).lowercased()
+                    // 有結尾的 ```dataviewjs：沒在編輯時換成執行畫面
+                    if language == "dataviewjs", options.rendersDataview, end < lines.count, last > index, !isActive(lines: index...last) {
+                        styleDataview(index...last)
+                    } else {
+                        styleCode(index...last)
+                    }
                     index = last + 1
                     continue
                 }
@@ -894,14 +930,19 @@ enum LiveMarkdown {
                 raw()
                 return
             }
+            reserve(indices, height: info.size.height, key: .mdTable, value: info)
+        }
+
+        /// 把整段文字藏起來，在第一行保留 `height` 的空間（由版面管理或疊上去的畫面畫出內容）。
+        func reserve(_ indices: ClosedRange<Int>, height: CGFloat, key: NSAttributedString.Key, value: Any) {
             let first = indices.lowerBound
             let start = lines[first].location
             let end = NSMaxRange(paragraph(lines[indices.upperBound]))
             storage.addAttributes(Theme.hidden, range: NSRange(location: start, length: end - start))
-            storage.addAttribute(.mdTable, value: info, range: lines[first].length > 0 ? lines[first] : NSRange(location: start, length: min(1, end - start)))
+            storage.addAttribute(key, value: value, range: lines[first].length > 0 ? lines[first] : NSRange(location: start, length: min(1, end - start)))
             setParagraphStyle(Theme.paragraphStyle {
-                $0.minimumLineHeight = info.size.height
-                $0.maximumLineHeight = info.size.height
+                $0.minimumLineHeight = height
+                $0.maximumLineHeight = height
                 $0.lineSpacing = 0
                 $0.paragraphSpacingBefore = 6
                 $0.paragraphSpacing = 10
@@ -915,6 +956,14 @@ enum LiveMarkdown {
                     $0.paragraphSpacingBefore = 0
                 }, lines: (first + 1)...indices.upperBound)
             }
+        }
+
+        /// ```dataviewjs 區塊：保留執行畫面的高度（內容高度＋上方一列）。
+        func styleDataview(_ indices: ClosedRange<Int>) {
+            let code = ((indices.lowerBound + 1)..<indices.upperBound).map { string(lines[$0]) }.joined(separator: "\n")
+            let key = DataviewBlockInfo.key(for: code)
+            let height = (options.dataviewHeights[key] ?? DataviewBlockInfo.defaultContentHeight) + DataviewBlockInfo.headerHeight
+            reserve(indices, height: height, key: .mdDataview, value: DataviewBlockInfo(code: code, height: height))
         }
 
         /// 表格的儲存格：每格套好行內樣式，欄位對齊依分隔列（:--- 靠左、:---: 置中、---: 靠右）。
@@ -1193,6 +1242,15 @@ final class LiveMarkdownLayoutManager: NSLayoutManager {
             guard !rect.isNull else { return }
             LiveMarkdown.Theme.line.setFill()
             UIRectFill(CGRect(x: rect.minX, y: rect.midY - 0.5, width: container.size.width, height: 1))
+        }
+        // DataviewJS：執行畫面疊上來之前先畫底色
+        storage.enumerateAttribute(.mdDataview, in: characters) { value, range, _ in
+            guard let info = value as? DataviewBlockInfo else { return }
+            let rect = lineRects(for: range)
+            guard !rect.isNull else { return }
+            let spacingBefore = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0
+            LiveMarkdown.Theme.codeBackground.setFill()
+            UIBezierPath(roundedRect: CGRect(x: rect.minX, y: rect.minY + spacingBefore, width: container.size.width, height: info.height), cornerRadius: 10).fill()
         }
         // 表格：整張格線表畫在第一行保留的空間
         storage.enumerateAttribute(.mdTable, in: characters) { value, range, _ in

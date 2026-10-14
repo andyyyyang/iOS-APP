@@ -177,6 +177,11 @@ export const assistantSchemas = {
             },
             snippet: { type: "string", maxLength: SNIPPET_MAX_CHARS },
             notebook: { type: ["string", "null"], description: "Frontmatter localocr-notebook" },
+            properties: {
+              type: "object",
+              description: "The frontmatter as simple YAML: each value a string, a list of strings, or null (empty or nested)",
+              additionalProperties: { oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }, { type: "null" }] },
+            },
           },
         },
       },

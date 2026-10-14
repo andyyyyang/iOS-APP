@@ -2,7 +2,7 @@
 // own parser, so the graph, backlinks, tags and tasks look the same whether a note was downloaded or not.
 
 /** Bump when the parsed output changes: it is part of the index ETag, so clients refetch. */
-export const PARSER_VERSION = 1;
+export const PARSER_VERSION = 2;
 
 export const MAX_TASKS = 200;
 export const SNIPPET_MAX_CHARS = 160;
@@ -43,6 +43,8 @@ export interface ParsedNote {
   tasks: NoteTask[];
   snippet: string;
   notebook: string | null;
+  /** The frontmatter as simple YAML (Dataview's page fields): string, list of strings, or null for empty/nested. */
+  properties: Record<string, FrontmatterValue>;
 }
 
 /** ParsedNote plus every wikilink target (attachments included), for link resolution and retargeting. */
@@ -275,6 +277,7 @@ export function parseNote(path: string, text: string): ParsedNoteDetail {
     tasks: extractTasks(body),
     snippet: extractSnippet(body),
     notebook: typeof notebook === "string" && notebook !== "" ? notebook : null,
+    properties: data,
     allLinks,
   };
 }
