@@ -62,6 +62,20 @@ export const assistantPaths = {
       responses: { "200": response(ref("AssistantRoute")), "400": error("Invalid body (invalid_request)"), "401": unauthorized },
     },
   },
+  "/v1/assistant/models": {
+    get: {
+      operationId: "getAssistantModelSettings",
+      summary: "What the app's AI settings can choose: models this key can call, tier defaults and server tool defaults",
+      description:
+        "models comes from Anthropic's Models API (display names) joined with models.dev (family, release date). A run may then " +
+        "name one of them as model, and switch codeExecution / webSearch or lower maxTurns for itself.",
+      responses: {
+        "200": response(ref("AssistantModelSettings")),
+        "401": unauthorized,
+        "503": error("ANTHROPIC_API_KEY is not set (assistant_not_configured)"),
+      },
+    },
+  },
   "/v1/assistant/runs": {
     post: {
       operationId: "startAssistantRun",
@@ -83,7 +97,7 @@ export const assistantPaths = {
           },
           "Started",
         ),
-        "400": error("Invalid body (invalid_request) or path (invalid_path)"),
+        "400": error("Invalid body (invalid_request), path (invalid_path) or a model the key cannot use (unknown_model)"),
         "401": unauthorized,
         "503": error("ANTHROPIC_API_KEY is not set (assistant_not_configured) or the vault is not configured (vault_not_configured)"),
       },
@@ -235,6 +249,44 @@ export const assistantSchemas = {
       timeZone: { type: "string", default: "Asia/Taipei", description: "IANA time zone for the transcript and today's date" },
       tier: { type: "string", enum: ["small", "medium", "large"], default: "large", description: "Cloud tier from the route" },
       effort: { type: "string", enum: ["low", "medium", "high"], default: "high", description: "Thinking effort from the route" },
+      model: {
+        type: "string",
+        pattern: "^claude-[a-z0-9][a-z0-9.\\-]*$",
+        description: "A model picked in the app's settings (one GET /v1/assistant/models lists); default the tier's model",
+      },
+      codeExecution: { type: "boolean", description: "Code-execution sandbox for this run (default ASSISTANT_CODE_EXECUTION)" },
+      webSearch: { type: "boolean", description: "Web search for this run (default ASSISTANT_WEB_SEARCH)" },
+      maxTurns: { type: "integer", minimum: 1, description: "At most this many model calls (capped at ASSISTANT_MAX_TURNS)" },
+    },
+  },
+  AssistantModelSettings: {
+    type: "object",
+    required: ["tiers", "models", "codeExecution", "webSearch", "maxTurns", "issue"],
+    properties: {
+      tiers: {
+        type: "object",
+        required: ["small", "medium", "large"],
+        properties: { small: { type: "string" }, medium: { type: "string" }, large: { type: "string" } },
+        description: "The model behind each tier when the run names none",
+      },
+      models: {
+        type: "array",
+        description: "Models this API key can call, newest first (tool-less and experimental models left out)",
+        items: {
+          type: "object",
+          required: ["id", "name", "family", "releaseDate"],
+          properties: {
+            id: { type: "string" },
+            name: { type: "string", description: "Display name, e.g. Claude Sonnet 5.5" },
+            family: { type: ["string", "null"], description: "e.g. claude-opus, claude-sonnet, claude-haiku" },
+            releaseDate: { type: "string", format: "date" },
+          },
+        },
+      },
+      codeExecution: { type: "boolean", description: "Server default (ASSISTANT_CODE_EXECUTION)" },
+      webSearch: { type: "boolean", description: "Server default (ASSISTANT_WEB_SEARCH)" },
+      maxTurns: { type: "integer", description: "ASSISTANT_MAX_TURNS" },
+      issue: { type: ["string", "null"], description: "Why the model list is empty or the key fails, in Chinese" },
     },
   },
   AssistantRunStatus: { type: "string", enum: ["running", "completed", "failed", "cancelled"] },

@@ -26,6 +26,8 @@ struct NoteView: View {
     @State private var toast: String?
     @State private var header = NoteHeaderState()
     @State private var showsProperties = false
+    @AppStorage(AISettings.noteButtonKey) private var showsAIButton = true
+    @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
     @FocusState private var titleFocused: Bool
     private let sync = VaultSyncCenter.shared
     private let store = NotesStore.shared
@@ -166,9 +168,11 @@ struct NoteView: View {
                     .presentationCompactAdaptation(.popover)
                 }
             }
-            Button("AI") { startAIEdit() }
-                .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
-                .accessibilityLabel("請 AI 修改")
+            if showsAIButton {
+                Button("AI") { startAIEdit() }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+                    .accessibilityLabel("請 AI 修改")
+            }
             Menu {
                 Button {
                     inkRequest = InkEditRequest(name: InkFiles.newName(), isNew: true)
@@ -180,10 +184,12 @@ struct NoteView: View {
                 } label: {
                     Label("插入照片", systemImage: "photo")
                 }
-                Button {
-                    workspace.showRight(.ai)
-                } label: {
-                    Label("整理摘要與標籤", systemImage: "list.bullet.rectangle")
+                if showsAIPanel {
+                    Button {
+                        workspace.showRight(.ai)
+                    } label: {
+                        Label("整理摘要與標籤", systemImage: "list.bullet.rectangle")
+                    }
                 }
                 if let url = NotesSettings.obsidianURL(for: path) {
                     Button {

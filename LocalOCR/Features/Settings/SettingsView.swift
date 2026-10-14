@@ -54,9 +54,9 @@ struct SettingsView: View {
                         .padding(.vertical, 2)
                     }
                     NavigationLink {
-                        AssistantSettingsView()
+                        AIFeaturesView()
                     } label: {
-                        statusRow("知識庫 AI", localOnly ? "裝置端" : (assistant.cloudAvailable ? "雲端可用" : "雲端未設定"), color: .secondary)
+                        statusRow("AI 功能", localOnly ? "只用裝置端" : (assistant.cloudAvailable ? "雲端可用" : "雲端未設定"), color: .secondary)
                     }
                     NavigationLink {
                         AIDiagnosticsView()
@@ -73,7 +73,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(localOnly
                          ? "所有 AI 都在這台裝置的 Apple Intelligence 上執行：首頁 AI 不交給雲端、不請 Jev 判斷，智慧掃描用裝置端判斷情境。伺服器只用來搜尋與同步 vault。"
-                         : "Jev 依要求的種類與難度自動選裝置端或雲端模型，以成本為先：簡單的每個等級都用裝置端（免費）。低：盡量留在裝置端；中：依難度用 Haiku、Sonnet 或 Opus 級；高：難的工作早一點用上最好的模型。")
+                         : "Jev 依要求的種類與難度自動選裝置端或雲端模型，以成本為先：簡單的每個等級都用裝置端（免費）。低：盡量留在裝置端；中：依難度用 Haiku、Sonnet 或 Opus 級；高：難的工作早一點用上最好的模型。各級的模型、網路搜尋、執行程式與筆記的 AI 在「AI 功能」中設定。")
                 }
 
                 Section {
@@ -161,20 +161,8 @@ struct SettingsView: View {
         }
     }
 
-    /// 一列：左邊名稱，右邊狀態（一行，太長時截斷），箭頭不會被擠到下一行。
     private func statusRow(_ title: String, _ value: String, systemImage: String? = nil, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 8)
-            HStack(spacing: 4) {
-                if let systemImage { Image(systemName: systemImage) }
-                Text(value).lineLimit(1)
-            }
-            .font(.subheadline)
-            .foregroundStyle(color)
-        }
+        SettingsStatusRow(title: title, value: value, systemImage: systemImage, color: color)
     }
 
     private var level: RecognitionLevel {

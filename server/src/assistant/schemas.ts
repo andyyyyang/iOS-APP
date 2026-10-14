@@ -28,6 +28,17 @@ export const runRequestSchema = z.object({
   /** Cloud tier from POST /v1/assistant/route (default large). */
   tier: z.enum(["small", "medium", "large"]).optional(),
   effort: z.enum(["low", "medium", "high"]).optional(),
+  /** A model picked in the app's settings for this tier (one GET /v1/assistant/models lists); default the tier's. */
+  model: z
+    .string()
+    .max(100)
+    .regex(/^claude-[a-z0-9][a-z0-9.\-]*$/, "must be a Claude model id such as claude-sonnet-5-5")
+    .optional(),
+  /** Switch the server tools for this run (default: the server's ASSISTANT_CODE_EXECUTION / ASSISTANT_WEB_SEARCH). */
+  codeExecution: z.boolean().optional(),
+  webSearch: z.boolean().optional(),
+  /** Fewer model calls than the server's ASSISTANT_MAX_TURNS (never more). */
+  maxTurns: z.number().int().min(1).optional(),
 });
 export type RunRequest = z.infer<typeof runRequestSchema>;
 

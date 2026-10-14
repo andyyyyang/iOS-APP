@@ -3,17 +3,20 @@ import SwiftUI
 /// 右側欄：開著筆記時是它的大綱、連結、屬性與 AI 整理；其他時候是所有待辦（粉彩卡片）。
 struct RightSidebar: View {
     @Environment(Workspace.self) private var workspace
+    @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let path = workspace.activeNotePath {
-                ModePicker()
+                ModePicker(modes: RightPanelMode.allCases.filter { $0 != .ai || showsAIPanel })
                 Group {
                     switch workspace.rightMode {
                     case .outline: OutlinePanel(path: path)
                     case .links: LinksPanel(path: path)
                     case .properties: PropertiesPanel(path: path)
-                    case .ai: AIPanel(path: path).id(path)
+                    case .ai:
+                        // 設定中關掉了筆記 AI：顯示大綱
+                        if showsAIPanel { AIPanel(path: path).id(path) } else { OutlinePanel(path: path) }
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -27,14 +30,15 @@ struct RightSidebar: View {
     }
 }
 
-/// 分段控制：大綱｜連結｜屬性｜AI。
+/// 分段控制：大綱｜連結｜屬性｜AI（設定中關掉筆記 AI 時沒有 AI）。
 private struct ModePicker: View {
+    let modes: [RightPanelMode]
     @Environment(Workspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(RightPanelMode.allCases) { mode in
-                let isActive = workspace.rightMode == mode
+            ForEach(modes) { mode in
+                let isActive = workspace.rightMode == mode || (workspace.rightMode == .ai && !modes.contains(.ai) && mode == .outline)
                 Button {
                     workspace.rightMode = mode
                 } label: {

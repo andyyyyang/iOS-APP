@@ -306,9 +306,11 @@ final class KnowledgeAssistant {
         if route.isCloud {
             let tier = route.tier ?? "large"
             cloudPlan = CloudPlan(tier: tier, effort: route.effort)
-            let model = route.model.map(Self.modelLabel) ?? Self.tierLabel(tier)
+            // 設定頁固定了這一級的模型時用它
+            let id = AISettings.model(for: tier) ?? route.model
+            let model = id.map(Self.modelLabel) ?? Self.tierLabel(tier)
             updateLast { $0.steps.append(.route("\(judge)：\(route.summary) → 雲端 \(model)（預算\(mode.shortTitle)）")) }
-            return .cloud(model: route.model ?? "")
+            return .cloud(model: id ?? "")
         }
         guard deviceAvailable else { return .search }
         updateLast { $0.steps.append(.route("\(judge)：\(route.summary) → 裝置端 AI（免費）")) }
@@ -420,17 +422,30 @@ final class KnowledgeAssistant {
             return AssistantClient.HistoryTurn(role: message.role == .user ? "user" : "assistant", text: message.text)
         }
         let run: AssistantClient.Run
+        var options = AISettings.runOptions(tier: cloudPlan?.tier)
         do {
-            run = try await client.startRun(
-                prompt: question,
-                history: Array(history.suffix(12)),
-                rulesPath: rulesOverride,
-                openNote: openNote,
-                transcriptPath: transcriptPath,
-                timeZone: .current,
-                tier: cloudPlan?.tier,
-                effort: cloudPlan?.effort
-            )
+            func start() async throws -> AssistantClient.Run {
+                try await client.startRun(
+                    prompt: question,
+                    history: Array(history.suffix(12)),
+                    rulesPath: rulesOverride,
+                    openNote: openNote,
+                    transcriptPath: transcriptPath,
+                    timeZone: .current,
+                    tier: cloudPlan?.tier,
+                    effort: cloudPlan?.effort,
+                    options: options
+                )
+            }
+            do {
+                run = try await start()
+            } catch let error as ServerError where error.code == "unknown_model" && options.model != nil {
+                // 設定頁選的模型已經不能用（下架或換了 API key）：改用這一級的自動模型
+                let pinned = Self.modelLabel(options.model ?? "")
+                updateLast { $0.steps.append(.route("設定的模型 \(pinned) 無法使用，改用自動選擇")) }
+                options.model = nil
+                run = try await start()
+            }
         } catch {
             finish("雲端 AI 無法開始：\(error.localizedDescription)", isError: true)
             await saveTurn(question)

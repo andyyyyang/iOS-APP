@@ -618,6 +618,61 @@ describe("assistant runs", () => {
     expect(model.requests[0]!.tools.some((tool) => tool.name === "save_output")).toBe(false);
   });
 
+  it("lists models for the settings and applies a run's model, tools and turn limit", async () => {
+    const choices = [
+      { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", family: "claude-sonnet", releaseDate: "2026-09-22" },
+      { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", family: "claude-haiku", releaseDate: "2026-09-01" },
+    ];
+    const loop = () => reply([toolUse(`t${Math.random()}`, "list_files", {})], "tool_use");
+    const model = new ScriptedModel([respond([text("好")]), loop, loop, loop]);
+    const { app } = await assistantApp({}, { model, maxTurns: 5, codeExecution: true, webSearch: false, listModels: async () => choices });
+    const settings = await request(app).get("/v1/assistant/models").set(AUTH).expect(200);
+    expect(settings.body).toEqual({
+      tiers: { small: "claude-test-model", medium: "claude-test-model", large: "claude-test-model" },
+      models: choices,
+      codeExecution: true,
+      webSearch: false,
+      maxTurns: 5,
+      issue: null,
+    });
+
+    const first = await request(app)
+      .post("/v1/assistant/runs")
+      .set(AUTH)
+      .send({ prompt: "x", tier: "medium", model: "claude-haiku-5-5", codeExecution: false, webSearch: true })
+      .expect(202);
+    expect(first.body.model).toBe("claude-haiku-5-5");
+    await finish(app, first.body.id);
+    expect(model.requests[0]).toMatchObject({ model: "claude-haiku-5-5", codeExecution: false, webSearch: true });
+    expect(model.requests[0]!.tools.some((tool) => tool.name === "save_output")).toBe(false);
+
+    // never more turns than the server allows, fewer when asked
+    const limited = await finish(app, await start(app, { prompt: "一直列", maxTurns: 2 }));
+    expect(limited).toMatchObject({ status: "failed", error: { code: "max_turns", message: expect.stringContaining("2 輪") } });
+    expect(model.requests).toHaveLength(3);
+
+    const unknown = await request(app).post("/v1/assistant/runs").set(AUTH).send({ prompt: "x", model: "claude-opus-9" }).expect(400);
+    expect(unknown.body.error.code).toBe("unknown_model");
+    await request(app).post("/v1/assistant/runs").set(AUTH).send({ prompt: "x", model: "gpt-5" }).expect(400);
+    await request(app).post("/v1/assistant/runs").set(AUTH).send({ prompt: "x", maxTurns: 0 }).expect(400);
+  });
+
+  it("reports why the model list is empty and answers 503 without a model", async () => {
+    const failing = await assistantApp({}, {
+      model: new ScriptedModel([]),
+      listModels: async () => {
+        throw new Error("network down");
+      },
+    });
+    const res = await request(failing.app).get("/v1/assistant/models").set(AUTH).expect(200);
+    expect(res.body).toMatchObject({ models: [], issue: "無法取得模型清單：network down" });
+    // without a list, any well-formed id is passed on (the API explains a bad one)
+    await request(failing.app).post("/v1/assistant/runs").set(AUTH).send({ prompt: "x", model: "claude-opus-9" }).expect(202);
+
+    const off = await assistantApp({}, { model: null });
+    await request(off.app).get("/v1/assistant/models").set(AUTH).expect(503);
+  });
+
   it("loads the vault's editing rules into the prompt", async () => {
     const rules = { "AGENTS.md": "日期一律寫成 YYYY-MM-DD", "docs/rules.md": "自訂規則", "我的寫作規則.md": "備用規則" };
     const contexts = async (files: Record<string, string>, body: Record<string, unknown>) => {
@@ -772,6 +827,7 @@ describe("OpenAPI", () => {
     for (const path of [
       "/v1/vault/index",
       "/v1/assistant/route",
+      "/v1/assistant/models",
       "/v1/assistant/runs",
       "/v1/assistant/runs/{id}",
       "/v1/assistant/runs/{id}/cancel",

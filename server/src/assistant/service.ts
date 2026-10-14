@@ -15,6 +15,7 @@ import { SYSTEM_PROMPT, buildRunContext, loadVaultRules } from "./prompt.js";
 import { RequestRouter } from "./routing.js";
 import type { Effort } from "./tiers.js";
 import { MAX_HISTORY_TEXT, MAX_HISTORY_TURNS, routeRequestSchema, runQuerySchema, runRequestSchema, undoRequestSchema, type RunRequest } from "./schemas.js";
+import type { ModelChoice } from "./catalog.js";
 import { DEFAULT_TIME_ZONE } from "./time.js";
 import { ASSISTANT_CLIENT_ID, AssistantToolbox, sha1, type EditRecord, type NewEdit, type ToolHost } from "./tools.js";
 import { appendTranscript } from "./transcript.js";
@@ -49,6 +50,20 @@ export interface AssistantOptions {
   webSearch?: boolean;
   /** A problem with the API key found by the last Models API call (shown on /health), null when fine or unknown. */
   issue?: () => string | null;
+  /** The models this key can call, for the app's settings (GET /v1/assistant/models). */
+  listModels?: () => Promise<ModelChoice[]>;
+}
+
+/** GET /v1/assistant/models: what the app's AI settings can choose from, and the server's defaults. */
+export interface ModelSettings {
+  /** The model behind each tier when the app doesn't pick one. */
+  tiers: Record<"small" | "medium" | "large", string>;
+  /** Models the key can call, newest first (empty when the Models API could not be asked; see `issue`). */
+  models: ModelChoice[];
+  codeExecution: boolean;
+  webSearch: boolean;
+  maxTurns: number;
+  issue: string | null;
 }
 
 class RunFailure extends Error {
@@ -179,6 +194,9 @@ export class AssistantService {
   private readonly codeExecution: boolean;
   private readonly webSearch: boolean;
   private readonly issueSource: () => string | null;
+  private readonly listModels: (() => Promise<ModelChoice[]>) | null;
+  /** Ids from the last model list, to reject a run naming a model the key can't call (null until listed). */
+  private knownModels: Set<string> | null = null;
 
   constructor(
     private readonly deps: { vault: VaultService; vaultIndex: VaultIndexService; now?: () => number },
@@ -190,6 +208,7 @@ export class AssistantService {
     this.codeExecution = options.codeExecution ?? true;
     this.webSearch = options.webSearch ?? false;
     this.issueSource = options.issue ?? (() => null);
+    this.listModels = options.listModels ?? null;
   }
 
   private now(): number {
@@ -212,6 +231,29 @@ export class AssistantService {
     if (!model) return null;
     const of = (tier: "small" | "medium" | "large") => model.modelFor?.(tier) ?? model.model;
     return { small: of("small"), medium: of("medium"), large: of("large") };
+  }
+
+  async modelSettings(): Promise<ModelSettings> {
+    const tiers = this.tierModels;
+    if (!tiers) throw notConfigured();
+    let models: ModelChoice[] = [];
+    let failure: string | null = null;
+    if (this.listModels) {
+      try {
+        models = await this.listModels();
+        this.knownModels = new Set(models.map((model) => model.id));
+      } catch (error) {
+        failure = (error instanceof Error ? error.message : String(error)).slice(0, 300);
+      }
+    }
+    return {
+      tiers,
+      models,
+      codeExecution: this.codeExecution,
+      webSearch: this.webSearch,
+      maxTurns: this.maxTurns,
+      issue: this.issueSource() ?? (failure ? `無法取得模型清單：${failure}` : null),
+    };
   }
 
   /** An API key is configured and the vault is there: cloud runs can start. */
@@ -243,8 +285,12 @@ export class AssistantService {
         throw new AppError(400, "invalid_path", "Invalid path: transcriptPath must not be in a dot folder");
       }
     }
+    if (request.model && this.knownModels && !this.knownModels.has(request.model)) {
+      throw new AppError(400, "unknown_model", `This API key cannot use ${request.model} (see GET /v1/assistant/models)`);
+    }
     this.prune();
-    const run = new Run(randomUUID(), model.modelFor?.(request.tier ?? "large") ?? model.model, this.now(), () => this.now());
+    const tierModel = model.modelFor?.(request.tier ?? "large") ?? model.model;
+    const run = new Run(randomUUID(), request.model ?? tierModel, this.now(), () => this.now());
     run.effort = request.effort;
     this.runs.set(run.id, run);
     run.done = this.execute(run, model, request).catch((error) => {
@@ -312,8 +358,9 @@ export class AssistantService {
     const signal = run.abort.signal;
     const timeZone = request.timeZone ?? DEFAULT_TIME_ZONE;
     const askedAt = new Date(run.createdAt);
-    let codeExecution = this.codeExecution;
-    let webSearch = this.webSearch;
+    let codeExecution = request.codeExecution ?? this.codeExecution;
+    let webSearch = request.webSearch ?? this.webSearch;
+    const maxTurns = Math.min(request.maxTurns ?? this.maxTurns, this.maxTurns);
     const host: ToolHost = {
       emit: (event) => run.emit(event),
       addEdit: (edit) => this.addEdit(run, edit),
@@ -331,8 +378,8 @@ export class AssistantService {
       let lastMessage: string | null = null;
       for (let turn = 0; ; turn += 1) {
         if (signal.aborted) throw signal.reason;
-        if (turn >= this.maxTurns) {
-          throw new RunFailure("max_turns", `已達到最多 ${this.maxTurns} 輪模型呼叫，工作沒有完成。`);
+        if (turn >= maxTurns) {
+          throw new RunFailure("max_turns", `已達到最多 ${maxTurns} 輪模型呼叫，工作沒有完成。`);
         }
         const context = buildRunContext({ now: askedAt, timeZone, openNote: request.openNote, rules, codeExecution, webSearch });
         let response: ModelResponse;

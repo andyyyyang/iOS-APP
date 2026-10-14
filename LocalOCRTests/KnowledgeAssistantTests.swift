@@ -224,4 +224,53 @@ final class KnowledgeAssistantTests: XCTestCase {
         XCTAssertEqual(KnowledgeAssistant.modelLabel("claude-fable-5-1"), "Fable 5.1")
         XCTAssertEqual(KnowledgeAssistant.modelLabel("gpt-x"), "gpt-x")
     }
+
+    func testParsesModelSettings() {
+        let value: [String: Any] = [
+            "tiers": ["small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"],
+            "models": [
+                ["id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "family": "claude-sonnet", "releaseDate": "2026-09-28"],
+                ["id": "claude-x", "name": "claude-x", "family": NSNull(), "releaseDate": "2026-01-01"],
+                ["name": "no id"],
+            ],
+            "codeExecution": true,
+            "webSearch": false,
+            "maxTurns": 40,
+            "issue": NSNull(),
+        ]
+        let settings = AssistantClient.modelSettings(from: value)
+        XCTAssertEqual(settings.tiers["medium"], "claude-sonnet-5-5")
+        XCTAssertEqual(settings.models.map(\.id), ["claude-sonnet-5-5", "claude-x"])
+        XCTAssertEqual(settings.models[0].family, "claude-sonnet")
+        XCTAssertNil(settings.models[1].family)
+        XCTAssertEqual(settings.maxTurns, 40)
+        XCTAssertTrue(settings.codeExecution)
+        XCTAssertFalse(settings.webSearch)
+        XCTAssertNil(settings.issue)
+    }
+
+    func testAISettingsRunOptions() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ai-settings-test"))
+        defaults.removePersistentDomain(forName: "ai-settings-test")
+        defer { defaults.removePersistentDomain(forName: "ai-settings-test") }
+        // nothing chosen: the server decides everything
+        XCTAssertEqual(AISettings.runOptions(tier: "medium", defaults: defaults), AISettings.RunOptions())
+        XCTAssertTrue(AISettings.isOn(AISettings.noteButtonKey, defaults: defaults))
+
+        defaults.set("claude-sonnet-5-5", forKey: AISettings.modelKey("medium"))
+        defaults.set("", forKey: AISettings.modelKey("large"))
+        defaults.set("on", forKey: AISettings.webSearchKey)
+        defaults.set("off", forKey: AISettings.codeExecutionKey)
+        defaults.set(10, forKey: AISettings.maxTurnsKey)
+        defaults.set(false, forKey: AISettings.noteButtonKey)
+        XCTAssertEqual(
+            AISettings.runOptions(tier: "medium", defaults: defaults),
+            AISettings.RunOptions(model: "claude-sonnet-5-5", webSearch: true, codeExecution: false, maxTurns: 10)
+        )
+        // the large tier is still automatic; no tier = the large tier
+        XCTAssertNil(AISettings.runOptions(tier: nil, defaults: defaults).model)
+        XCTAssertNil(AISettings.runOptions(tier: "small", defaults: defaults).model)
+        XCTAssertFalse(AISettings.isOn(AISettings.noteButtonKey, defaults: defaults))
+        XCTAssertEqual(AISettings.tierFamily("small"), "claude-haiku")
+    }
 }

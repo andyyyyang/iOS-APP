@@ -37,6 +37,18 @@ export interface AvailableModel {
   id: string;
   /** RFC 3339 */
   createdAt: string;
+  /** e.g. "Claude Opus 5.5" (Models API display_name). */
+  displayName?: string;
+}
+
+/** A model shown in the app's settings: one the key can call, with its family (for the tier pickers). */
+export interface ModelChoice {
+  id: string;
+  name: string;
+  /** e.g. "claude-opus"; null when neither models.dev nor the id says. */
+  family: string | null;
+  /** YYYY-MM-DD */
+  releaseDate: string;
 }
 
 /** ASSISTANT_MODEL: "latest" = newest Opus; "latest-sonnet", "latest-haiku", "latest-fable", "latest-opus" = newest of that family; anything else is a fixed model id. */
@@ -112,9 +124,30 @@ export async function fetchModelsDev(fetchImpl: typeof fetch = fetch): Promise<C
 export async function listAnthropicModels(client: Anthropic): Promise<AvailableModel[]> {
   const models: AvailableModel[] = [];
   for await (const model of client.models.list({ limit: 100 }, { timeout: FETCH_TIMEOUT_MS })) {
-    models.push({ id: model.id, createdAt: model.created_at });
+    models.push({ id: model.id, createdAt: model.created_at, ...(model.display_name ? { displayName: model.display_name } : {}) });
   }
   return models;
+}
+
+const KNOWN_FAMILIES = Object.keys(DEFAULT_FAMILY_MODELS);
+
+/**
+ * The models the settings can offer, newest first: what the Models API lists, with models.dev's family and release
+ * date where it has them. Experimental or tool-less models are left out (cloud runs need tool use).
+ */
+export function modelChoices(catalog: CatalogEntry[], available: AvailableModel[]): ModelChoice[] {
+  const entries = new Map<string, CatalogEntry>();
+  for (const entry of catalog) {
+    entries.set(entry.id, entry);
+    if (entry.canonicalId && !entries.has(entry.canonicalId)) entries.set(entry.canonicalId, entry);
+  }
+  const choices = available.flatMap((model): ModelChoice[] => {
+    const entry = entries.get(model.id);
+    if (entry && (entry.toolCall === false || entry.experimental)) return [];
+    const family = entry?.family ?? KNOWN_FAMILIES.find((name) => model.id.startsWith(`${name}-`)) ?? null;
+    return [{ id: model.id, name: model.displayName ?? model.id, family, releaseDate: entry?.releaseDate ?? model.createdAt.slice(0, 10) }];
+  });
+  return choices.sort((a, b) => b.releaseDate.localeCompare(a.releaseDate) || b.id.localeCompare(a.id));
 }
 
 /**

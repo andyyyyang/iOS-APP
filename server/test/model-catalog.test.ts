@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LatestModel, parseModelSetting, parseModelsDev, pickLatest } from "../src/assistant/catalog.js";
+import { LatestModel, modelChoices, parseModelSetting, parseModelsDev, pickLatest } from "../src/assistant/catalog.js";
 import { AnthropicAssistantModel } from "../src/assistant/model.js";
 
 // A slice of models.dev's api.json (shape as published; values made up).
@@ -97,5 +97,25 @@ describe("which model cloud runs use", () => {
     current = "claude-opus-5-6";
     expect(model.model).toBe("claude-opus-5-6");
     expect(model.params({ ...request, model: "claude-opus-5-5" }).model).toBe("claude-opus-5-5");
+  });
+});
+
+describe("modelChoices", () => {
+  it("lists the models the key can call, newest first, with family and date, leaving out experimental ones", () => {
+    const catalog = parseModelsDev(MODELS_DEV);
+    const available = [
+      { id: "claude-opus-5-5", createdAt: "2026-09-22T00:00:00Z", displayName: "Claude Opus 5.5" },
+      { id: "claude-haiku-5-5", createdAt: "2026-10-07T00:00:00Z", displayName: "Claude Haiku 5.5" },
+      { id: "claude-opus-6-preview", createdAt: "2026-10-10T00:00:00Z" },
+      { id: "claude-sonnet-5-6", createdAt: "2026-10-12T00:00:00Z" },
+    ];
+    expect(modelChoices(catalog, available)).toEqual([
+      { id: "claude-sonnet-5-6", name: "claude-sonnet-5-6", family: "claude-sonnet", releaseDate: "2026-10-12" },
+      { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", family: "claude-haiku", releaseDate: "2026-10-07" },
+      { id: "claude-opus-5-5", name: "Claude Opus 5.5", family: "claude-opus", releaseDate: "2026-09-22" },
+    ]);
+    expect(modelChoices([], [{ id: "claude-x", createdAt: "2026-01-01T00:00:00Z" }])).toEqual([
+      { id: "claude-x", name: "claude-x", family: null, releaseDate: "2026-01-01" },
+    ]);
   });
 });

@@ -9,6 +9,11 @@ export function assistantRouter({ assistant }: Services): Router {
     res.json(await assistant.route(req.body));
   });
 
+  // What the app's AI settings can pick: the models this key can call and the server's defaults.
+  router.get("/models", async (_req, res) => {
+    res.set("Cache-Control", "no-store").json(await assistant.modelSettings());
+  });
+
   router.post("/runs", (req, res) => {
     res.status(202).json(assistant.start(req.body));
   });

@@ -767,7 +767,7 @@ struct MarkdownEditor: UIViewRepresentable {
             heading.accessibilityLabel = "標題"
             let ai = UIBarButtonItem(title: "AI", primaryAction: UIAction { [weak self] _ in self?.parent.onAIEdit() })
             ai.accessibilityLabel = "請 AI 修改"
-            toolbar.items = [
+            var items: [UIBarButtonItem] = [
                 heading,
                 item("bold", "粗體") { controller.wrapSelection("**") },
                 item("italic", "斜體") { controller.wrapSelection("*") },
@@ -775,11 +775,15 @@ struct MarkdownEditor: UIViewRepresentable {
                 item("checklist", "待辦") { controller.toggleLinePrefix("- [ ] ") },
                 item("link", "連結") { controller.wrapSelection("[[", closing: "]]") },
                 .flexibleSpace(),
-                ai,
+            ]
+            // 設定 → AI 功能可以關掉筆記的 AI 按鈕
+            if AISettings.isOn(AISettings.noteButtonKey) { items.append(ai) }
+            items += [
                 item("pencil.tip.crop.circle", "手寫區塊") { [weak self] in self?.parent.onInsertInk() },
                 item("photo", "照片") { [weak self] in self?.parent.onInsertPhoto() },
                 item("keyboard.chevron.compact.down", "收起鍵盤") { controller.dismissKeyboard() },
             ]
+            toolbar.items = items
             toolbar.sizeToFit()
             return toolbar
         }

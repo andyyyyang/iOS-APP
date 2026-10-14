@@ -92,12 +92,57 @@ struct AssistantClient: Sendable {
         let text: String
     }
 
+    /// 設定頁能選的雲端模型與伺服器的預設（GET /v1/assistant/models）。
+    struct ModelSettings: Equatable, Sendable {
+        struct Model: Equatable, Sendable, Identifiable {
+            let id: String
+            /// 例如 Claude Sonnet 5.5。
+            let name: String
+            /// 例如 claude-sonnet；不知道時是 nil。
+            let family: String?
+            /// YYYY-MM-DD
+            let releaseDate: String
+        }
+
+        /// 沒有指定模型時，每個等級（small、medium、large）用的模型。
+        var tiers: [String: String]
+        /// 這把 API key 能用的模型，新的在前。
+        var models: [Model]
+        var codeExecution: Bool
+        var webSearch: Bool
+        var maxTurns: Int
+        /// 模型清單是空的或 API key 有問題時的原因。
+        var issue: String?
+    }
+
+    /// 伺服器上 AI 的狀態（/health）。
+    struct ServerStatus: Equatable, Sendable {
+        var assistant: Bool
+        var jev: Bool
+        var issue: String?
+    }
+
     // MARK: 端點
 
     /// 伺服器是否設定了雲端 AI（/health 的 assistant）。
     func isAvailable() async -> Bool {
         guard let value = try? await send("GET", "/health", authorized: false, timeout: 10) else { return false }
         return value["assistant"] as? Bool == true
+    }
+
+    /// 雲端 AI 與 Jev 是否設定好，以及 API key 的問題（/health）。
+    func status() async -> ServerStatus? {
+        guard let value = try? await send("GET", "/health", authorized: false, timeout: 10) else { return nil }
+        return ServerStatus(
+            assistant: value["assistant"] as? Bool == true,
+            jev: value["jev"] as? Bool == true,
+            issue: value["assistantIssue"] as? String
+        )
+    }
+
+    /// 設定頁能選的模型與伺服器的預設。
+    func modelSettings() async throws -> ModelSettings {
+        Self.modelSettings(from: try await send("GET", "/v1/assistant/models", timeout: 30))
     }
 
     /// 判斷這個要求交給誰。`budget`：low、medium 或 high（伺服器依種類與難度選裝置端或哪一級的雲端模型）。
@@ -112,7 +157,8 @@ struct AssistantClient: Sendable {
         return Self.route(from: value)
     }
 
-    /// 開始一個雲端工作。`rulesPath`：nil 自動尋找、空字串不使用規則；`tier`、`effort` 來自 route 的判斷（沒有時用最好的模型）。
+    /// 開始一個雲端工作。`rulesPath`：nil 自動尋找、空字串不使用規則；`tier`、`effort` 來自 route 的判斷（沒有時用最好的模型）；
+    /// `options`：設定頁的模型、網路搜尋、執行程式與步驟上限（nil 的用伺服器的預設）。
     func startRun(
         prompt: String,
         history: [HistoryTurn],
@@ -121,7 +167,8 @@ struct AssistantClient: Sendable {
         transcriptPath: String?,
         timeZone: TimeZone,
         tier: String? = nil,
-        effort: String? = nil
+        effort: String? = nil,
+        options: AISettings.RunOptions = AISettings.RunOptions()
     ) async throws -> Run {
         var body: [String: Any] = [
             "prompt": prompt,
@@ -133,6 +180,10 @@ struct AssistantClient: Sendable {
         if let transcriptPath { body["transcriptPath"] = transcriptPath }
         if let tier { body["tier"] = tier }
         if let effort { body["effort"] = effort }
+        if let model = options.model { body["model"] = model }
+        if let webSearch = options.webSearch { body["webSearch"] = webSearch }
+        if let codeExecution = options.codeExecution { body["codeExecution"] = codeExecution }
+        if let maxTurns = options.maxTurns { body["maxTurns"] = maxTurns }
         let value = try await send("POST", "/v1/assistant/runs", body: body, timeout: 30)
         return Self.run(from: value)
     }
@@ -170,6 +221,26 @@ struct AssistantClient: Sendable {
             tier: value["tier"] as? String,
             model: value["model"] as? String,
             effort: value["effort"] as? String
+        )
+    }
+
+    static func modelSettings(from value: [String: Any]) -> ModelSettings {
+        let models: [ModelSettings.Model] = (value["models"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let id = item["id"] as? String, !id.isEmpty else { return nil }
+            return ModelSettings.Model(
+                id: id,
+                name: item["name"] as? String ?? id,
+                family: item["family"] as? String,
+                releaseDate: item["releaseDate"] as? String ?? ""
+            )
+        }
+        return ModelSettings(
+            tiers: value["tiers"] as? [String: String] ?? [:],
+            models: models,
+            codeExecution: value["codeExecution"] as? Bool ?? true,
+            webSearch: value["webSearch"] as? Bool ?? false,
+            maxTurns: (value["maxTurns"] as? NSNumber)?.intValue ?? 0,
+            issue: value["issue"] as? String
         )
     }
 

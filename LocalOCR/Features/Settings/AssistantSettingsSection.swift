@@ -1,31 +1,15 @@
 import SwiftUI
 
-/// 設定 → AI → 知識庫 AI：雲端狀態、對話紀錄、AI 修改筆記時遵守的 vault 編輯規則檔。
-struct AssistantSettingsView: View {
-    var body: some View {
-        Form {
-            AssistantSettingsSection()
-        }
-        .canvasList()
-        .navigationTitle("知識庫 AI")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
+/// 設定 → AI 功能 → 首頁 AI：對話紀錄，以及 AI 修改筆記時遵守的 vault 編輯規則檔。
 struct AssistantSettingsSection: View {
     @State private var assistant = KnowledgeAssistant.shared
     @State private var customPath = KnowledgeAssistant.shared.rulesOverride ?? ""
     @State private var usesRules = KnowledgeAssistant.shared.rulesOverride != ""
-    @AppStorage(AIPrivacy.localOnlyKey) private var localOnly = false
     @AppStorage(KnowledgeAssistant.historyEnabledKey) private var historyEnabled = true
     @AppStorage(KnowledgeAssistant.historyFolderKey) private var historyFolder = KnowledgeAssistant.defaultHistoryFolder
 
     var body: some View {
         Section {
-            LabeledContent("雲端 AI") {
-                Text(localOnly ? "已關閉（只使用裝置端）" : assistant.cloudAvailable ? "可以使用" : "伺服器尚未設定")
-                    .foregroundStyle(!localOnly && assistant.cloudAvailable ? DS.success : DS.textSecondary)
-            }
             Toggle("保存對話紀錄", isOn: $historyEnabled)
             if historyEnabled {
                 TextField("對話紀錄資料夾", text: $historyFolder)
@@ -63,14 +47,11 @@ struct AssistantSettingsSection: View {
                 }
             }
         } header: {
-            Text("知識庫 AI")
+            Text("首頁 AI")
         } footer: {
             Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
         }
-        .task {
-            await assistant.loadRules()
-            await assistant.checkCloud(force: true)
-        }
+        .task { await assistant.loadRules() }
     }
 
     private func normalized(_ path: String) -> String {
