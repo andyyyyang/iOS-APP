@@ -402,7 +402,9 @@ struct AssistantHome: View {
     private func openReference(_ target: String, sources: [String]) {
         let link = NoteLinks.parse(target)
         let name = link.name.lowercased()
-        if let path = sources.first(where: { $0.lowercased() == name || KnowledgeAssistant.title(of: $0).lowercased() == name || $0.lowercased() == name + ".md" }) {
+        // 來源是路徑；以前的對話紀錄中只有筆記名稱，要再解析
+        if let source = sources.first(where: { $0.lowercased() == name || KnowledgeAssistant.title(of: $0).lowercased() == name || $0.lowercased() == name + ".md" }),
+           let path = source.lowercased().hasSuffix(".md") ? source : NoteLinks.resolve(source, in: store.linkIndex) {
             workspace.openNote(path)
         } else if let path = NoteLinks.resolve(link.name, in: store.linkIndex) {
             workspace.openNote(path)
