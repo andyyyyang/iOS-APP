@@ -40,9 +40,10 @@ struct GraphData {
             }
             selected = Array(selected.prefix(limit))
         } else {
-            // 只有這台裝置上的筆記知道連結（還沒下載的筆記不列入）
+            // 還沒下載的筆記的連結來自伺服器的索引；沒有索引時只有這台裝置上的筆記知道連結
+            let hasIndex = !VaultIndexStore.shared.notes.isEmpty
             selected = store.notes
-                .filter(\.isLocal)
+                .filter { hasIndex || $0.isLocal }
                 .sorted { (adjacency[$0.path]?.count ?? 0, $0.mtime) > (adjacency[$1.path]?.count ?? 0, $1.mtime) }
                 .prefix(limit)
                 .map(\.path)

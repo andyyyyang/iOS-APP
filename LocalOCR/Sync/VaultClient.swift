@@ -162,6 +162,16 @@ struct VaultClient {
         _ = try await send("DELETE", "/v1/vault/file", query: [URLQueryItem(name: "path", value: path)], headers: headers)
     }
 
+    /// 整個 vault 的索引（標題、別名、標籤、連結、待辦、摘要）。與 `etag` 相同（沒有變動）時回傳 nil。
+    func index(etag: String?) async throws -> (index: VaultIndex, etag: String?)? {
+        var headers: [String: String] = [:]
+        if let etag { headers["If-None-Match"] = etag }
+        let (data, response) = try await send("GET", "/v1/vault/index", headers: headers, allowNotModified: true)
+        if response.statusCode == 304 { return nil }
+        let index = try JSONDecoder().decode(VaultIndex.self, from: data)
+        return (index, response.value(forHTTPHeaderField: "ETag"))
+    }
+
     /// 通知伺服器這台裝置在別的空間（WebDAV）改了檔案：電腦的 Obsidian 會立即同步。
     func reportChanges(paths: [String]) async throws {
         var body: [String: Any] = [:]
@@ -229,7 +239,8 @@ struct VaultClient {
         _ path: String,
         query: [URLQueryItem] = [],
         headers: [String: String] = [:],
-        body: Data? = nil
+        body: Data? = nil,
+        allowNotModified: Bool = false
     ) async throws -> (Data, HTTPURLResponse) {
         guard let url = Self.url(baseURL: baseURL, path: path, query: query) else {
             throw ServerError(status: 0, code: "invalid_url", message: "伺服器網址不正確")
@@ -255,7 +266,7 @@ struct VaultClient {
         guard let http = response as? HTTPURLResponse else {
             throw ServerError(status: 0, code: "network", message: "伺服器沒有回應")
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(http.statusCode) || (allowNotModified && http.statusCode == 304) else {
             let value = (try? JSONValue.parse(String(decoding: data, as: UTF8.self))) ?? .null
             let error = value["error"]
             let code = error?["code"]?.stringValue ?? "http_\(http.statusCode)"

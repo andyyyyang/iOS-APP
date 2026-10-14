@@ -72,7 +72,7 @@ struct VaultItem: Identifiable, Hashable, Sendable {
 
 /// 筆記的索引與操作。檔案是唯一的資料來源（本機 vault 加上遠端清單），這裡只是方便查詢的快取。
 /// 筆記可以放在 vault 的任何資料夾；筆記以外的檔案也會列在資料夾中。
-/// 還沒下載的筆記也會列出（只有標題與修改時間）；內文搜尋、標籤、待辦、連結只涵蓋這台裝置上的筆記。
+/// 還沒下載的筆記也會列出；它們的標籤、待辦、連結與摘要來自伺服器的索引（VaultIndexStore），內文搜尋則透過伺服器。
 @MainActor
 @Observable
 final class NotesStore {
@@ -125,10 +125,30 @@ final class NotesStore {
         cache = Dictionary(summaries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         self.contents = contents
 
-        // 還沒下載的檔案也列出來（以及它們所在的資料夾）：筆記只有標題，其他檔案打開時下載
+        // 還沒下載的檔案也列出來（以及它們所在的資料夾），其他檔案打開時下載。
+        // 筆記的標籤、連結、待辦與摘要來自伺服器的索引（沒有索引時只有標題）
         let localPaths = Set(localFiles.map(\.path)).union(summaries.map(\.path))
-        let remoteOnly = VaultSyncCenter.shared.pendingFiles.filter { !localPaths.contains($0.path) && !LocalVault.isHidden($0.path) }
-        let remoteNotes = remoteOnly.filter { $0.path.lowercased().hasSuffix(".md") }.map { NotesStore.remoteSummary(path: $0.path, mtime: $0.mtime) }
+        let index = VaultIndexStore.shared
+        var remoteOnly = VaultSyncCenter.shared.pendingFiles
+            .filter { !localPaths.contains($0.path) && !LocalVault.isHidden($0.path) }
+            .map { RemoteEntry(path: $0.path, size: $0.size, mtime: $0.mtime) }
+        if index.isActive {
+            // 索引比同步清單新（其他裝置剛新增的檔案）
+            var known = Set(remoteOnly.map(\.path))
+            for note in index.notes.values {
+                let path = LocalVault.normalize(note.path)
+                guard !localPaths.contains(path), !LocalVault.isHidden(path), known.insert(path).inserted else { continue }
+                remoteOnly.append(RemoteEntry(path: path, size: note.size, mtime: note.modified))
+            }
+            for file in index.files {
+                let path = LocalVault.normalize(file.path)
+                guard !localPaths.contains(path), !LocalVault.isHidden(path), known.insert(path).inserted else { continue }
+                remoteOnly.append(RemoteEntry(path: path, size: file.size, mtime: Date(timeIntervalSince1970: file.mtime / 1000)))
+            }
+        }
+        let remoteNotes = remoteOnly.filter { $0.path.lowercased().hasSuffix(".md") }.map { entry in
+            index.notes[LocalVault.normalize(entry.path)]?.summary() ?? NotesStore.remoteSummary(path: entry.path, mtime: entry.mtime)
+        }
         let pending = remoteOnly
             .filter { !$0.path.lowercased().hasSuffix(".md") }
             .map { VaultItem(path: $0.path, size: $0.size, mtime: $0.mtime, isLocal: false) }
@@ -143,6 +163,12 @@ final class NotesStore {
             }
         }
         folders = allFolders.filter { !LocalVault.isHidden($0) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private struct RemoteEntry {
+        let path: String
+        let size: Int
+        let mtime: Date
     }
 
     /// 還沒下載的筆記：只有路徑與修改時間。
@@ -335,8 +361,32 @@ final class NotesStore {
 
     /// 切換某則筆記的待辦（儀表板上直接打勾）。
     func toggle(_ task: NoteTask) {
-        guard let text = vault.readText(task.notePath) else { return }
+        guard let text = vault.readText(task.notePath) else {
+            // 還沒下載的筆記：直接改遠端的檔案（不下載到這台裝置）
+            Task { await toggleRemote(task) }
+            return
+        }
         try? save(NoteMarkdownEditing.togglingTask(at: task.index, in: text), to: task.notePath)
+    }
+
+    private func toggleRemote(_ task: NoteTask) async {
+        guard let client = VaultBackend.current() else { return }
+        VaultIndexStore.shared.setTask(in: task.notePath, index: task.index, done: !task.done)
+        await reload()
+        do {
+            let file = try await client.read(task.notePath)
+            let updated = NoteMarkdownEditing.togglingTask(at: task.index, in: file.text)
+            try await client.write(
+                task.notePath,
+                data: Data(updated.utf8),
+                contentType: "text/markdown; charset=utf-8",
+                condition: file.etag.map { VaultClient.WriteCondition.ifMatch($0) } ?? .none,
+                mtime: .now
+            )
+        } catch {
+            // 沒改成功：用伺服器的版本
+        }
+        if await VaultIndexStore.shared.refresh() { await reload() }
     }
 
     /// `recursive: false` 只列出這個資料夾本身的筆記（資料夾頁面中子資料夾另外顯示）。
@@ -356,6 +406,7 @@ final class NotesStore {
             if note.title.localizedCaseInsensitiveContains(query) || note.tags.contains(where: { $0.localizedCaseInsensitiveContains(query) }) {
                 return true
             }
+            if !note.isLocal { return note.snippet.localizedCaseInsensitiveContains(query) }
             return (contents[note.path] ?? vault.readText(note.path))?.localizedCaseInsensitiveContains(query) ?? false
         }
     }

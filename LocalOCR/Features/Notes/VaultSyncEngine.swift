@@ -802,6 +802,7 @@ final class VaultSyncCenter {
             let reconnected = pushCursor != nil
             pushCursor = cursor
             isLive = true
+            VaultIndexStore.shared.scheduleRefresh(after: 0.5)
             // 重新連線：補上斷線期間的變動（第一次連線時 startLiveSync 已經同步過）
             if reconnected { await syncNow() }
         case .changes(let changes):
@@ -812,6 +813,8 @@ final class VaultSyncCenter {
 
     /// 其他裝置的修改：開著的筆記直接下載新版本；其他檔案、刪除或不知道是哪些檔案時完整同步一次。
     private func applyRemoteChanges(_ result: VaultChanges) async {
+        // 關聯圖、標籤、待辦用的索引也跟著更新（不必下載那些筆記）
+        VaultIndexStore.shared.scheduleRefresh()
         let paths = Set(result.changes.compactMap(\.path).map(LocalVault.normalize))
         let open = paths.intersection(openPaths)
         for path in open {

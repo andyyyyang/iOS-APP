@@ -62,7 +62,11 @@ struct WorkspaceView: View {
         .task {
             // 先用上次記下的遠端清單列出檔案，不必等同步完成
             await sync.prepare()
+            await VaultIndexStore.shared.load()
             await store.reload()
+            if VaultIndexStore.shared.isActive {
+                Task { if await VaultIndexStore.shared.refresh() { await store.reload() } }
+            }
             if sync.isConfigured { await sync.syncNow() }
         }
     }

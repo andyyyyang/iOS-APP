@@ -289,6 +289,8 @@ struct SearchPanel: View {
     @Environment(Workspace.self) private var workspace
     @State private var store = NotesStore.shared
     @State private var query = ""
+    /// 伺服器的內文搜尋結果（包含還沒下載的筆記）。
+    @State private var remoteHits: [VaultSearchHit] = []
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -325,35 +327,18 @@ struct SearchPanel: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if !trimmed.isEmpty {
                         let results = Array(store.notes(inFolder: nil, query: trimmed).prefix(80))
-                        Text("\(results.count) 個結果")
+                        let found = Set(results.map(\.path))
+                        let extra = remoteHits.filter { !found.contains($0.path) }
+                        Text("\(results.count + extra.count) 個結果")
                             .font(.caption)
                             .foregroundStyle(DS.textTertiary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
                         ForEach(results) { note in
-                            Button {
-                                workspace.openNote(note.path)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(note.title)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundStyle(DS.text)
-                                    Text(excerpt(for: note, query: trimmed))
-                                        .font(.caption)
-                                        .foregroundStyle(DS.textSecondary)
-                                        .lineLimit(2)
-                                    if !note.folder.isEmpty {
-                                        Text(note.folder)
-                                            .font(.caption2)
-                                            .foregroundStyle(DS.textTertiary)
-                                    }
-                                }
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(workspace.activeNotePath == note.path ? DS.card : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            resultRow(path: note.path, title: note.title, excerpt: excerpt(for: note, query: trimmed), folder: note.folder)
+                        }
+                        ForEach(extra) { hit in
+                            resultRow(path: hit.path, title: hit.name, excerpt: Self.highlight(hit.snippet.replacingOccurrences(of: "\n", with: " "), query: trimmed), folder: (hit.path as NSString).deletingLastPathComponent)
                         }
                     }
                 }
@@ -363,13 +348,54 @@ struct SearchPanel: View {
             .scrollIndicators(.hidden)
         }
         .onAppear { focused = true }
+        .task(id: query) {
+            // 伺服器上的內文搜尋（還沒下載的筆記也找得到），輸入停下來再查
+            let trimmed = query.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, VaultBackend.storage == .server, let client = VaultClient.configured() else {
+                remoteHits = []
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let hits = try? await client.search(trimmed, limit: 40), !Task.isCancelled else { return }
+            remoteHits = hits
+        }
+    }
+
+    private func resultRow(path: String, title: String, excerpt: AttributedString, folder: String) -> some View {
+        Button {
+            workspace.openNote(path)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.text)
+                Text(excerpt)
+                    .font(.caption)
+                    .foregroundStyle(DS.textSecondary)
+                    .lineLimit(2)
+                if !folder.isEmpty {
+                    Text(folder)
+                        .font(.caption2)
+                        .foregroundStyle(DS.textTertiary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(workspace.activeNotePath == path ? DS.card : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// 內文中第一個符合處的前後文，符合的字加粗。
     private func excerpt(for note: NoteSummary, query: String) -> AttributedString {
         let text = (store.text(of: note.path) ?? note.snippet).replacingOccurrences(of: "\n", with: " ")
+        return Self.highlight(text, query: query, fallback: note.snippet)
+    }
+
+    static func highlight(_ text: String, query: String, fallback: String? = nil) -> AttributedString {
         guard let range = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else {
-            return AttributedString(note.snippet)
+            return AttributedString(fallback ?? text)
         }
         let start = text.index(range.lowerBound, offsetBy: -40, limitedBy: text.startIndex) ?? text.startIndex
         let end = text.index(range.upperBound, offsetBy: 80, limitedBy: text.endIndex) ?? text.endIndex

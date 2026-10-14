@@ -22,3 +22,4 @@ xcuserdata/
 # Python
 __pycache__/
 *.pyc
+.claude/worktrees/
