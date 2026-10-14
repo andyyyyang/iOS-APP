@@ -10,7 +10,7 @@ import type { VaultService } from "../services/vault.js";
 import { extractAllLinks } from "../vault/markdown.js";
 import { vaultPath } from "../vault/paths.js";
 import type { VaultFile } from "../vault/types.js";
-import { AssistantModelError, describeApiError, type AssistantModel, type ModelMessage, type ModelResponse } from "./model.js";
+import { AssistantModelError, accountIssue, describeApiError, type AssistantModel, type ModelMessage, type ModelResponse } from "./model.js";
 import { SYSTEM_PROMPT, buildRunContext, loadVaultRules } from "./prompt.js";
 import { RequestRouter } from "./routing.js";
 import type { Effort } from "./tiers.js";
@@ -195,6 +195,8 @@ export class AssistantService {
   private readonly webSearch: boolean;
   private readonly issueSource: () => string | null;
   private readonly listModels: (() => Promise<ModelChoice[]>) | null;
+  /** An account problem (billing, key, workspace) the last run hit; cleared by the next successful model call. */
+  private runIssue: string | null = null;
   /** Ids from the last model list, to reject a run naming a model the key can't call (null until listed). */
   private knownModels: Set<string> | null = null;
 
@@ -220,9 +222,9 @@ export class AssistantService {
     return this.model?.model ?? null;
   }
 
-  /** A problem with the API key (e.g. it needs a workspace id), null when none is known. */
+  /** A problem with the API key or the account (e.g. it needs a workspace id, no credit left), null when none is known. */
   get issue(): string | null {
-    return this.model ? this.issueSource() : null;
+    return this.model ? (this.issueSource() ?? this.runIssue) : null;
   }
 
   /** The model behind each cloud tier right now. */
@@ -252,7 +254,7 @@ export class AssistantService {
       codeExecution: this.codeExecution,
       webSearch: this.webSearch,
       maxTurns: this.maxTurns,
-      issue: this.issueSource() ?? (failure ? `無法取得模型清單：${failure}` : null),
+      issue: this.issue ?? (failure ? `無法取得模型清單：${failure}` : null),
     };
   }
 
@@ -409,6 +411,7 @@ export class AssistantService {
           throw error;
         }
         this.addUsage(run, response);
+        this.runIssue = null;
         if (response.container?.id) container = response.container.id;
         messages.push({ role: "assistant", content: response.content as Anthropic.Beta.BetaContentBlockParam[] });
 
@@ -492,6 +495,7 @@ export class AssistantService {
     let failure: RunError;
     if (error instanceof RunFailure) failure = { code: error.code, message: error.message };
     else if (error instanceof AssistantModelError) {
+      this.runIssue = accountIssue(error.message) ?? this.runIssue;
       failure = {
         code: "model_error",
         message: `雲端 AI 呼叫失敗${error.status ? `（HTTP ${error.status}）` : ""}：${truncateText(describeApiError(error.message), 300)}`,

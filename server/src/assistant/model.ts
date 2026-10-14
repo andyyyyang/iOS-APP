@@ -52,10 +52,10 @@ export interface AssistantModel {
 }
 
 /**
- * A readable message for an API error: the SDK's message is "400 {json}", so take the inner error message, and
- * explain the errors the user fixes in Railway's variables.
+ * A problem with the API key or the Anthropic account that every run will hit until the user fixes it (in Railway's
+ * variables or the Anthropic Console), explained; null for any other error.
  */
-export function describeApiError(message: string): string {
+export function accountIssue(message: string): string | null {
   if (/anthropic-workspace-id|not scoped to a workspace/i.test(message)) {
     return "這把 API key 沒有指定 workspace。請在 Railway 的伺服器變數加上 ANTHROPIC_WORKSPACE_ID（Anthropic Console → Settings → Workspaces 中的 workspace ID），或改用在某個 workspace 裡建立的 API key。";
   }
@@ -65,6 +65,16 @@ export function describeApiError(message: string): string {
   if (/credit balance is too low|billing/i.test(message)) {
     return "Anthropic 帳戶的額度不足，請到 Anthropic Console → Billing 加值。";
   }
+  return null;
+}
+
+/**
+ * A readable message for an API error: the SDK's message is "400 {json}", so take the inner error message, and
+ * explain the errors the user fixes in Railway's variables or the Anthropic Console.
+ */
+export function describeApiError(message: string): string {
+  const issue = accountIssue(message);
+  if (issue) return issue;
   const inner = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(message);
   return inner ? inner[1]!.replace(/\\"/g, '"') : message;
 }

@@ -657,6 +657,23 @@ describe("assistant runs", () => {
     await request(app).post("/v1/assistant/runs").set(AUTH).send({ prompt: "x", maxTurns: 0 }).expect(400);
   });
 
+  it("shows an account problem a run hit on /health and the model settings until a call succeeds", async () => {
+    const model = new ScriptedModel([
+      () => {
+        throw new AssistantModelError(400, '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}');
+      },
+      respond([text("好")]),
+    ]);
+    const { app } = await assistantApp({}, { model, listModels: async () => [] });
+    const failed = await finish(app, await start(app, { prompt: "x" }));
+    expect(failed.error.message).toContain("額度不足");
+    const health = await request(app).get("/health").expect(200);
+    expect(health.body.assistantIssue).toContain("額度不足");
+    expect((await request(app).get("/v1/assistant/models").set(AUTH).expect(200)).body.issue).toContain("額度不足");
+    await finish(app, await start(app, { prompt: "y" }));
+    expect((await request(app).get("/health").expect(200)).body.assistantIssue).toBeNull();
+  });
+
   it("reports why the model list is empty and answers 503 without a model", async () => {
     const failing = await assistantApp({}, {
       model: new ScriptedModel([]),
