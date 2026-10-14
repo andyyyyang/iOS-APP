@@ -5,7 +5,7 @@ final class KnowledgeAssistantTests: XCTestCase {
     // MARK: - MCP 回應
 
     func testParsesToolResultTextBlocks() throws {
-        let data = Data(#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"path\":\"a.md\",\"etag\":\"\\\"e1\\\"\"}"},{"type":"text","text":"# A\n內容"}]}}"#.utf8)
+        let data = Data(##"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"path\":\"a.md\",\"etag\":\"\\\"e1\\\"\"}"},{"type":"text","text":"# A\n內容"}]}}"##.utf8)
         let texts = try VaultMCPClient.parseToolResult(data)
         XCTAssertEqual(texts.count, 2)
         XCTAssertEqual(texts[1], "# A\n內容")
