@@ -234,14 +234,105 @@ final class NotesTests: XCTestCase {
         let info = storage.attribute(.mdImage, at: ns.range(of: "![[photo").location, effectiveRange: nil) as? MarkdownImageInfo
         XCTAssertEqual(info?.name, "photo.png")
         XCTAssertEqual(info?.size, CGSize(width: 600, height: 300), "圖片縮到文字欄寬")
-        XCTAssertNotNil(storage.attribute(.mdTableRow, at: ns.range(of: "| 1").location + 2, effectiveRange: nil))
-        XCTAssertNotNil(storage.attribute(.mdTablePipe, at: ns.range(of: "| a").location, effectiveRange: nil))
+        let table = storage.attribute(.mdTable, at: ns.range(of: "| a").location, effectiveRange: nil) as? MarkdownTableInfo
+        XCTAssertEqual(table?.cells.count, 2, "分隔列不算一列")
+        XCTAssertEqual(table?.hasHeader, true)
+        XCTAssertTrue(isHidden(storage, at: ns.range(of: "| 1").location), "原始的表格文字藏起來，改畫格線表")
 
         // 還沒載入的圖片：回報要載入
         let pending = NSTextStorage(string: "![[scan.jpg|300]]")
         let needed = LiveMarkdown.apply(to: pending, options: LiveMarkdown.Options(selection: nil, width: 600))
         XCTAssertEqual(needed, ["scan.jpg"])
         XCTAssertEqual(LiveMarkdown.embed(in: "![[scan.jpg|300]]")?.width, 300)
+    }
+
+    func testLivePreviewTables() {
+        // 沒有外框的 GFM 表格；儲存格裡的粗體、程式碼、跳脫的 | 與 <br>
+        let text = "名稱 | 說明\n:--- | ---:\n**K3** | `x` \\| y<br>z\n\n後面的段落"
+        let ns = text as NSString
+        let storage = styled(text)
+        let table = storage.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
+        XCTAssertNotNil(table)
+        XCTAssertEqual(table?.cells.count, 2)
+        XCTAssertEqual(table?.cells.first?.map(\.string), ["名稱", "說明"])
+        let first = table?.cells[1][0]
+        XCTAssertEqual(first?.string, "**K3**")
+        let bold = first?.attribute(.font, at: 2, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.traitBold) ?? false, "儲存格內的 **粗體** 有套用")
+        XCTAssertLessThan((first?.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)?.pointSize ?? 17, 1, "** 藏起來")
+        XCTAssertEqual(table?.cells[1][1].string, "`x` | y\nz")
+        let alignment = (table?.cells[1][1].attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.alignment
+        XCTAssertEqual(alignment, .right, "---: 靠右")
+        XCTAssertLessThanOrEqual(table?.size.width ?? 999, 600)
+        XCTAssertNil(storage.attribute(.mdTable, at: ns.range(of: "後面").location, effectiveRange: nil))
+        XCTAssertFalse(isHidden(storage, at: ns.range(of: "後面").location))
+
+        // 游標在表格裡：顯示原始文字方便編輯
+        let editing = styled(text, selection: NSRange(location: 1, length: 0))
+        XCTAssertNil(editing.attribute(.mdTable, at: 0, effectiveRange: nil))
+        XCTAssertFalse(isHidden(editing, at: ns.range(of: "K3").location))
+
+        // 欄位很多、內容很長：縮到文字欄寬內，儲存格換行
+        let header = (1...9).map { "欄位\($0)" }.joined(separator: " | ")
+        let row = (1...9).map { _ in String(repeating: "很長的內容", count: 6) }.joined(separator: " | ")
+        let wide = styled("| \(header) |\n|" + String(repeating: "---|", count: 9) + "\n| \(row) |")
+        let wideTable = wide.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
+        XCTAssertNotNil(wideTable)
+        XCTAssertLessThanOrEqual(wideTable?.size.width ?? 999, 600)
+        XCTAssertGreaterThan(wideTable?.rowHeights.last ?? 0, 40, "放不下的儲存格換行")
+
+        // 「a | b」下一行只有 ---：不是表格（GFM 要有直線），是 Setext 標題
+        let notTable = styled("a | b\n---")
+        XCTAssertNil(notTable.attribute(.mdTable, at: 0, effectiveRange: nil))
+    }
+
+    func testLivePreviewMoreSyntax() {
+        // Setext 標題
+        let setext = styled("標題\n===\n內文")
+        XCTAssertGreaterThan((setext.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)?.pointSize ?? 0, LiveMarkdown.Theme.bodyFont.pointSize)
+        XCTAssertTrue(isHidden(setext, at: 3), "=== 藏起來")
+        XCTAssertFalse(isHidden(setext, at: ("標題\n===\n" as NSString).length))
+
+        // ***粗斜體***
+        let both = styled("***key*** word")
+        let font = both.attribute(.font, at: 3, effectiveRange: nil) as? UIFont
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.traitBold) ?? false)
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.traitItalic) ?? false)
+        XCTAssertTrue(isHidden(both, at: 0))
+        XCTAssertTrue(isHidden(both, at: 6))
+        XCTAssertFalse(isHidden(both, at: 10))
+
+        // 跳脫字元：藏起反斜線，不當成斜體
+        let escaped = styled("\\*不是斜體\\*")
+        XCTAssertTrue(isHidden(escaped, at: 0))
+        XCTAssertFalse(isHidden(escaped, at: 1))
+        let plain = escaped.attribute(.font, at: 2, effectiveRange: nil) as? UIFont
+        XCTAssertFalse(plain?.fontDescriptor.symbolicTraits.contains(.traitItalic) ?? true)
+
+        // # 標題 # 結尾的 # 也藏起來
+        let closed = styled("## 標題 ##")
+        XCTAssertTrue(isHidden(closed, at: ("## 標題 " as NSString).length))
+        XCTAssertFalse(isHidden(closed, at: 3))
+
+        // $$ 數學區塊
+        let math = styled("$$\nE = mc^2\n$$")
+        XCTAssertNotNil(math.attribute(.mdBlockBackground, at: 3, effectiveRange: nil))
+        XCTAssertTrue(isHidden(math, at: 0))
+    }
+
+    func testAssistantTableText() {
+        let table = MarkdownTableText(rows: ["| 機種 | 數量 |", "|:---:|---:|", "| **K3** | 1 \\| 2 |", "| A<br>B |"])
+        XCTAssertTrue(table.hasHeader)
+        XCTAssertEqual(table.rows.count, 3, "分隔列不算一列")
+        XCTAssertEqual(table.rows[0], ["機種", "數量"])
+        XCTAssertEqual(table.rows[1], ["**K3**", "1 | 2"])
+        XCTAssertEqual(table.rows[2], ["A\nB"])
+        XCTAssertEqual(table.columns, 2)
+        XCTAssertEqual(table.alignment(of: 0), .center)
+        XCTAssertEqual(table.alignment(of: 1), .trailing)
+        XCTAssertEqual(table.alignment(of: 5), .leading)
+        XCTAssertEqual(MarkdownTableText.cells("a | `x|y` | c"), ["a", "`x|y`", "c"], "程式碼裡的 | 不算分隔")
+        XCTAssertFalse(MarkdownTableText(rows: ["| a |", "| b |"]).hasHeader)
     }
 
     func testOpenLinkQueryAndAIHelpers() {

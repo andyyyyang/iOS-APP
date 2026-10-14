@@ -20,10 +20,8 @@ extension NSAttributedString.Key {
     static let mdRule = NSAttributedString.Key("localocr.md.rule")
     /// 整行畫成內嵌圖片：值是 MarkdownImageInfo。
     static let mdImage = NSAttributedString.Key("localocr.md.image")
-    /// 表格的直線位置（藏起來的「|」）。
-    static let mdTablePipe = NSAttributedString.Key("localocr.md.tablePipe")
-    /// 表格的一列（值：是否為標題列），畫框線與標題底色。
-    static let mdTableRow = NSAttributedString.Key("localocr.md.tableRow")
+    /// 整個表格畫成格線表（值：MarkdownTableInfo），放在表格第一行。
+    static let mdTable = NSAttributedString.Key("localocr.md.table")
     /// 連結（值：網址或路徑字串），點一下開啟。
     static let mdLink = NSAttributedString.Key("localocr.md.link")
     /// [[連結]]（值：連結目標，可能含 #標題）。
@@ -46,6 +44,136 @@ final class MarkdownImageInfo: NSObject {
     }
 
     override var hash: Int { name.hashValue }
+}
+
+/// 畫成格線表的 Markdown 表格：每格已套好行內樣式（粗體、連結、程式碼…），欄寬依內容與文字欄寬分配，放不下的儲存格自動換行。
+final class MarkdownTableInfo: NSObject {
+    static let horizontalPadding: CGFloat = 10
+    static let verticalPadding: CGFloat = 7
+
+    let cells: [[NSAttributedString]]
+    let hasHeader: Bool
+    let columnWidths: [CGFloat]
+    let rowHeights: [CGFloat]
+
+    var size: CGSize { CGSize(width: columnWidths.reduce(0, +), height: rowHeights.reduce(0, +)) }
+
+    /// 同一張表（內容、欄寬、字級都一樣）不用每打一個字就重新量。
+    static let cache = NSCache<NSString, MarkdownTableInfo>()
+
+    init(cells: [[NSAttributedString]], hasHeader: Bool, width available: CGFloat) {
+        var cells = cells
+        let columns = cells.map(\.count).max() ?? 0
+        let padding = MarkdownTableInfo.horizontalPadding * 2
+        func natural(_ cells: [[NSAttributedString]]) -> [CGFloat] {
+            (0..<columns).map { column in
+                cells.map { row in column < row.count ? ceil(MarkdownTableInfo.measure(row[column], width: .greatestFiniteMagnitude).width) + padding : padding }.max() ?? padding
+            }.map { max($0, 44) }
+        }
+        var naturalWidths = natural(cells)
+        var minimumWidths = naturalWidths.map { min($0, 96) }
+        // 欄位很多、連最小寬度都放不下時，整張表的字縮小一點
+        let minimumTotal = minimumWidths.reduce(0, +)
+        if minimumTotal > available, available > 0 {
+            let scale = max(0.78, available / minimumTotal)
+            cells = cells.map { $0.map { MarkdownTableInfo.scaled($0, by: scale) } }
+            naturalWidths = natural(cells)
+            minimumWidths = naturalWidths.map { min($0, 96 * scale) }
+        }
+        var widths = naturalWidths
+        if widths.reduce(0, +) > available {
+            // 窄的欄位用原本的寬度，剩下的空間平均分給寬的欄位（不小於最小寬度）
+            var remaining = available
+            var open = Array(0..<columns)
+            while !open.isEmpty {
+                let fair = remaining / CGFloat(open.count)
+                let narrow = open.filter { naturalWidths[$0] <= fair }
+                if narrow.isEmpty { break }
+                for column in narrow {
+                    widths[column] = naturalWidths[column]
+                    remaining -= naturalWidths[column]
+                }
+                open.removeAll { narrow.contains($0) }
+            }
+            if !open.isEmpty {
+                let fair = remaining / CGFloat(open.count)
+                for column in open { widths[column] = floor(max(fair, minimumWidths[column])) }
+            }
+            // 還是太寬（欄位非常多）：全部等比縮到文字欄寬，儲存格多換幾行
+            let total = widths.reduce(0, +)
+            if total > available, available > 0 {
+                widths = widths.map { floor($0 * available / total) }
+            }
+        }
+        rowHeights = cells.map { row in
+            var height: CGFloat = 0
+            for (column, cell) in row.enumerated() where column < widths.count {
+                height = max(height, ceil(MarkdownTableInfo.measure(cell, width: widths[column] - padding).height))
+            }
+            return max(height + MarkdownTableInfo.verticalPadding * 2, 30)
+        }
+        self.cells = cells
+        self.hasHeader = hasHeader
+        columnWidths = widths
+    }
+
+    static func measure(_ text: NSAttributedString, width: CGFloat) -> CGSize {
+        guard text.length > 0 else { return CGSize(width: 0, height: LiveMarkdown.Theme.bodyFont.lineHeight) }
+        return text.boundingRect(with: CGSize(width: max(width, 1), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).size
+    }
+
+    private static func scaled(_ text: NSAttributedString, by scale: CGFloat) -> NSAttributedString {
+        let copy = NSMutableAttributedString(attributedString: text)
+        copy.enumerateAttribute(.font, in: NSRange(location: 0, length: copy.length)) { value, range, _ in
+            guard let font = value as? UIFont, font.pointSize > 1 else { return }
+            copy.addAttribute(.font, value: font.withSize(font.pointSize * scale), range: range)
+        }
+        return copy
+    }
+
+    /// 畫在文字欄中（圓角外框、標題列底色、格線、儲存格文字）。
+    func draw(in frame: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        let outline = UIBezierPath(roundedRect: frame, cornerRadius: 8)
+        context.saveGState()
+        outline.addClip()
+        LiveMarkdown.Theme.tableBackground.setFill()
+        UIRectFill(frame)
+        if hasHeader, let first = rowHeights.first {
+            LiveMarkdown.Theme.tableHeader.setFill()
+            UIRectFill(CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: first))
+        }
+        LiveMarkdown.Theme.line.setFill()
+        var y = frame.minY
+        for (row, height) in rowHeights.enumerated() {
+            if row > 0 {
+                UIRectFill(CGRect(x: frame.minX, y: y - 0.5, width: frame.width, height: row == 1 && hasHeader ? 1 : 0.5))
+            }
+            var x = frame.minX
+            for (column, width) in columnWidths.enumerated() {
+                if column < cells[row].count {
+                    let rect = CGRect(
+                        x: x + Self.horizontalPadding,
+                        y: y + Self.verticalPadding,
+                        width: width - Self.horizontalPadding * 2,
+                        height: height - Self.verticalPadding * 2
+                    )
+                    cells[row][column].draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                }
+                x += width
+            }
+            y += height
+        }
+        var x = frame.minX
+        for width in columnWidths.dropLast() {
+            x += width
+            UIRectFill(CGRect(x: x - 0.25, y: frame.minY, width: 0.5, height: frame.height))
+        }
+        context.restoreGState()
+        LiveMarkdown.Theme.line.setStroke()
+        outline.lineWidth = 1
+        outline.stroke()
+    }
 }
 
 enum LiveMarkdown {
@@ -89,6 +217,7 @@ enum LiveMarkdown {
         static let highlight = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x5A4A12) : UIColor(hex: 0xFCF0C8) }
         static let codeBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x2C2C30) : UIColor(hex: 0xF0F0F3) }
         static let tableHeader = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x26262A) : UIColor(hex: 0xF4F4F6) }
+        static let tableBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x1F1F22) : UIColor(hex: 0xFFFFFF) }
         static let line = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x3A3A40) : UIColor(hex: 0xDCDCE2) }
 
         static func calloutColor(_ kind: String) -> UIColor {
@@ -279,9 +408,20 @@ enum LiveMarkdown {
                     index = last + 1
                     continue
                 }
-                if value.hasPrefix("|") {
+                if value.hasPrefix("$$") {
                     var end = index
-                    while end + 1 < lines.count, trimmed(end + 1).hasPrefix("|") { end += 1 }
+                    if !(value.count >= 5 && value.hasSuffix("$$")) {
+                        end = index + 1
+                        while end < lines.count, !trimmed(end).hasSuffix("$$") { end += 1 }
+                        end = min(end, lines.count - 1)
+                    }
+                    styleMathBlock(index...end)
+                    index = end + 1
+                    continue
+                }
+                if startsTable(index) {
+                    var end = index
+                    while end + 1 < lines.count, isTableRow(end + 1) { end += 1 }
                     styleTable(index...end)
                     index = end + 1
                     continue
@@ -316,8 +456,63 @@ enum LiveMarkdown {
                     index += 1
                     continue
                 }
+                // 下一行是 === 或 ---：這一行是標題（Setext）
+                if !value.isEmpty, index + 1 < lines.count, let level = setextLevel(index + 1) {
+                    styleSetextHeading(line, underline: lines[index + 1], level: level)
+                    index += 2
+                    continue
+                }
                 styleInline(line, active: isActive(line))
                 index += 1
+            }
+        }
+
+        /// 表格開頭：「|」開頭的行，或含有「|」且下一行是有「|」的分隔列（GFM 不寫外框的表格）。
+        func startsTable(_ index: Int) -> Bool {
+            let value = trimmed(index)
+            if value.hasPrefix("|") { return true }
+            guard !pipes(in: lines[index]).isEmpty, index + 1 < lines.count, isTableSeparator(index + 1) else { return false }
+            return trimmed(index + 1).contains("|")
+        }
+
+        func isTableSeparator(_ index: Int) -> Bool {
+            let value = trimmed(index)
+            return value.contains("-") && Patterns.tableSeparator.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)) != nil
+        }
+
+        /// 表格的一列：開頭是「|」，或含有「|」（沒有開頭直線的寫法）。
+        func isTableRow(_ index: Int) -> Bool {
+            let value = trimmed(index)
+            return !value.isEmpty && (value.hasPrefix("|") || !pipes(in: lines[index]).isEmpty)
+        }
+
+        func setextLevel(_ index: Int) -> Int? {
+            let value = trimmed(index)
+            guard value.count >= 2 else { return nil }
+            if value.allSatisfy({ $0 == "=" }) { return 1 }
+            if value.allSatisfy({ $0 == "-" }) { return 2 }
+            return nil
+        }
+
+        func styleSetextHeading(_ line: NSRange, underline: NSRange, level: Int) {
+            let active = isActive(line) || isActive(underline)
+            let font = Theme.headingFont(level: level)
+            storage.addAttribute(.font, value: font, range: line)
+            styleInline(line, active: active, baseFont: font)
+            hide(underline, dimInstead: active)
+            let first = index(of: line)
+            setParagraphStyle(Theme.paragraphStyle {
+                $0.paragraphSpacingBefore = level == 1 ? 14 : 10
+                $0.paragraphSpacing = 0
+            }, lines: first...first)
+            if !active {
+                setParagraphStyle(Theme.paragraphStyle {
+                    $0.minimumLineHeight = 0
+                    $0.maximumLineHeight = 4
+                    $0.lineSpacing = 0
+                    $0.paragraphSpacing = 4
+                }, lines: (first + 1)...(first + 1))
+                storage.addAttributes(Theme.hidden, range: paragraph(underline))
             }
         }
 
@@ -357,6 +552,34 @@ enum LiveMarkdown {
                 $0.firstLineHeadIndent = 12
                 $0.headIndent = 12
                 $0.tailIndent = -12
+                $0.lineSpacing = 2
+            }, lines: indices)
+        }
+
+        /// $$ 數學區塊：置中的斜體等寬字與底色，$$ 編輯中顯示、其他時候藏起來。
+        func styleMathBlock(_ indices: ClosedRange<Int>) {
+            let active = isActive(lines: indices)
+            let start = lines[indices.lowerBound].location
+            let end = NSMaxRange(lines[indices.upperBound])
+            storage.addAttributes([
+                .font: Theme.monoFont.withTraits(.traitItalic),
+                .foregroundColor: Theme.text,
+                .mdBlockBackground: Theme.codeBackground,
+            ], range: NSRange(location: start, length: end - start))
+            for index in Set([indices.lowerBound, indices.upperBound]) {
+                let line = lines[index]
+                let value = string(line) as NSString
+                let leading = value.range(of: "$$")
+                let trailing = value.range(of: "$$", options: .backwards)
+                if leading.location != NSNotFound {
+                    hide(NSRange(location: line.location + leading.location, length: 2), dimInstead: active, font: Theme.monoFont)
+                }
+                if trailing.location != NSNotFound, trailing.location >= leading.location + 2 {
+                    hide(NSRange(location: line.location + trailing.location, length: 2), dimInstead: active, font: Theme.monoFont)
+                }
+            }
+            setParagraphStyle(Theme.paragraphStyle {
+                $0.alignment = .center
                 $0.lineSpacing = 2
             }, lines: indices)
         }
@@ -424,7 +647,14 @@ enum LiveMarkdown {
                 $0.paragraphSpacingBefore = hashes <= 2 ? 12 : 8
                 $0.paragraphSpacing = 4
             }, lines: index(of: line)...index(of: line))
-            styleInline(NSRange(location: line.location + hashes + spaces, length: line.length - hashes - spaces), active: active, baseFont: font)
+            // 結尾的 ## 也是語法（# 標題 #）
+            var contentLength = line.length - hashes - spaces
+            if let closing = Patterns.closingHashes.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)),
+               closing.range.location >= hashes + spaces {
+                hide(NSRange(location: line.location + closing.range.location, length: closing.range.length), dimInstead: active, font: font)
+                contentLength = closing.range.location - hashes - spaces
+            }
+            styleInline(NSRange(location: line.location + hashes + spaces, length: contentLength), active: active, baseFont: font)
             return true
         }
 
@@ -517,7 +747,6 @@ enum LiveMarkdown {
 
         func styleTable(_ indices: ClosedRange<Int>) {
             let active = isActive(lines: indices)
-            let separator = Patterns.tableSeparator
             func raw() {
                 for index in indices {
                     storage.addAttribute(.font, value: Theme.monoFont, range: lines[index])
@@ -526,71 +755,92 @@ enum LiveMarkdown {
                     }
                 }
             }
-            guard !active, indices.count >= 2 else {
+            // 游標在表格裡時顯示原始文字，方便編輯；其他時候畫成格線表
+            guard !active, indices.count >= 2, let info = tableInfo(indices) else {
                 raw()
                 return
             }
-            let hasHeader = separator.firstMatch(in: string(lines[indices.lowerBound + 1]), range: NSRange(location: 0, length: lines[indices.lowerBound + 1].length)) != nil
-            var rows: [(line: NSRange, pipes: [Int], cells: [NSRange], header: Bool)] = []
-            for index in indices {
-                let line = lines[index]
-                if hasHeader, index == indices.lowerBound + 1 {
-                    hide(line, dimInstead: false)
-                    continue
-                }
-                let header = hasHeader && index == indices.lowerBound
-                let positions = pipes(in: line)
-                var cells: [NSRange] = []
-                for (offset, pipe) in positions.enumerated() {
-                    let end = offset + 1 < positions.count ? positions[offset + 1] : NSMaxRange(line)
-                    if offset + 1 == positions.count, end - pipe - 1 <= 0 { break }
-                    if offset + 1 == positions.count, string(NSRange(location: pipe + 1, length: end - pipe - 1)).trimmingCharacters(in: .whitespaces).isEmpty { break }
-                    cells.append(NSRange(location: pipe + 1, length: end - pipe - 1))
-                }
-                if header { storage.addAttribute(.font, value: Theme.bodyFont.withTraits(.traitBold), range: line) }
-                for cell in cells { styleInline(cell, active: false, baseFont: header ? Theme.bodyFont.withTraits(.traitBold) : nil) }
-                for pipe in positions {
-                    storage.addAttributes(Theme.hidden, range: NSRange(location: pipe, length: 1))
-                    storage.addAttribute(.mdTablePipe, value: true, range: NSRange(location: pipe, length: 1))
-                }
-                rows.append((line, positions, cells, header))
+            let first = indices.lowerBound
+            let start = lines[first].location
+            let end = NSMaxRange(paragraph(lines[indices.upperBound]))
+            storage.addAttributes(Theme.hidden, range: NSRange(location: start, length: end - start))
+            storage.addAttribute(.mdTable, value: info, range: lines[first].length > 0 ? lines[first] : NSRange(location: start, length: min(1, end - start)))
+            setParagraphStyle(Theme.paragraphStyle {
+                $0.minimumLineHeight = info.size.height
+                $0.maximumLineHeight = info.size.height
+                $0.lineSpacing = 0
+                $0.paragraphSpacingBefore = 6
+                $0.paragraphSpacing = 10
+            }, lines: first...first)
+            if indices.count > 1 {
+                setParagraphStyle(Theme.paragraphStyle {
+                    $0.minimumLineHeight = 0
+                    $0.maximumLineHeight = 0.1
+                    $0.lineSpacing = 0
+                    $0.paragraphSpacing = 0
+                    $0.paragraphSpacingBefore = 0
+                }, lines: (first + 1)...indices.upperBound)
             }
-            // 每一欄的寬度：最寬的儲存格加上左右留白；放不下時改顯示原始文字
-            let padding: CGFloat = 10
-            var columns: [CGFloat] = []
-            for row in rows {
-                for (column, cell) in row.cells.enumerated() {
-                    let width = width(of: cell) + padding * 2
-                    if column < columns.count { columns[column] = max(columns[column], width) } else { columns.append(width) }
-                }
-            }
-            guard columns.reduce(0, +) + CGFloat(columns.count + 1) <= options.width else {
-                for index in indices {
-                    storage.setAttributes(Theme.bodyAttributes, range: paragraph(lines[index]))
-                }
-                raw()
-                return
-            }
-            for row in rows {
-                for (column, cell) in row.cells.enumerated() {
-                    let opening = cell.location - 1
-                    let cellWidth = width(of: cell)
-                    if cell.length == 0 {
-                        storage.addAttribute(.kern, value: columns[column], range: NSRange(location: opening, length: 1))
-                    } else {
-                        storage.addAttribute(.kern, value: padding, range: NSRange(location: opening, length: 1))
-                        let last = NSRange(location: NSMaxRange(cell) - 1, length: 1)
-                        let existing = storage.attribute(.kern, at: last.location, effectiveRange: nil) as? CGFloat ?? 0
-                        storage.addAttribute(.kern, value: existing + columns[column] - padding - cellWidth, range: last)
+        }
+
+        /// 表格的儲存格：每格套好行內樣式，欄位對齊依分隔列（:--- 靠左、:---: 置中、---: 靠右）。
+        func tableInfo(_ indices: ClosedRange<Int>) -> MarkdownTableInfo? {
+            let start = lines[indices.lowerBound].location
+            let source = text.substring(with: NSRange(location: start, length: NSMaxRange(lines[indices.upperBound]) - start))
+            let width = max(options.width - 2, 120)
+            // 有 [[連結]] 的表格不快取：連結的筆記可能剛建立（顏色要跟著變）
+            let key: NSString? = source.contains("[[") ? nil : "\(Int(width))|\(Theme.bodyFont.pointSize)|\(source)" as NSString
+            if let key, let cached = MarkdownTableInfo.cache.object(forKey: key) { return cached }
+            let separatorIndex = indices.lowerBound + 1
+            let hasHeader = isTableSeparator(separatorIndex)
+            var alignments: [NSTextAlignment] = []
+            if hasHeader {
+                alignments = cells(in: lines[separatorIndex]).map { cell in
+                    let value = string(cell).trimmingCharacters(in: .whitespaces)
+                    switch (value.hasPrefix(":"), value.hasSuffix(":")) {
+                    case (true, true): return .center
+                    case (false, true): return .right
+                    default: return .natural
                     }
                 }
-                storage.addAttribute(.mdTableRow, value: row.header, range: row.line)
-                setParagraphStyle(Theme.paragraphStyle {
-                    $0.lineSpacing = 0
-                    $0.paragraphSpacingBefore = 6
-                    $0.paragraphSpacing = 6
-                }, lines: index(of: row.line)...index(of: row.line))
             }
+            var rows: [[NSAttributedString]] = []
+            for index in indices where !(hasHeader && index == separatorIndex) {
+                let header = hasHeader && index == indices.lowerBound
+                let row = cells(in: lines[index]).enumerated().map { column, cell in
+                    renderCell(string(cell), header: header, alignment: column < alignments.count ? alignments[column] : .natural)
+                }
+                rows.append(row)
+            }
+            guard rows.contains(where: { !$0.isEmpty }) else { return nil }
+            let info = MarkdownTableInfo(cells: rows, hasHeader: hasHeader, width: width)
+            if let key { MarkdownTableInfo.cache.setObject(info, forKey: key) }
+            return info
+        }
+
+        /// 一列的儲存格範圍（開頭與結尾的「|」可有可無）。
+        func cells(in line: NSRange) -> [NSRange] {
+            let positions = pipes(in: line)
+            let bounds = [line.location - 1] + positions + [NSMaxRange(line)]
+            var result = zip(bounds, bounds.dropFirst()).map { NSRange(location: $0 + 1, length: max(0, $1 - $0 - 1)) }
+            let value = string(line).trimmingCharacters(in: .whitespaces)
+            if value.hasPrefix("|"), !result.isEmpty { result.removeFirst() }
+            if value.hasSuffix("|"), !value.hasSuffix("\\|"), !result.isEmpty { result.removeLast() }
+            return result
+        }
+
+        /// 一格的內容：行內樣式（粗體、斜體、程式碼、連結…）與換行（<br>）。
+        func renderCell(_ raw: String, header: Bool, alignment: NSTextAlignment) -> NSAttributedString {
+            var source = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\\|", with: "|")
+            source = source.replacingOccurrences(of: #"<br\s*/?>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
+            let font = header ? Theme.bodyFont.withTraits(.traitBold) : Theme.bodyFont
+            let style = NSMutableParagraphStyle()
+            style.alignment = alignment
+            style.lineSpacing = 2
+            let cell = NSTextStorage(string: source, attributes: [.font: font, .foregroundColor: Theme.text, .paragraphStyle: style])
+            let cellContext = Context(storage: cell, text: source as NSString, options: Options(selection: nil, width: .greatestFiniteMagnitude, resolvesLink: options.resolvesLink))
+            cellContext.styleInline(NSRange(location: 0, length: (source as NSString).length), active: false, baseFont: font)
+            return NSAttributedString(attributedString: cell)
         }
 
         /// 一行中沒有跳脫的「|」位置（不在 `程式碼` 中）。
@@ -625,6 +875,11 @@ enum LiveMarkdown {
                 storage.addAttributes([.font: Theme.monoFont, .backgroundColor: Theme.codeBackground], range: absolute(match.range(at: 1)))
                 marker(NSRange(location: match.range.location, length: 1))
                 marker(NSRange(location: NSMaxRange(match.range) - 1, length: 1))
+                protected.append(match.range)
+            }
+            // \* 跳脫字元：藏起反斜線，後面的字照原樣顯示（不當成語法）
+            for match in Patterns.escape.matches(in: source, range: local) where !isProtected(match.range) {
+                marker(NSRange(location: match.range.location, length: 1))
                 protected.append(match.range)
             }
             // [[連結]]、![[內嵌]]
@@ -663,6 +918,16 @@ enum LiveMarkdown {
                     .mdLink: (source as NSString).substring(with: match.range),
                 ], range: absolute(match.range))
                 protected.append(match.range)
+            }
+            // ***粗斜體***
+            for match in Patterns.boldItalic.matches(in: source, range: local) {
+                let open = NSRange(location: match.range.location, length: 3)
+                let close = NSRange(location: NSMaxRange(match.range) - 3, length: 3)
+                guard !isProtected(open), !isProtected(close) else { continue }
+                addTraits([.traitBold, .traitItalic], to: absolute(NSRange(location: NSMaxRange(open), length: close.location - NSMaxRange(open))), baseFont: baseFont)
+                marker(open)
+                marker(close)
+                protected += [open, close]
             }
             // **粗體**、*斜體*、~~刪除線~~、==螢光==
             let spans: [(NSRegularExpression, Int)] = [(Patterns.bold, 2), (Patterns.italicStar, 1), (Patterns.italicUnderscore, 1), (Patterns.strike, 2), (Patterns.highlight, 2)]
@@ -737,6 +1002,9 @@ enum LiveMarkdown {
         static let quoteMarker = regex(#"^\s*(?:>\s?)+"#)
         static let callout = regex(#"^\[!([\w-]+)\]([+-]?)\s*"#)
         static let listItem = regex(#"^(\s*)([-*+]|\d{1,9}[.)])(\s+)(\[( |x|X)\]\s)?"#)
+        static let escape = regex(#"\\[\\`*_{}\[\]()#+\-.!|~=<>$%]"#)
+        static let boldItalic = regex(#"(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1"#)
+        static let closingHashes = regex(#"\s+#+\s*$"#)
         static let tableSeparator = regex(#"^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$"#)
     }
 }
@@ -792,35 +1060,13 @@ final class LiveMarkdownLayoutManager: NSLayoutManager {
             LiveMarkdown.Theme.line.setFill()
             UIRectFill(CGRect(x: rect.minX, y: rect.midY - 0.5, width: container.size.width, height: 1))
         }
-        // 表格：標題列底色與框線
-        storage.enumerateAttribute(.mdTableRow, in: characters) { value, range, _ in
-            guard let header = value as? Bool else { return }
-            let glyphs = NSIntersectionRange(glyphRange(forCharacterRange: range, actualCharacterRange: nil), glyphsToShow)
-            guard glyphs.length > 0 else { return }
-            var pipes: [CGFloat] = []
-            storage.enumerateAttribute(.mdTablePipe, in: range) { pipe, pipeRange, _ in
-                guard pipe != nil else { return }
-                for index in pipeRange.location..<NSMaxRange(pipeRange) {
-                    let glyph = glyphIndexForCharacter(at: index)
-                    let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-                    pipes.append(line.minX + location(forGlyphAt: glyph).x + origin.x)
-                }
-            }
+        // 表格：整張格線表畫在第一行保留的空間
+        storage.enumerateAttribute(.mdTable, in: characters) { value, range, _ in
+            guard let info = value as? MarkdownTableInfo else { return }
             let rect = lineRects(for: range)
-            guard !rect.isNull, let left = pipes.min(), let right = pipes.max(), right > left else { return }
-            let row = CGRect(x: left, y: rect.minY, width: right - left, height: rect.height)
-            if header {
-                LiveMarkdown.Theme.tableHeader.setFill()
-                UIRectFill(row)
-            }
-            LiveMarkdown.Theme.line.setFill()
-            UIRectFill(CGRect(x: row.minX, y: row.maxY - 0.5, width: row.width, height: 1))
-            if header || range.location == 0 || storage.attribute(.mdTableRow, at: max(range.location - 2, 0), effectiveRange: nil) == nil {
-                UIRectFill(CGRect(x: row.minX, y: row.minY - 0.5, width: row.width, height: 1))
-            }
-            for x in pipes {
-                UIRectFill(CGRect(x: x - 0.5, y: row.minY, width: 1, height: row.height))
-            }
+            guard !rect.isNull else { return }
+            let spacingBefore = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0
+            info.draw(in: CGRect(origin: CGPoint(x: rect.minX, y: rect.minY + spacingBefore), size: info.size))
         }
         /// 某個字的基線位置與字寬（相對於畫布）。
         func glyphMetrics(at characterIndex: Int) -> (x: CGFloat, width: CGFloat, baseline: CGFloat) {

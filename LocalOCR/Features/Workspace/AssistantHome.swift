@@ -478,7 +478,7 @@ struct AssistantMessageView: View {
                             .foregroundStyle(DS.textSecondary)
                     }
                 } else {
-                    Text(AssistantText.attributed(message.text))
+                    AssistantMarkdownView(text: message.text)
                         .font(.body)
                         .foregroundStyle(message.isError ? DS.textSecondary : DS.text)
                         .tint(DS.link)
@@ -537,7 +537,7 @@ struct AssistantMessageView: View {
         case .tool(let text):
             stepLine("wrench.and.screwdriver", text)
         case .narration(let text):
-            Text(AssistantText.attributed(text))
+            AssistantMarkdownView(text: text)
                 .font(.subheadline)
                 .foregroundStyle(DS.textSecondary)
                 .tint(DS.link)
