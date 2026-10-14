@@ -136,7 +136,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 
 | 方法與路徑 | 說明 |
 | --- | --- |
-| `GET /health` | `{"status":"ok","version":"1.0.0","database":"postgres","jev":true}`（`jev` 表示是否已設定 Jev 金鑰） |
+| `GET /health` | `{"status":"ok","version":"1.0.0","database":"postgres","jev":true,"assistant":true,"assistantModel":"claude-opus-5-5"}`（`jev` 表示是否已設定 Jev 金鑰；`assistant` 表示雲端 AI 可用，`assistantModel` 是新工作會用的模型，沒有雲端 AI 時為 null） |
 | `PUT /v1/scans/{id}` | 新增或更新掃描（冪等），回傳完整 Scan |
 | `GET /v1/scans` | 列表。查詢參數：`limit`（預設 50，最多 200）、`templateId`、`q`（全文搜尋）、`updatedAfter`（ISO 8601）與 `cursor`。帶 `updatedAfter` 或 `cursor` 時依 `updatedAt` 由舊到新排序（增量同步用），否則依 `createdAt` 由新到舊。回傳 `{"items":[...],"nextCursor":"..."或null}` |
 | `GET /v1/scans/{id}` | 取得單筆 |

@@ -792,7 +792,8 @@ describe("assistant config", () => {
     const quiet = { warn() {} };
     expect(loadConfig({ NODE_ENV: "test" }, quiet)).toMatchObject({
       anthropicApiKey: undefined,
-      assistantModel: "claude-opus-5-5",
+      // follows the newest Opus (models.dev + the Models API)
+      assistantModel: "latest",
       assistantMaxTurns: 40,
       assistantCodeExecution: true,
       assistantWebSearch: false,

@@ -567,6 +567,10 @@ export function buildOpenApi(serverUrl?: string) {
             database: { type: "string", enum: ["postgres", "memory"] },
             jev: { type: "boolean", description: "Whether server-side classification is configured" },
             assistant: { type: "boolean", description: "Whether cloud AI runs are available (ANTHROPIC_API_KEY and the vault are set)" },
+            assistantModel: {
+              type: ["string", "null"],
+              description: "The model a new cloud run uses (follows the newest release with ASSISTANT_MODEL=latest); null when cloud runs are off",
+            },
           },
         },
         Classification: {

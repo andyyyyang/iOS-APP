@@ -14,7 +14,7 @@ export interface Config {
   githubToken: string | undefined;
   /** ANTHROPIC_API_KEY: enables cloud AI runs (/v1/assistant/runs). Never logged. */
   anthropicApiKey: string | undefined;
-  /** ASSISTANT_MODEL (default claude-opus-5-5). */
+  /** ASSISTANT_MODEL: "latest" (default, newest Opus), "latest-sonnet" etc., or a fixed model id. */
   assistantModel: string;
   /** ASSISTANT_MAX_TURNS: model calls per run (default 40). */
   assistantMaxTurns: number;
@@ -139,7 +139,7 @@ export function loadConfig(
     publicUrl: parsePublicUrl(env.PUBLIC_URL),
     githubToken: nonEmpty(env.GITHUB_TOKEN),
     anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
-    assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "claude-opus-5-5",
+    assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "latest",
     assistantMaxTurns: parseMaxTurns(env.ASSISTANT_MAX_TURNS),
     assistantCodeExecution: !isFalse(env.ASSISTANT_CODE_EXECUTION),
     assistantWebSearch: isTrue(env.ASSISTANT_WEB_SEARCH),

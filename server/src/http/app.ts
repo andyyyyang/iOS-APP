@@ -84,6 +84,7 @@ export function createApp({
       database: store.kind,
       jev: services.classify.available,
       assistant: services.assistant.available,
+      assistantModel: services.assistant.available ? services.assistant.modelName : null,
     });
   });
 

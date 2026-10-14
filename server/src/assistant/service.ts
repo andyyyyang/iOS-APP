@@ -190,6 +190,11 @@ export class AssistantService {
   }
 
   /** An API key is configured and the vault is there: cloud runs can start. */
+  /** The model a new run would use (null when cloud runs are off). */
+  get modelName(): string | null {
+    return this.model?.model ?? null;
+  }
+
   get available(): boolean {
     return this.model !== null && this.deps.vault.status().configured;
   }
@@ -306,7 +311,7 @@ export class AssistantService {
         let response: ModelResponse;
         try {
           response = await model.create(
-            { system: SYSTEM_PROMPT, context, tools: toolbox.definitions(), codeExecution, webSearch, messages, container },
+            { system: SYSTEM_PROMPT, context, tools: toolbox.definitions(), codeExecution, webSearch, messages, container, model: run.model },
             { signal },
           );
         } catch (error) {

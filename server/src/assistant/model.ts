@@ -20,6 +20,8 @@ export interface ModelRequest {
   messages: ModelMessage[];
   /** The code-execution container of an earlier turn, so sandbox files survive between turns. */
   container?: string;
+  /** The model this run started on (a run keeps its model even when a newer one is picked up mid-run). */
+  model?: string;
 }
 
 /** The part of a Messages API response a run uses (a real `BetaMessage` fits). */
@@ -36,7 +38,7 @@ export interface ModelResponse {
 }
 
 export interface AssistantModel {
-  /** Model id reported on runs. */
+  /** Model id for a new run (may change when ASSISTANT_MODEL follows the latest release). */
   readonly model: string;
   /** One Messages API call; rejects with AssistantModelError (API errors) or an abort error after `signal` fires. */
   create(request: ModelRequest, options: { signal: AbortSignal }): Promise<ModelResponse>;
@@ -77,7 +79,7 @@ interface OptionalFeature {
 
 /** Claude through the official SDK (`client.beta.messages.stream(...).finalMessage()`). */
 export class AnthropicAssistantModel implements AssistantModel {
-  readonly model: string;
+  private readonly currentModel: () => string;
   private readonly client: Anthropic;
   private readonly features: Record<"fallbacks" | "progressUpdates" | "effort", OptionalFeature> = {
     // a refusal is re-run on Anthropic's recommended fallback model instead of ending the run
@@ -87,9 +89,14 @@ export class AnthropicAssistantModel implements AssistantModel {
     effort: { name: "effort", rejected: /effort|output_config/i, enabled: true },
   };
 
-  constructor({ apiKey, model, client }: { apiKey?: string; model: string; client?: Anthropic }) {
-    this.model = model;
+  /** `model`: a fixed id, or a function giving the current one (LatestModel). */
+  constructor({ apiKey, model, client }: { apiKey?: string; model: string | (() => string); client?: Anthropic }) {
+    this.currentModel = typeof model === "string" ? () => model : model;
     this.client = client ?? new Anthropic({ apiKey });
+  }
+
+  get model(): string {
+    return this.currentModel();
   }
 
   /** The request body (exported shape for tests and debugging; contains no credentials). */
@@ -99,7 +106,7 @@ export class AnthropicAssistantModel implements AssistantModel {
     if (request.codeExecution) serverTools.push({ ...CODE_EXECUTION_TOOL });
     if (request.webSearch) serverTools.push({ ...(request.codeExecution ? WEB_SEARCH_TOOL_BASIC : WEB_SEARCH_TOOL) });
     return {
-      model: this.model,
+      model: request.model ?? this.model,
       max_tokens: MAX_OUTPUT_TOKENS,
       betas: Object.values(this.features).flatMap((feature) => (feature.enabled && feature.beta ? [feature.beta] : [])),
       ...(fallbacks.enabled ? { fallbacks: "default" as const } : {}),
