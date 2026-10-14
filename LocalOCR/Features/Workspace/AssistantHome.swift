@@ -7,6 +7,8 @@ struct AssistantHome: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var assistant = KnowledgeAssistant.shared
+    /// 切換 AI 執行位置後重畫狀態列。
+    @State private var engineRevision = 0
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
     @State private var keyboard = KeyboardFrame.shared
@@ -160,9 +162,31 @@ struct AssistantHome: View {
                 }
                 .buttonStyle(.plain)
             }
-            if assistant.cloudAvailable {
-                let mode = AssistantEngineMode.current
-                statusLine("cloud", mode == .device ? "只用裝置端 AI（可以在設定選預算，讓難的工作交給雲端）" : "預算\(mode.shortTitle)：Jev 依難度自動選裝置端或雲端模型", tint: DS.textSecondary)
+            if assistant.cloudAvailable || AIPrivacy.localOnly {
+                // 點一下切換：只用裝置端，或依預算交給雲端
+                Menu {
+                    Button {
+                        AIPrivacy.localOnly = true
+                        engineRevision += 1
+                    } label: {
+                        Label("只使用裝置端模型", systemImage: AIPrivacy.localOnly ? "checkmark" : "iphone")
+                    }
+                    Divider()
+                    ForEach(AssistantEngineMode.budgets) { mode in
+                        Button {
+                            AIPrivacy.localOnly = false
+                            UserDefaults.standard.set(mode.rawValue, forKey: AssistantEngineMode.key)
+                            engineRevision += 1
+                        } label: {
+                            Label(mode.title, systemImage: !AIPrivacy.localOnly && AssistantEngineMode.current == mode ? "checkmark" : "cloud")
+                        }
+                    }
+                } label: {
+                    let mode = AssistantEngineMode.current
+                    statusLine(mode == .device ? "iphone" : "cloud", mode == .device ? "只使用裝置端模型（不用雲端 AI 與 Jev）" : "預算\(mode.shortTitle)：Jev 依難度自動選裝置端或雲端模型", tint: DS.textSecondary)
+                        .id(engineRevision)
+                }
+                .buttonStyle(.plain)
             }
             if VaultBackend.storage == .webdav {
                 statusLine("externaldrive.badge.icloud", "AI 搜尋的是 LocalOCR 伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)

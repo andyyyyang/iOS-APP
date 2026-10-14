@@ -402,6 +402,38 @@ final class NotesTests: XCTestCase {
         XCTAssertTrue(NoteProperties.parse("# 沒有屬性\n---\na: b\n---").isEmpty)
     }
 
+    func testDataviewQueriesAndInlineQueries() {
+        // ```dataview（DQL）區塊也換成執行畫面
+        let text = "```dataview\nLIST FROM #sop\n```\n名稱：`= this.file.name`，數量：`$= dv.pages().length`，程式碼 `x = 1`"
+        let ns = text as NSString
+        let storage = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: storage, options: LiveMarkdown.Options(selection: nil, width: 600, rendersDataview: true))
+        let info = storage.attribute(.mdDataview, at: 0, effectiveRange: nil) as? DataviewBlockInfo
+        XCTAssertEqual(info?.language, "dataview")
+        XCTAssertEqual(info?.code, "LIST FROM #sop")
+
+        let queries = LiveMarkdown.inlineQueries(in: text)
+        XCTAssertEqual(queries, [LiveMarkdown.InlineQuery(kind: "dql", code: "this.file.name"), LiveMarkdown.InlineQuery(kind: "js", code: "dv.pages().length")])
+        XCTAssertNil(LiveMarkdown.inlineQuery("x = 1"), "一般的程式碼不是查詢")
+        XCTAssertTrue(LiveMarkdown.inlineQueries(in: "```\n`= a`\n```").isEmpty, "程式碼區塊裡的不算")
+
+        // 有結果：藏起原始文字，第一個反引號保留結果的寬度
+        let results = [queries[0].key: "我的筆記"]
+        let shown = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: shown, options: LiveMarkdown.Options(selection: nil, width: 600, inlineQueryResults: results))
+        let tick = ns.range(of: "`= this").location
+        let query = shown.attribute(.mdInlineQuery, at: tick, effectiveRange: nil) as? InlineQueryInfo
+        XCTAssertEqual(query?.text.string, "我的筆記")
+        XCTAssertGreaterThan(shown.attribute(.kern, at: tick, effectiveRange: nil) as? CGFloat ?? 0, 0)
+        XCTAssertTrue(isHidden(shown, at: ns.range(of: "this.file").location))
+        // 還沒有結果：照一般程式碼顯示
+        XCTAssertNil(shown.attribute(.mdInlineQuery, at: ns.range(of: "`$=").location, effectiveRange: nil))
+        // 正在編輯這一行：顯示原始文字
+        let editing = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: editing, options: LiveMarkdown.Options(selection: NSRange(location: tick + 3, length: 0), width: 600, inlineQueryResults: results))
+        XCTAssertNil(editing.attribute(.mdInlineQuery, at: tick, effectiveRange: nil))
+    }
+
     func testAssistantTableText() {
         let table = MarkdownTableText(rows: ["| 機種 | 數量 |", "|:---:|---:|", "| **K3** | 1 \\| 2 |", "| A<br>B |"])
         XCTAssertTrue(table.hasHeader)

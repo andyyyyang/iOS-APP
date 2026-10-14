@@ -63,10 +63,12 @@ struct VaultIndex: Codable, Sendable, Equatable {
         var notebook: String?
         /// 屬性（frontmatter），DataviewJS 的頁面欄位。
         var properties: [String: Property]
+        /// 內文中的 Dataview 欄位（Key:: value、[key:: value]）。
+        var fields: [String: Property]
 
         init(path: String, mtime: Double, size: Int = 0, etag: String = "", title: String? = nil, aliases: [String] = [], tags: [String] = [],
              links: [String] = [], firstEmbed: String? = nil, tasks: [TaskItem] = [], snippet: String = "", notebook: String? = nil,
-             properties: [String: Property] = [:]) {
+             properties: [String: Property] = [:], fields: [String: Property] = [:]) {
             self.path = path
             self.mtime = mtime
             self.size = size
@@ -80,6 +82,7 @@ struct VaultIndex: Codable, Sendable, Equatable {
             self.snippet = snippet
             self.notebook = notebook
             self.properties = properties
+            self.fields = fields
         }
 
         // 欄位缺少時用預設值（伺服器之後加欄位或省略空欄位都能解析）
@@ -99,7 +102,8 @@ struct VaultIndex: Codable, Sendable, Equatable {
                 tasks: try container.decodeIfPresent([TaskItem].self, forKey: .tasks) ?? [],
                 snippet: try container.decodeIfPresent(String.self, forKey: .snippet) ?? "",
                 notebook: try container.decodeIfPresent(String.self, forKey: .notebook),
-                properties: (try? container.decodeIfPresent([String: Property].self, forKey: .properties)) ?? [:]
+                properties: (try? container.decodeIfPresent([String: Property].self, forKey: .properties)) ?? [:],
+                fields: (try? container.decodeIfPresent([String: Property].self, forKey: .fields)) ?? [:]
             )
         }
 

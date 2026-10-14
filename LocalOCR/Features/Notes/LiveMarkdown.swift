@@ -22,8 +22,10 @@ extension NSAttributedString.Key {
     static let mdImage = NSAttributedString.Key("localocr.md.image")
     /// 整個表格畫成格線表（值：MarkdownTableInfo），放在表格第一行。
     static let mdTable = NSAttributedString.Key("localocr.md.table")
-    /// ```dataviewjs 區塊的執行畫面位置（值：DataviewBlockInfo），放在區塊第一行；畫面由 NoteTextView 疊上去。
+    /// ```dataviewjs／```dataview 區塊的執行畫面位置（值：DataviewBlockInfo），放在區塊第一行；畫面由 NoteTextView 疊上去。
     static let mdDataview = NSAttributedString.Key("localocr.md.dataview")
+    /// 行內查詢（`= 運算式`、`$= JavaScript`）的結果（值：InlineQueryInfo），放在第一個反引號上，由版面管理畫出。
+    static let mdInlineQuery = NSAttributedString.Key("localocr.md.inlineQuery")
     /// 連結（值：網址或路徑字串），點一下開啟。
     static let mdLink = NSAttributedString.Key("localocr.md.link")
     /// [[連結]]（值：連結目標，可能含 #標題）。
@@ -58,17 +60,29 @@ final class DataviewBlockInfo: NSObject {
     @MainActor static var heights: [String: CGFloat] = [:]
 
     let code: String
+    /// dataviewjs（JavaScript）或 dataview（DQL 查詢）。
+    let language: String
     let key: String
     let height: CGFloat
 
-    init(code: String, height: CGFloat) {
+    init(code: String, language: String = "dataviewjs", height: CGFloat) {
         self.code = code
-        self.key = Self.key(for: code)
+        self.language = language
+        self.key = Self.key(for: code, language: language)
         self.height = height
     }
 
-    static func key(for code: String) -> String {
-        "\((code as NSString).length):\(code.hashValue)"
+    static func key(for code: String, language: String = "dataviewjs") -> String {
+        "\(language):\((code as NSString).length):\(code.hashValue)"
+    }
+}
+
+/// 行內查詢的結果文字（已套好字型與顏色）。
+final class InlineQueryInfo: NSObject {
+    let text: NSAttributedString
+
+    init(text: NSAttributedString) {
+        self.text = text
     }
 }
 
@@ -352,6 +366,45 @@ enum LiveMarkdown {
         var rendersDataview = false
         /// 屬性（frontmatter）沒在編輯時整段收起來（編輯器上方有屬性按鈕）。
         var collapsesProperties = false
+        /// 行內查詢的結果（依 LiveMarkdown.inlineQueries 的 key）；有結果的查詢沒在編輯時顯示結果。
+        var inlineQueryResults: [String: String] = [:]
+    }
+
+    /// 筆記中的行內查詢：`= 運算式`（DQL）與 `$= 程式碼`（DataviewJS）。
+    struct InlineQuery: Hashable {
+        /// dql 或 js。
+        let kind: String
+        let code: String
+        var key: String { kind + "\u{0}" + code }
+    }
+
+    /// `= this.file.name` → DQL；`$= dv.current().file.name` → JavaScript。
+    static func inlineQuery(_ codeSpan: String) -> InlineQuery? {
+        if codeSpan.hasPrefix("$="), codeSpan.count > 2 {
+            let code = codeSpan.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            return code.isEmpty ? nil : InlineQuery(kind: "js", code: code)
+        }
+        if codeSpan.hasPrefix("= "), codeSpan.count > 2 {
+            let code = codeSpan.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            return code.isEmpty ? nil : InlineQuery(kind: "dql", code: code)
+        }
+        return nil
+    }
+
+    /// 文字中所有的行內查詢（不含程式碼區塊裡的）。
+    static func inlineQueries(in text: String) -> [InlineQuery] {
+        var result: [InlineQuery] = []
+        var inFence = false
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { inFence.toggle(); continue }
+            guard !inFence, line.contains("`") else { continue }
+            let ns = line as NSString
+            for match in Patterns.code.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+                if let query = inlineQuery(ns.substring(with: match.range(at: 1))), !result.contains(query) { result.append(query) }
+            }
+        }
+        return result
     }
 
     // MARK: 樣式
@@ -571,9 +624,9 @@ enum LiveMarkdown {
                     while end < lines.count, !trimmed(end).hasPrefix(fence) { end += 1 }
                     let last = min(end, lines.count - 1)
                     let language = value.dropFirst(3).trimmingCharacters(in: .whitespaces).lowercased()
-                    // 有結尾的 ```dataviewjs：沒在編輯時換成執行畫面
-                    if language == "dataviewjs", options.rendersDataview, end < lines.count, last > index, !isActive(lines: index...last) {
-                        styleDataview(index...last)
+                    // 有結尾的 ```dataviewjs、```dataview：沒在編輯時換成執行畫面
+                    if language == "dataviewjs" || language == "dataview", options.rendersDataview, end < lines.count, last > index, !isActive(lines: index...last) {
+                        styleDataview(index...last, language: language)
                     } else {
                         styleCode(index...last)
                     }
@@ -974,12 +1027,12 @@ enum LiveMarkdown {
             }
         }
 
-        /// ```dataviewjs 區塊：保留執行畫面的高度（內容高度＋上方一列）。
-        func styleDataview(_ indices: ClosedRange<Int>) {
+        /// ```dataviewjs／```dataview 區塊：保留執行畫面的高度（內容高度＋上方一列）。
+        func styleDataview(_ indices: ClosedRange<Int>, language: String = "dataviewjs") {
             let code = ((indices.lowerBound + 1)..<indices.upperBound).map { string(lines[$0]) }.joined(separator: "\n")
-            let key = DataviewBlockInfo.key(for: code)
+            let key = DataviewBlockInfo.key(for: code, language: language)
             let height = (options.dataviewHeights[key] ?? DataviewBlockInfo.defaultContentHeight) + DataviewBlockInfo.headerHeight
-            reserve(indices, height: height, key: .mdDataview, value: DataviewBlockInfo(code: code, height: height))
+            reserve(indices, height: height, key: .mdDataview, value: DataviewBlockInfo(code: code, language: language, height: height))
         }
 
         /// 表格的儲存格：每格套好行內樣式，欄位對齊依分隔列（:--- 靠左、:---: 置中、---: 靠右）。
@@ -1069,8 +1122,14 @@ enum LiveMarkdown {
             func isProtected(_ r: NSRange) -> Bool { protected.contains { NSIntersectionRange($0, r).length > 0 } }
             func marker(_ r: NSRange) { hide(absolute(r), dimInstead: active) }
 
-            // `程式碼`
+            // `程式碼`；行內查詢（`= …`、`$= …`）有結果時顯示結果
             for match in Patterns.code.matches(in: source, range: local) {
+                if !active, let query = LiveMarkdown.inlineQuery((source as NSString).substring(with: match.range(at: 1))),
+                   let result = options.inlineQueryResults[query.key] {
+                    styleInlineQuery(absolute(match.range), result: result, baseFont: baseFont)
+                    protected.append(match.range)
+                    continue
+                }
                 storage.addAttributes([.font: Theme.monoFont, .backgroundColor: Theme.codeBackground], range: absolute(match.range(at: 1)))
                 marker(NSRange(location: match.range.location, length: 1))
                 marker(NSRange(location: NSMaxRange(match.range) - 1, length: 1))
@@ -1169,6 +1228,21 @@ enum LiveMarkdown {
             }
         }
 
+        /// 行內查詢的結果：原始文字藏起來，第一個反引號保留結果的寬度（透明、調整字距），結果由版面管理畫出。
+        func styleInlineQuery(_ range: NSRange, result: String, baseFont: UIFont?) {
+            let font = baseFont ?? Theme.bodyFont
+            let display = NSAttributedString(string: result, attributes: [.font: font, .foregroundColor: Theme.accent])
+            storage.addAttributes(Theme.hidden, range: range)
+            let first = NSRange(location: range.location, length: 1)
+            let tickWidth = NSAttributedString(string: "`", attributes: [.font: font]).size().width
+            storage.addAttributes([
+                .font: font,
+                .foregroundColor: UIColor.clear,
+                .kern: ceil(display.size().width) + 1 - tickWidth,
+                .mdInlineQuery: InlineQueryInfo(text: display),
+            ], range: first)
+        }
+
         func addTraits(_ traits: UIFontDescriptor.SymbolicTraits, to range: NSRange, baseFont: UIFont?) {
             storage.enumerateAttribute(.font, in: range) { value, run, _ in
                 let font = (value as? UIFont) ?? baseFont ?? Theme.bodyFont
@@ -1258,6 +1332,15 @@ final class LiveMarkdownLayoutManager: NSLayoutManager {
             guard !rect.isNull else { return }
             LiveMarkdown.Theme.line.setFill()
             UIRectFill(CGRect(x: rect.minX, y: rect.midY - 0.5, width: container.size.width, height: 1))
+        }
+        // 行內查詢的結果：畫在第一個反引號保留的位置
+        storage.enumerateAttribute(.mdInlineQuery, in: characters) { value, range, _ in
+            guard let info = value as? InlineQueryInfo, info.text.length > 0 else { return }
+            let glyph = glyphIndexForCharacter(at: range.location)
+            let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let position = location(forGlyphAt: glyph)
+            let font = info.text.attribute(.font, at: 0, effectiveRange: nil) as? UIFont ?? LiveMarkdown.Theme.bodyFont
+            info.text.draw(at: CGPoint(x: line.minX + position.x + origin.x, y: line.minY + position.y + origin.y - font.ascender))
         }
         // DataviewJS：執行畫面疊上來之前先畫底色
         storage.enumerateAttribute(.mdDataview, in: characters) { value, range, _ in

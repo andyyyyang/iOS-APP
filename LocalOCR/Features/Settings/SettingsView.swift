@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage(OCRSettings.Key.automaticallyDetectsLanguage) private var automaticallyDetectsLanguage = false
     @AppStorage(OCRSettings.Key.autoSaveHistory) private var autoSaveHistory = true
     @AppStorage(ServerSettings.Key.useJev) private var useJev = true
+    @AppStorage(AIPrivacy.localOnlyKey) private var localOnly = false
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @State private var aiStatus = OnDeviceAIStatus.current
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.light.rawValue
@@ -50,6 +51,12 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("以 Jev 判斷情境", isOn: $useJev)
+                        .disabled(localOnly)
+                    if localOnly {
+                        Text("已開啟「只使用裝置端模型」（設定 → 知識庫 AI），情境由裝置端判斷。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("智慧掃描")
                 } footer: {

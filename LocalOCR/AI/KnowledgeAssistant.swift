@@ -1,6 +1,16 @@
 import Foundation
 import Observation
 
+/// 只使用裝置端模型：不呼叫雲端 AI，也不呼叫伺服器的 Jev（首頁 AI 只用 Apple Intelligence，智慧掃描用裝置端判斷情境）。
+enum AIPrivacy {
+    static let localOnlyKey = "ai.localOnly"
+
+    static var localOnly: Bool {
+        get { UserDefaults.standard.bool(forKey: localOnlyKey) }
+        set { UserDefaults.standard.set(newValue, forKey: localOnlyKey) }
+    }
+}
+
 /// AI 的預算：三個等級都由伺服器的 Jev 依要求的種類與難度自動選擇（裝置端或哪一級的雲端模型），都以成本為先；
 /// 簡單的事每個等級都在裝置端處理，預算越高，難的工作越早用上更好的模型。
 enum AssistantEngineMode: String, CaseIterable, Identifiable {
@@ -49,8 +59,11 @@ enum AssistantEngineMode: String, CaseIterable, Identifiable {
     }
 
     static var current: AssistantEngineMode {
-        from(UserDefaults.standard.string(forKey: key))
+        AIPrivacy.localOnly ? .device : from(UserDefaults.standard.string(forKey: key))
     }
+
+    /// 設定頁的預算選項（只用裝置端是另外的開關）。
+    static let budgets: [AssistantEngineMode] = [.low, .medium, .high]
 }
 
 /// 雲端工作要用的模型等級與思考程度（POST /v1/assistant/route 的判斷）。

@@ -9,9 +9,14 @@ final class DataviewView: UIView {
 
     let webView: WKWebView
     private let header = UIStackView()
+    private let headerLabel = UILabel()
     private(set) var code = ""
     private(set) var sourcePath = ""
+    private(set) var language = "dataviewjs"
+    private var mode = "block"
     private var loadedKey: String?
+    private var isLoaded = false
+    private var loadWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// 內容高度（不含上方一列）。
     var onHeight: ((CGFloat) -> Void)?
@@ -35,6 +40,7 @@ final class DataviewView: UIView {
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.uiDelegate = self
+        webView.navigationDelegate = self
         if #available(iOS 16.4, *) { webView.isInspectable = true }
         addSubview(webView)
         if showsHeader { buildHeader() }
@@ -59,19 +65,36 @@ final class DataviewView: UIView {
         webView.scrollView.isScrollEnabled = scrolls
     }
 
-    /// 執行（同一段程式碼不重跑，除非 `force`）。
-    func load(code: String, sourcePath: String, force: Bool = false) {
-        let key = sourcePath + "\u{0}" + code
+    /// 執行（同一段程式碼不重跑，除非 `force`）。`language`：dataviewjs 或 dataview（DQL）；`mode` 為 evaluator 時只準備資料給行內查詢。
+    func load(code: String, sourcePath: String, language: String = "dataviewjs", mode: String = "block", force: Bool = false) {
+        let key = [sourcePath, language, mode, code].joined(separator: "\u{0}")
         guard force || key != loadedKey else { return }
         loadedKey = key
         self.code = code
         self.sourcePath = sourcePath
-        let html = DataviewShim.html(code: code, sourcePath: sourcePath, vaultName: NotesSettings.vaultName)
+        self.language = language
+        self.mode = mode
+        headerLabel.text = language == "dataview" ? "Dataview" : "DataviewJS"
+        isLoaded = false
+        let html = DataviewShim.html(code: code, sourcePath: sourcePath, vaultName: NotesSettings.vaultName, language: language, mode: mode)
         webView.loadHTMLString(html, baseURL: DataviewShim.baseURL)
     }
 
     func reload() {
-        load(code: code, sourcePath: sourcePath, force: true)
+        load(code: code, sourcePath: sourcePath, language: language, mode: mode, force: true)
+    }
+
+    /// 計算行內查詢（evaluator 模式）：回傳每一個查詢的結果文字。
+    func evaluateInline(_ queries: [LiveMarkdown.InlineQuery]) async throws -> [String] {
+        if !isLoaded { await withCheckedContinuation { loadWaiters.append($0) } }
+        let items = queries.map { ["kind": $0.kind, "code": $0.code] }
+        let result = try await webView.callAsyncJavaScript(
+            "await new Promise((resolve) => { const check = () => (window.__dvReady ? resolve() : setTimeout(check, 30)); check(); }); return await window.__dvEvaluate(items);",
+            arguments: ["items": items],
+            in: nil,
+            in: .page
+        )
+        return result as? [String] ?? []
     }
 
     // MARK: 上方一列
@@ -83,11 +106,10 @@ final class DataviewView: UIView {
         header.isLayoutMarginsRelativeArrangement = true
         header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 4)
         header.backgroundColor = LiveMarkdown.Theme.codeBackground
-        let label = UILabel()
-        label.text = "DataviewJS"
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
-        label.textColor = LiveMarkdown.Theme.secondary
-        header.addArrangedSubview(label)
+        headerLabel.text = "DataviewJS"
+        headerLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        headerLabel.textColor = LiveMarkdown.Theme.secondary
+        header.addArrangedSubview(headerLabel)
         header.addArrangedSubview(UIView())
         header.addArrangedSubview(button("chevron.left.forwardslash.chevron.right", "編輯程式碼") { [weak self] in self?.onEdit?() })
         header.addArrangedSubview(button("arrow.clockwise", "重新執行") { [weak self] in self?.reload() })
@@ -139,11 +161,25 @@ final class DataviewView: UIView {
         case "copy":
             UIPasteboard.general.string = body["text"] as? String ?? ""
             return nil
+        case "toggleTask":
+            try await DataviewData.toggleTask(in: path, text: body["text"] as? String ?? "", done: body["done"] as? Bool ?? false)
+            return nil
         case "paste":
             return UIPasteboard.general.string ?? ""
         default:
             throw DataviewError.message("不支援的操作：\(op)")
         }
+    }
+}
+
+// MARK: - 載入完成
+
+extension DataviewView: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        isLoaded = true
+        let waiters = loadWaiters
+        loadWaiters = []
+        waiters.forEach { $0.resume() }
     }
 }
 
@@ -238,6 +274,7 @@ enum DataviewData {
                 "tags": note.tags, "aliases": note.aliases, "links": note.links,
                 "tasks": note.tasks.map { ["text": $0.text, "done": $0.done] as [String: Any] },
                 "properties": note.properties.mapValues(\.jsonObject),
+                "fields": note.fields.mapValues(\.jsonObject),
             ])
         }
         // 索引沒有的（WebDAV、還沒同步的新筆記）：用 App 的筆記清單
@@ -287,6 +324,23 @@ enum DataviewData {
         guard LocalVault.shared.readText(path) != text else { return }
         try LocalVault.shared.writeText(text, to: path)
         VaultSyncCenter.shared.fileDidChange(path)
+    }
+
+    /// TASK 查詢結果打勾：找到筆記中這一行待辦（- [ ] 文字），改成完成或未完成。
+    static func toggleTask(in path: String, text: String, done: Bool) async throws {
+        guard !path.isEmpty, !text.isEmpty else { throw DataviewError.message("沒有指定待辦") }
+        let content = String(decoding: try await read(path), as: UTF8.self)
+        var lines = content.components(separatedBy: "\n")
+        let pattern = try NSRegularExpression(pattern: #"^(\s*[-*+]\s+\[)( |x|X)(\]\s+)(.*)$"#)
+        for (index, line) in lines.enumerated() {
+            let ns = line as NSString
+            guard let match = pattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+                  ns.substring(with: match.range(at: 4)).trimmingCharacters(in: .whitespaces) == text.trimmingCharacters(in: .whitespaces) else { continue }
+            lines[index] = ns.replacingCharacters(in: match.range(at: 2), with: done ? "x" : " ")
+            try write(lines.joined(separator: "\n"), to: path)
+            return
+        }
+        throw DataviewError.message("在「\(path)」中找不到這個待辦")
     }
 
     static func exists(_ path: String) -> Bool {
@@ -400,12 +454,14 @@ final class VaultSchemeHandler: NSObject, WKURLSchemeHandler {
 final class DataviewFullScreenController: UIViewController {
     private let code: String
     private let sourcePath: String
+    private let language: String
     private let dataview = DataviewView(showsHeader: false)
     var onOpenLink: ((String) -> Void)?
 
-    init(code: String, sourcePath: String) {
+    init(code: String, sourcePath: String, language: String = "dataviewjs") {
         self.code = code
         self.sourcePath = sourcePath
+        self.language = language
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
     }
@@ -423,7 +479,7 @@ final class DataviewFullScreenController: UIViewController {
         bar.spacing = 4
         bar.translatesAutoresizingMaskIntoConstraints = false
         let title = UILabel()
-        title.text = "DataviewJS"
+        title.text = language == "dataview" ? "Dataview" : "DataviewJS"
         title.font = .systemFont(ofSize: 15, weight: .semibold)
         title.textColor = .label
         bar.addArrangedSubview(barButton("xmark", "關閉") { [weak self] in self?.dismiss(animated: true) })
@@ -448,7 +504,7 @@ final class DataviewFullScreenController: UIViewController {
             dataview.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
             dataview.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        dataview.load(code: code, sourcePath: sourcePath)
+        dataview.load(code: code, sourcePath: sourcePath, language: language)
     }
 
     private func barButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> UIButton {

@@ -17,7 +17,7 @@ struct SmartScanOutcome {
 enum SmartScanEngine {
     static func classifierPipeline(useJev: Bool) -> ClassifierPipeline {
         var classifiers: [any DocumentClassifier] = []
-        if useJev, let client = ServerClient.configured() {
+        if useJev, !AIPrivacy.localOnly, let client = ServerClient.configured() {
             classifiers.append(ServerJevClassifier(client: client))
         }
         #if canImport(FoundationModels)

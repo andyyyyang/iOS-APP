@@ -248,8 +248,32 @@ final class NoteTextView: UITextView {
         view.onOpenLink = { [weak self] link in self?.onTap?(.wikiLink(link)) }
         view.onEdit = { [weak self] in self?.editDataview(key) }
         view.onFullScreen = { [weak self] in self?.presentDataview(key) }
-        view.load(code: info.code, sourcePath: notePath)
+        view.load(code: info.code, sourcePath: notePath, language: info.language)
         return view
+    }
+
+    /// 計算行內查詢用的網頁（不顯示），這則筆記第一次有行內查詢時建立。
+    private var inlineEvaluator: DataviewView?
+
+    func evaluateInlineQueries(_ queries: [LiveMarkdown.InlineQuery]) async -> [String] {
+        let evaluator: DataviewView
+        if let existing = inlineEvaluator, existing.sourcePath == notePath {
+            evaluator = existing
+        } else {
+            inlineEvaluator?.removeFromSuperview()
+            evaluator = DataviewView(showsHeader: false)
+            evaluator.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+            evaluator.alpha = 0
+            evaluator.isUserInteractionEnabled = false
+            addSubview(evaluator)
+            evaluator.load(code: "", sourcePath: notePath, mode: "evaluator")
+            inlineEvaluator = evaluator
+        }
+        do {
+            return try await evaluator.evaluateInline(queries)
+        } catch {
+            return queries.map { _ in "⚠︎ " + error.localizedDescription }
+        }
     }
 
     /// 編輯程式碼：游標移到區塊的第一行程式碼（區塊改回顯示原始文字）。
@@ -264,7 +288,7 @@ final class NoteTextView: UITextView {
 
     private func presentDataview(_ key: String) {
         guard let block = dataviewBlocks.first(where: { $0.info.key == key }), let presenter = nearestViewController() else { return }
-        let controller = DataviewFullScreenController(code: block.info.code, sourcePath: notePath)
+        let controller = DataviewFullScreenController(code: block.info.code, sourcePath: notePath, language: block.info.language)
         controller.onOpenLink = { [weak self] link in self?.onTap?(.wikiLink(link)) }
         presenter.present(controller, animated: true)
     }
@@ -580,10 +604,12 @@ struct MarkdownEditor: UIViewRepresentable {
                 resolvesLink: parent.resolvesLink,
                 dataviewHeights: DataviewBlockInfo.heights,
                 rendersDataview: true,
-                collapsesProperties: true
+                collapsesProperties: true,
+                inlineQueryResults: inlineQueryResults
             ))
             textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
             textView.refreshDataviewBlocks()
+            evaluateMissingInlineQueries(textView)
             for name in missing where !loading.contains(name) {
                 loading.insert(name)
                 Task { [weak self, weak textView] in
@@ -594,6 +620,31 @@ struct MarkdownEditor: UIViewRepresentable {
                     self.images[name] = image
                     self.restyle(textView)
                 }
+            }
+        }
+
+        // MARK: 行內查詢
+
+        /// `= 運算式`、`$= 程式碼` 的結果（這則筆記打開期間有效）。
+        private var inlineQueryResults: [String: String] = [:]
+        private var pendingInlineQueries: Set<String> = []
+
+        /// 還沒有結果的行內查詢：交給網頁計算，算好後重新排版顯示結果。
+        private func evaluateMissingInlineQueries(_ textView: NoteTextView) {
+            let missing = LiveMarkdown.inlineQueries(in: textView.text).filter {
+                inlineQueryResults[$0.key] == nil && !pendingInlineQueries.contains($0.key)
+            }
+            guard !missing.isEmpty else { return }
+            missing.forEach { pendingInlineQueries.insert($0.key) }
+            Task { [weak self, weak textView] in
+                guard let textView else { return }
+                let results = await textView.evaluateInlineQueries(missing)
+                guard let self else { return }
+                for (index, query) in missing.enumerated() {
+                    self.inlineQueryResults[query.key] = index < results.count ? results[index] : "—"
+                    self.pendingInlineQueries.remove(query.key)
+                }
+                self.restyle(textView)
             }
         }
 

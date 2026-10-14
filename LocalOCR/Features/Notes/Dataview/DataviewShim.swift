@@ -14,8 +14,9 @@ enum DataviewShim {
     static let baseURL = URL(string: "\(scheme)://app/")!
 
     /// 完整的網頁：樣式、執行環境與要執行的程式碼。
-    static func html(code: String, sourcePath: String, vaultName: String) -> String {
-        let payload: [String: Any] = ["code": code, "source": sourcePath, "vault": vaultName]
+    /// `language`：dataviewjs（JavaScript）或 dataview（DQL 查詢）；`mode` 為 evaluator 時只準備資料，給行內查詢呼叫。
+    static func html(code: String, sourcePath: String, vaultName: String, language: String = "dataviewjs", mode: String = "block") -> String {
+        let payload: [String: Any] = ["code": code, "source": sourcePath, "vault": vaultName, "language": language, "mode": mode]
         let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
         // 程式碼裡的 </script> 不能結束這個 <script>
         let json = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "</", with: "<\\/")
@@ -29,6 +30,8 @@ enum DataviewShim {
         <div id="dv-root" class="block-language-dataviewjs"></div>
         <script>window.__dv = \(json);</script>
         <script>\(script)</script>
+        <script>\(DataviewQuery.script)</script>
+        <script>window.__dvStart();</script>
         </body></html>
         """
     }
@@ -308,11 +311,14 @@ enum DataviewShim {
         file.mday = file.mtime.startOf("day"); file.cday = file.ctime.startOf("day"); file.lists = file.tasks;
         file.day = (() => { const m = /(\d{4}-\d{2}-\d{2})/.exec(name); return m ? new DvDate(m[1]) : null; })();
         const page = { file };
-        for (const [key, value] of Object.entries(n.properties || {})) {
-          const v = coerce(value);
-          if (!(key in page)) page[key] = v;
-          const safe = key.toLowerCase().replace(/\s+/g, "-");
-          if (!(safe in page)) page[safe] = v;
+        // 屬性（frontmatter）優先，再加上內文的 Dataview 欄位（Key:: value）
+        for (const source of [n.properties || {}, n.fields || {}]) {
+          for (const [key, value] of Object.entries(source)) {
+            const v = coerce(value);
+            if (!(key in page)) page[key] = v;
+            const safe = key.toLowerCase().replace(/\s+/g, "-").replace(/[*_`]/g, "");
+            if (!(safe in page)) page[safe] = v;
+          }
         }
         return page;
       }
@@ -617,18 +623,27 @@ enum DataviewShim {
         const fn = new AsyncFunction("dv", "input", code);
         return fn.call(dv, dv, input);
       }
-      (async () => {
+      const showError = (title, error) => {
+        const box = root.createDiv({ cls: "dv-error" });
+        box.createEl("strong", { text: title });
+        box.createEl("pre", { text: String(error && error.message ? error.message : error) });
+      };
+      // 給 DQL 引擎（第二段 script）用的內部函式
+      window.__dvi = { dv, app, root, CONFIG, bridge, dvArray, unwrap, Link, DvDate, compare, groupKey, renderValue, toText, inlineMarkdown,
+        escapeHTML, pageFor, resolve, coerce, sourceMatcher, stem, norm, extname, scheduleHeight, showError, pages: () => PAGES };
+      // 執行：DataviewJS 區塊、DQL 區塊（```dataview），或只準備好資料給行內查詢用（evaluator）
+      window.__dvStart = async () => {
         try {
           buildIndex(await bridge("index"));
-          await run(CONFIG.code || "");
-          if (!root.childNodes.length) root.createDiv({ cls: "dv-empty", text: "（這段 DataviewJS 沒有輸出）" });
+          if (CONFIG.mode === "evaluator") { window.__dvReady = true; return; }
+          if (CONFIG.language === "dataview") await dv.execute(CONFIG.code || "");
+          else await run(CONFIG.code || "");
+          if (!root.childNodes.length) root.createDiv({ cls: "dv-empty", text: CONFIG.language === "dataview" ? "沒有結果" : "（這段 DataviewJS 沒有輸出）" });
         } catch (error) {
-          const box = root.createDiv({ cls: "dv-error" });
-          box.createEl("strong", { text: "DataviewJS 錯誤" });
-          box.createEl("pre", { text: String(error && error.message ? error.message : error) });
+          showError(CONFIG.language === "dataview" ? "Dataview 查詢錯誤" : "DataviewJS 錯誤", error);
         }
         scheduleHeight();
-      })();
+      };
     })();
     """##
 }
