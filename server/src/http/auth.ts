@@ -21,28 +21,39 @@ export function authenticatedKey(res: Response): string | undefined {
   return typeof key === "string" ? key : undefined;
 }
 
+export interface ApiKeyCheck {
+  ok: boolean;
+  /** The presented key that matched (with auth disabled: the first presented key, if any). Never log it. */
+  key: string | undefined;
+}
+
 /**
- * API-key auth via `Authorization: Bearer <key>` or `?api_key=<key>`.
- * Keys are compared as SHA-256 digests with timingSafeEqual, checking every configured key.
- * An empty key list disables auth (only allowed by config in test / ALLOW_NO_AUTH mode).
+ * Checks presented API keys against the configured ones: compared as SHA-256 digests with timingSafeEqual, checking
+ * every configured key. An empty key list disables auth (only allowed by config in test / ALLOW_NO_AUTH mode).
+ * Shared by the REST/MCP middleware and the WebSocket GET /v1/vault/stream (which gets its key in a message).
  */
-export function requireApiKey(apiKeys: readonly string[]): RequestHandler {
+export function apiKeyChecker(apiKeys: readonly string[]): (presented: readonly string[]) => ApiKeyCheck {
   const allowed = apiKeys.map(digest);
-  return (req, res, next) => {
-    const keys = presentedKeys(req);
-    if (allowed.length === 0) {
-      res.locals.apiKey = keys[0];
-      return next();
-    }
+  return (presented) => {
+    if (allowed.length === 0) return { ok: true, key: presented[0] };
     let matched: string | undefined;
-    for (const key of keys) {
+    for (const key of presented) {
       const candidate = digest(key);
       let ok = false;
       for (const expected of allowed) ok = timingSafeEqual(candidate, expected) || ok;
       if (ok) matched ??= key;
     }
-    if (matched !== undefined) {
-      res.locals.apiKey = matched; // POST /v1/pairing hands this key to the paired device
+    return { ok: matched !== undefined, key: matched };
+  };
+}
+
+/** API-key auth via `Authorization: Bearer <key>` or `?api_key=<key>` (see apiKeyChecker). */
+export function requireApiKey(apiKeys: readonly string[]): RequestHandler {
+  const check = apiKeyChecker(apiKeys);
+  return (req, res, next) => {
+    const { ok, key } = check(presentedKeys(req));
+    if (ok) {
+      res.locals.apiKey = key; // POST /v1/pairing hands this key to the paired device
       return next();
     }
     res

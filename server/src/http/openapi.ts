@@ -12,6 +12,14 @@ import { VAULT_CLIENT_HEADER } from "../services/vault.js";
 import { CLASSIFICATION_PROVIDERS, PLUGIN_FILES, SCAN_SOURCES } from "../types.js";
 import { MAX_PATH_BYTES } from "../vault/paths.js";
 import {
+  VAULT_STREAM_AUTH_TIMEOUT_MS,
+  VAULT_STREAM_BATCH_MS,
+  VAULT_STREAM_CLOSE_NOT_CONFIGURED,
+  VAULT_STREAM_CLOSE_UNAUTHORIZED,
+  VAULT_STREAM_HEARTBEAT_MS,
+  VAULT_STREAM_PATH,
+} from "./vault-stream.js";
+import {
   REMOTELY_SAVE_AUTO_RUN_MS,
   REMOTELY_SAVE_INIT_RUN_MS,
   REMOTELY_SAVE_SYNC_ON_SAVE_MS,
@@ -370,6 +378,39 @@ export function buildOpenApi(serverUrl?: string) {
             ),
             "401": commonErrors["401"],
             "503": vaultErrors["503"],
+          },
+        },
+      },
+      [VAULT_STREAM_PATH]: {
+        get: {
+          operationId: "streamVaultChanges",
+          summary: "Vault changes pushed over a WebSocket (instead of long-polling GET /v1/vault/changes)",
+          description:
+            "A WebSocket upgrade (ws:// or wss://, same host and port; any query string is ignored). Every message is a JSON text frame. " +
+            "Browsers cannot set headers on a WebSocket, so the upgrade itself needs no key: the first message authenticates, " +
+            `within ${VAULT_STREAM_AUTH_TIMEOUT_MS / 1000} s: {"type":"auth","token":"<API key>","client":"<client id>","since":"<cursor>"} ` +
+            "(client: like X-LocalOCR-Client, trimmed and cut to 100 characters; since optional). " +
+            `A wrong or missing key answers {"type":"error","code":"unauthorized"} and closes with ${VAULT_STREAM_CLOSE_UNAUTHORIZED} ` +
+            `(no auth message in time: close ${VAULT_STREAM_CLOSE_UNAUTHORIZED} only); without vault storage ` +
+            `{"type":"error","code":"vault_not_configured"} and close ${VAULT_STREAM_CLOSE_NOT_CONFIGURED}. ` +
+            'Then the server sends {"type":"ready","cursor","reset"}: without since the current cursor and reset false; with since ' +
+            "the same answer as GET /v1/vault/changes?since= (reset true for a cursor from another epoch, too old, unknown, or " +
+            `too many changes behind), followed by {"type":"changes",…} when changes by other clients were missed. ` +
+            'From then on every change recorded by another client is pushed as {"type":"changes","cursor","reset":false,"changes":[VaultChange…]} ' +
+            `(changes within ${VAULT_STREAM_BATCH_MS} ms come in one message; changes made under this socket's client id are left out, ` +
+            "so a batch of only those sends nothing). The client may send " +
+            '{"type":"report","paths":[…]} for files it uploaded to the bucket itself (like POST /v1/vault/changes, recorded under its ' +
+            `client id; invalid paths are skipped, and no paths or more than ${MAX_VAULT_CHANGE_PATHS} record one change with path null), ` +
+            'answered {"type":"ack","cursor"}, and {"type":"ping"}, answered {"type":"pong"}. Unknown messages are ignored. ' +
+            `The server sends a WebSocket ping every ${VAULT_STREAM_HEARTBEAT_MS / 1000} s and terminates a socket that missed the ` +
+            "previous one; a socket is closed with 1001 when the server shuts down. Servers without this endpoint answer the upgrade with 404.",
+          security: [],
+          parameters: [
+            { name: "Upgrade", in: "header", required: true, schema: { type: "string", const: "websocket" } },
+          ],
+          responses: {
+            "101": { description: "Switching Protocols: the WebSocket is open; send the auth message" },
+            "400": { description: "Not a valid WebSocket upgrade request" },
           },
         },
       },
@@ -865,7 +906,7 @@ export function buildOpenApi(serverUrl?: string) {
                 bypassCorsLocally: { type: "boolean", const: true },
               },
             },
-            autoRunEveryMilliseconds: { type: "integer", const: REMOTELY_SAVE_AUTO_RUN_MS, description: "Schedule For Auto Run: every 1 minute" },
+            autoRunEveryMilliseconds: { type: "integer", const: REMOTELY_SAVE_AUTO_RUN_MS, description: "Schedule For Auto Run: every 5 minutes" },
             initRunAfterMilliseconds: {
               type: "integer",
               const: REMOTELY_SAVE_INIT_RUN_MS,

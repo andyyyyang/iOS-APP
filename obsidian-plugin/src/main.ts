@@ -37,7 +37,15 @@ import {
 	fetchRemotelySaveSetup,
 	isPluginEnabled,
 } from "./device-setup";
-import { LiveSync, createClientId, describeLiveSync, isClientId, startRemotelySaveSync } from "./live-sync";
+import {
+	LiveSync,
+	browserWebSocket,
+	createClientId,
+	describeLiveSync,
+	isClientId,
+	startRemotelySaveSync,
+	streamUrl,
+} from "./live-sync";
 import { PairingModal, RemotelySaveModal } from "./setup-modals";
 import {
 	UPDATE_CHECK_INTERVAL_MS,
@@ -350,11 +358,15 @@ export default class LocalOcrSyncPlugin extends Plugin {
 		this.liveSync = null;
 		this.liveSyncKey = key;
 		if (!wanted) return;
+		// Changes are pushed over the WebSocket /v1/vault/stream; LiveSync long-polls when that cannot be used
+		const url = streamUrl(normalizeServerUrl(this.settings.serverUrl));
+		const open = browserWebSocket();
 		this.liveSync = new LiveSync({
 			client: this.createClient(),
 			clientId: this.deviceClientId(),
 			configDir: this.app.vault.configDir,
 			syncRemote: () => startRemotelySaveSync(this.app),
+			stream: url && open ? { url, token: this.settings.apiKey, open } : null,
 			log: (message) => console.info(LOG_PREFIX, message),
 		});
 		this.liveSync.start();

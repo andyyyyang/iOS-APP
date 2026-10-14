@@ -405,7 +405,7 @@ describe("GET /v1/vault/remotely-save", () => {
         generateFolderObject: false,
         bypassCorsLocally: true,
       },
-      autoRunEveryMilliseconds: 60_000,
+      autoRunEveryMilliseconds: 300_000,
       initRunAfterMilliseconds: 10_000,
       syncOnSaveAfterMilliseconds: 1000,
       agreeToUseSyncV3: true,

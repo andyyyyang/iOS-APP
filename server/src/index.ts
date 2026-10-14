@@ -2,6 +2,7 @@ import { bootstrapStore } from "./bootstrap.js";
 import { createClassifier } from "./classifier/index.js";
 import { loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
+import { attachVaultStream } from "./http/vault-stream.js";
 import { ObsidianPluginService, schedulePluginMirror } from "./services/obsidian-plugin.js";
 import { VaultChangeFeed } from "./services/vault-changes.js";
 import { createStore } from "./store/index.js";
@@ -39,6 +40,8 @@ async function main() {
         `(database=${store.kind}, classifier=${classifier?.provider ?? "none"}, vault=${vault?.kind ?? "none"})`,
     );
   });
+  // WebSocket GET /v1/vault/stream (vault change push) on the same port, through the server's "upgrade" event
+  const vaultStream = attachVaultStream(server, app);
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {
@@ -47,6 +50,7 @@ async function main() {
     console.info(`[shutdown] ${signal} received; closing`);
     stopPluginMirror();
     vaultChanges.close(); // answer held GET /v1/vault/changes long polls so server.close() is not kept waiting
+    vaultStream.close(); // likewise for open /v1/vault/stream WebSockets
     const force = setTimeout(() => process.exit(1), 10_000);
     force.unref();
     server.close(async () => {

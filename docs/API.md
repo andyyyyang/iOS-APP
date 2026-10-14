@@ -276,7 +276,8 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `PUT /v1/vault/file?path=` | 以請求本文（原始位元組，任何 Content-Type 都原樣儲存，最多 25 MB）新增或整檔取代。選用標頭：`If-Match`、`If-None-Match: *`、`X-Vault-Mtime`（毫秒，預設為現在）。新增回傳 **201**、覆寫回傳 **200**，本文為 `{"path","size","mtime","etag"}`，並附 `ETag` 標頭 |
 | `DELETE /v1/vault/file?path=` | 刪除，回傳 204；選用 `If-Match`。不存在時 404 `not_found`（不論是否帶 `If-Match`） |
 | `GET /v1/vault/remotely-save?vault=` | Remotely Save 的設定與匯入網址，見下方「Remotely Save 設定」 |
-| `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，最多等 25 秒），見下方「變更通知（即時同步）」 |
+| `GET /v1/vault/stream`（WebSocket） | 變更通知的即時推送（優先使用），見下方「即時推送（WebSocket）」 |
+| `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，最多等 25 秒；WebSocket 不能用時的備援），見下方「變更通知（即時同步）」 |
 | `POST /v1/vault/changes` | 回報這台裝置自己上傳到儲存桶的檔案（Remotely Save），見下方「變更通知（即時同步）」 |
 | `GET /v1/vault/search?q=&prefix=&limit=` | 在 `.md`、`.txt`、`.json`、`.canvas` 檔案中比對檔名與內容（不分大小寫，`q` 為一般文字而非正規表示式），略過 `.obsidian` 等以 `.` 開頭的資料夾與檔案。依 `mtime` 由新到舊，最多檢查最新的 3000 個檔案，超過 1 MB 的檔案只比對檔名。`limit` 預設 20、上限 100。回傳 `{"items":[{"path","mtime","snippet"}]}`，`snippet` 是第一個內容符合處前後約 120 字（只有檔名符合時為檔案開頭；空白會合併、截斷處加 `…`） |
 
@@ -351,6 +352,23 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 
 建議用法：先不帶 `since` 取得 cursor，接著反覆呼叫 `GET /v1/vault/changes?since=<cursor>&wait=25`；收到變更或 `reset: true` 時重新整理對應的檔案；網路或伺服器錯誤時逐步拉長間隔重試（例如 5、15、60 秒）；舊版伺服器沒有這個端點時回傳 404。
 
+#### 即時推送（WebSocket）：`GET /v1/vault/stream`
+
+與長輪詢相同的變更與 cursor，但伺服器在變動發生時立即送出，不必反覆請求（iPad App 與 Obsidian 插件 1.5.0 以後優先使用，連不上時改用長輪詢）。網址是伺服器網址把 `https` 換成 `wss`（`http` 換成 `ws`）。瀏覽器的 WebSocket 不能帶標頭，所以金鑰放在第一個訊息：
+
+| 方向 | 訊息 |
+|---|---|
+| 用戶端 → 伺服器（10 秒內） | `{"type":"auth","token":"<API 金鑰>","client":"<X-LocalOCR-Client 的值>","since":"<cursor，選用>"}` |
+| 伺服器 → 用戶端 | `{"type":"ready","cursor":"…","reset":false}`；`since` 之後有其他裝置的變更時接著送一個 `changes` |
+| 伺服器 → 用戶端 | `{"type":"changes","cursor":"…","reset":false,"changes":[…]}`：其他裝置的變更（格式同長輪詢；50 毫秒內的變動合併成一則；自己的變更不送） |
+| 用戶端 → 伺服器 | `{"type":"report","paths":[…]}` → `{"type":"ack","cursor":"…"}`（同 `POST /v1/vault/changes`） |
+| 用戶端 → 伺服器 | `{"type":"ping"}` → `{"type":"pong"}` |
+
+- 金鑰錯誤或第一個訊息不是 `auth`：送 `{"type":"error","code":"unauthorized"}` 後以 4401 關閉；10 秒內沒有登入：直接以 4401 關閉。
+- 伺服器未設定 vault：送 `{"type":"error","code":"vault_not_configured"}` 後以 4503 關閉。
+- 伺服器每 30 秒送一次 WebSocket ping，沒有回應的連線會被中斷；用戶端斷線後應以 1、2、5、15、60 秒逐步拉長間隔重新連線，並帶上最後的 cursor 當作 `since`（`ready` 的 `reset: true` 代表漏掉太多，應完整同步一次）。
+- 舊版伺服器沒有這個端點，升級請求回傳 404：改用長輪詢。
+
 #### `POST /v1/vault/changes`
 
 請求本文（選用）：`{"paths": ["Daily/2026-10-14.md", "Inbox/想法.md"]}`，最多 100 個路徑，規則同「路徑」（不合法時 400 `invalid_path`）。每個路徑記錄一筆 `op: "external"` 的變更（重複的合併），沒有本文或 `paths` 為空時記錄一筆 `path: null`；`client` 為這次請求的 `X-LocalOCR-Client`，所以回報的裝置不會收到自己的回報。回傳 **202** `{"cursor":"9f3c2a1b7d4e:44"}`。
@@ -377,7 +395,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
       "generateFolderObject": false,
       "bypassCorsLocally": true
     },
-    "autoRunEveryMilliseconds": 60000,
+    "autoRunEveryMilliseconds": 300000,
     "initRunAfterMilliseconds": 10000,
     "syncOnSaveAfterMilliseconds": 1000,
     "agreeToUseSyncV3": true,
@@ -388,7 +406,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 ```
 
 - `s3` 來自伺服器的 `VAULT_S3_*` 與 `VAULT_PREFIX`。Remotely Save 匯入時是淺層合併（`Object.assign({}, 目前設定, 匯入的設定)`），所以 `s3` 一律完整提供，會整個取代裝置上原本的 S3 設定；沒有列出的設定（例如加密密碼）維持不變。
-- 同步排程取 Remotely Save 設定選單中的值：每分鐘自動同步（`60000`，選單中最短的選項；LocalOCR 插件的即時同步會在其他裝置修改後幾秒內另外觸發同步）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。`syncUnderscoreItems: true` 讓 `_` 開頭的檔案與資料夾（例如 `_attachments/`）也同步（Remotely Save 預設略過）：整個 vault 都會同步，只有 `.obsidian` 等 `.` 開頭的項目留在各裝置。
+- 同步排程取 Remotely Save 設定選單中的值：每 5 分鐘自動同步（`300000`，作為備援；LocalOCR 插件的即時推送會在其他裝置修改後一兩秒內另外觸發同步）、啟動 10 秒後同步一次（`10000`）、儲存時同步（`1000` 是「啟用」選項的值）。`agreeToUseSyncV3: true` 代表已同意新版同步演算法，否則 Remotely Save 啟動時不會開始自動同步。`syncUnderscoreItems: true` 讓 `_` 開頭的檔案與資料夾（例如 `_attachments/`）也同步（Remotely Save 預設略過）：整個 vault 都會同步，只有 `.obsidian` 等 `.` 開頭的項目留在各裝置。
 - `uri` 與 Remotely Save 自己的「匯出 QR Code」相同格式：`obsidian://remotely-save?func=settings&version=localocr&vault=<encodeURIComponent(vault)>&data=<encodeURIComponent(JSON.stringify(settings))>`。Remotely Save 只接受與目前保險庫同名的 `vault`；沒有帶 `vault` 參數時 `uri` 為 `null`。
 - 匯入後要重新啟動 Obsidian，自動同步排程才會生效（Remotely Save 只在啟動時建立排程）。
 

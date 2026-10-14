@@ -95,7 +95,7 @@ App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**
 
 ## 設定 Remotely Save
 
-指令或設定頁按鈕「設定 Remotely Save（同步 vault）」會呼叫 `GET /v1/vault/remotely-save?vault=<目前保險庫名稱>`，取得伺服器儲存桶的 Remotely Save 設定（S3 連線、啟動 10 秒後同步一次、每分鐘自動同步、儲存時同步），然後顯示：
+指令或設定頁按鈕「設定 Remotely Save（同步 vault）」會呼叫 `GET /v1/vault/remotely-save?vault=<目前保險庫名稱>`，取得伺服器儲存桶的 Remotely Save 設定（S3 連線、啟動 10 秒後同步一次、每 5 分鐘自動同步、儲存時同步），然後顯示：
 
 - 「**套用到這台裝置**」：開啟 `obsidian://remotely-save?func=settings&…`，由 Remotely Save 自己匯入設定（需已安裝並啟用 Remotely Save；未啟用時會提示）。看到 Remotely Save 的匯入通知後**重新啟動 Obsidian**，自動同步排程才會生效。
 - 同一個網址的 **QR Code**：在 iPhone／iPad 用相機掃描，即可在那台裝置的 Obsidian 套用同樣設定（需先安裝 Remotely Save，且那台裝置的保險庫名稱必須相同，Remotely Save 會拒絕套用到名稱不同的保險庫）。
@@ -107,10 +107,11 @@ App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**
 
 Remotely Save 直接同步儲存桶，本身不知道其他裝置何時修改了筆記，只能定時同步。插件設定「裝置設定 → 即時同步」開啟時（預設開啟，需已填伺服器網址與 API 金鑰）：
 
-- 插件持續等待伺服器的變更通知（`GET /v1/vault/changes?since=…&wait=25`，見 [`../docs/API.md`](../docs/API.md) 的「變更通知（即時同步）」）。iPad App、Claude（MCP）或其他 Obsidian 裝置修改後，約 1 秒內執行這台裝置的 Remotely Save 同步（與 Remotely Save 的定時同步相同的方式，不會跳出進度通知；Remotely Save 正在同步時，等它完成後再執行一次）。
-- 在這台裝置新增、修改、刪除或改名筆記後（最後一次修改 8 秒後，Remotely Save 的儲存時同步已上傳），以 `POST /v1/vault/changes` 通知 iPad 與其他裝置。`.obsidian` 等 `.` 開頭的檔案、插件自己同步掃描時寫入的筆記，以及即時同步觸發的 Remotely Save 下載（20 秒內）都不會回報。
+- 插件與伺服器保持一條 WebSocket 連線（`wss://<伺服器>/v1/vault/stream`，第一個訊息以 API 金鑰登入），伺服器在 iPad App、Claude（MCP）或其他 Obsidian 裝置修改後立即推送；約 1 秒內執行這台裝置的 Remotely Save 同步（與 Remotely Save 的定時同步相同的方式，不會跳出進度通知；Remotely Save 正在同步時，等它完成後再執行一次）。重新連線時帶上次的進度（`since`），斷線期間的修改會一併補上。
+- 在這台裝置新增、修改、刪除或改名筆記後（最後一次修改 8 秒後，Remotely Save 的儲存時同步已上傳），經由同一條連線（`{"type":"report"}`；未連線時以 `POST /v1/vault/changes`）通知 iPad 與其他裝置。`.obsidian` 等 `.` 開頭的檔案、插件自己同步掃描時寫入的筆記，以及即時同步觸發的 Remotely Save 下載（20 秒內）都不會回報。
 - 每台裝置有自己的代碼（`X-LocalOCR-Client: obsidian-…`，存在這台裝置的 localStorage，不在 `data.json`，以免 Remotely Save 同步設定資料夾時多台裝置共用），自己的修改不會再通知自己。
-- 連線失敗時依 5 秒、15 秒、60 秒逐步重試；伺服器是舊版（沒有這個端點）、未設定儲存桶或 API 金鑰無效時每 10 分鐘重試一次，不會跳出通知。設定頁顯示目前狀態。
+- 每 30 秒送一次 ping，75 秒完全沒有回應就重新連線；斷線後依 1、2、5、15、60 秒逐步重試。API 金鑰無效時停止連線並在設定頁顯示，10 分鐘後再試；伺服器未設定儲存桶時每 60 秒重試。不會跳出通知。
+- 還沒連上過就連續失敗 3 次（例如伺服器是舊版、沒有 WebSocket 端點，或網路不允許 WebSocket）時，改用原本的長輪詢（`GET /v1/vault/changes?since=…&wait=25`，見 [`../docs/API.md`](../docs/API.md) 的「變更通知（即時同步）」；失敗時依 5 秒、15 秒、60 秒重試，舊版伺服器、未設定儲存桶或 API 金鑰無效時每 10 分鐘重試），並每 10 分鐘再嘗試一次 WebSocket。設定頁顯示目前狀態（「即時推送」或「輪詢」）。
 - 這台裝置需已安裝並啟用 Remotely Save。
 
 ## 筆記格式

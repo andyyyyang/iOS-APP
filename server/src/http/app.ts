@@ -19,6 +19,7 @@ import { pairRouter, pairingRouter, publicBaseUrl } from "./routes/pairing.js";
 import { scansRouter } from "./routes/scans.js";
 import { templatesRouter } from "./routes/templates.js";
 import { VAULT_EXPOSED_HEADERS, vaultRouter } from "./routes/vault.js";
+import { registerVaultStream } from "./vault-stream.js";
 
 export interface AppOptions {
   store: Store;
@@ -42,7 +43,10 @@ export interface AppOptions {
 /** /pair: attempts per client IP per window. */
 export const PAIR_RATE_LIMIT = { limit: 10, windowMs: 10 * 60 * 1000 };
 
-/** Builds the Express app without listening, so tests can drive it with supertest. */
+/**
+ * Builds the Express app without listening, so tests can drive it with supertest. The WebSocket GET /v1/vault/stream
+ * is not an Express route: attach it to the listening server with attachVaultStream(server, app) (vault-stream.ts).
+ */
 export function createApp({
   store,
   classifier,
@@ -57,6 +61,7 @@ export function createApp({
   const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, now });
   const auth = requireApiKey(apiKeys);
   const app = express();
+  registerVaultStream(app, { services, apiKeys }); // for attachVaultStream(server, app)
 
   app.disable("x-powered-by");
   app.set("trust proxy", true); // Railway terminates TLS at its proxy

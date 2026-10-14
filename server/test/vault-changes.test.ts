@@ -151,6 +151,64 @@ describe("VaultChangeFeed", () => {
     changes.record([write("1.md", "me"), write("2.md", "me"), write("3.md", "me")]);
     expect(await poll).toEqual({ cursor: "e1:3", reset: true, changes: [] });
   });
+
+  it("answers changesSince synchronously with the same rules as a poll without wait", () => {
+    const changes = feed({ capacity: 3, maxResponse: 2 });
+    expect(changes.changesSince(undefined, null)).toEqual({ cursor: "e1:0", reset: false, changes: [] });
+    changes.record([write("a.md", "ipad"), write("b.md", "me")]);
+    expect(changes.latestSeq).toBe(2);
+    expect(changes.changesSince("", "me")).toEqual({ cursor: "e1:2", reset: false, changes: [] });
+    expect(changes.changesSince("e1:0", "me")).toEqual({
+      cursor: "e1:2",
+      reset: false,
+      changes: [{ seq: 1, path: "a.md", op: "write", client: "ipad", at: "2026-10-14T08:00:00.000Z" }],
+    });
+    expect(changes.changesSince("e1:1", "me")).toEqual({ cursor: "e1:2", reset: false, changes: [] });
+    for (const since of ["e2:1", "e1:3", "nonsense", 7]) {
+      expect(changes.changesSince(since, null), String(since)).toEqual({ cursor: "e1:2", reset: true, changes: [] });
+    }
+    changes.record([write("c.md"), write("d.md")]);
+    expect(changes.changesSince("e1:0", null).reset).toBe(true); // seq 1 was dropped
+    expect(changes.changesSince("e1:1", null).reset).toBe(true); // three changes > maxResponse 2
+    expect(changes.waiting).toBe(0);
+  });
+
+  it("tells subscribers about every recorded batch until they unsubscribe", async () => {
+    const changes = feed();
+    const seen: [number[], string][] = [];
+    const unsubscribe = changes.subscribe((batch, cursor) => seen.push([batch.map((c) => c.seq), cursor]));
+    expect(changes.subscribers).toBe(1);
+    changes.record([]);
+    changes.record([write("a.md", "ipad"), write("b.md")]);
+    changes.record([{ path: null, op: "external", client: "obsidian-1" }]);
+    expect(seen).toEqual([
+      [[1, 2], "e1:2"],
+      [[3], "e1:3"],
+    ]);
+
+    // a failing subscriber is logged and does not fail the write behind the change, nor the other subscribers
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const unsubscribeBad = changes.subscribe(() => {
+      throw new Error("boom");
+    });
+    expect(changes.record([write("c.md")])).toBe("e1:4");
+    expect(seen).toHaveLength(3);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("subscriber failed"), "boom");
+    error.mockRestore();
+    unsubscribeBad();
+
+    // subscribers get copies; long polls keep working next to them
+    const poll = changes.poll({ since: "e1:4", client: null, waitMs: 25_000 });
+    changes.subscribe((batch) => (batch[0]!.path = "mutated.md"));
+    changes.record([write("d.md")]);
+    expect((await poll).changes.map((c) => c.path)).toEqual(["d.md"]);
+    expect(changes.changesSince("e1:4", null).changes.map((c) => c.path)).toEqual(["d.md"]);
+
+    unsubscribe();
+    changes.record([write("e.md")]);
+    expect(seen).toHaveLength(4);
+    expect(changes.subscribers).toBe(1);
+  });
 });
 
 describe("/v1/vault/changes", () => {

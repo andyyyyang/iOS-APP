@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 
-// Near-real-time vault sync: every vault write and delete made through this server (REST, MCP) is recorded here,
-// and clients long-poll GET /v1/vault/changes to hear about them within seconds. Obsidian devices, which sync the
-// bucket directly with Remotely Save, report their uploads with POST /v1/vault/changes ("external" entries).
+// Near-real-time vault sync: every vault write and delete made through this server (REST, MCP) is recorded here.
+// Clients hear about them at once over the WebSocket GET /v1/vault/stream (subscribe()), or by long-polling
+// GET /v1/vault/changes (poll()). Obsidian devices, which sync the bucket directly with Remotely Save, report their
+// uploads with POST /v1/vault/changes or a stream "report" message ("external" entries).
 // The log lives in memory (one Railway instance): a restart starts a new epoch and every client's cursor resets.
 
 export type VaultChangeOp = "write" | "delete" | "external";
@@ -36,6 +37,12 @@ export const VAULT_CHANGES_MAX_RESPONSE = 200;
 /** The `client` recorded for MCP tool writes. */
 export const MCP_CLIENT_ID = "mcp";
 
+/**
+ * Called synchronously inside record() with the changes just recorded (copies, oldest first) and the new cursor.
+ * Must not throw (a throw is logged and ignored).
+ */
+export type VaultChangeListener = (changes: VaultChange[], cursor: string) => void;
+
 interface Waiter {
   since: number;
   client: string | null;
@@ -53,7 +60,7 @@ export interface PollOptions {
   signal?: AbortSignal;
 }
 
-/** In-memory ring of the latest vault changes plus the long-polls waiting for the next one. */
+/** In-memory ring of the latest vault changes plus the long-polls and stream subscribers waiting for the next one. */
 export class VaultChangeFeed {
   /** Random per process: cursors from before a restart are recognized as stale. */
   readonly epoch: string;
@@ -61,6 +68,7 @@ export class VaultChangeFeed {
   /** Consecutive seqs, oldest first; at most `capacity`. */
   private readonly entries: VaultChange[] = [];
   private readonly waiters = new Set<Waiter>();
+  private readonly listeners = new Set<VaultChangeListener>();
   private closed = false;
   private readonly capacity: number;
   private readonly maxResponse: number;
@@ -84,25 +92,68 @@ export class VaultChangeFeed {
     return `${this.epoch}:${this.latest}`;
   }
 
+  /** The seq of the latest change (0 before the first one). */
+  get latestSeq(): number {
+    return this.latest;
+  }
+
   /** Long-polls currently held open (for tests and diagnostics). */
   get waiting(): number {
     return this.waiters.size;
   }
 
-  /** Appends the changes (one seq each), wakes the long-polls they concern and returns the new cursor. */
+  /** Current subscribe() listeners (for tests and diagnostics). */
+  get subscribers(): number {
+    return this.listeners.size;
+  }
+
+  /**
+   * Appends the changes (one seq each), wakes the long-polls they concern, tells every subscriber and returns the
+   * new cursor.
+   */
   record(changes: readonly VaultChangeInput[]): string {
     if (changes.length === 0) return this.cursor;
     const at = new Date(this.now()).toISOString();
-    for (const { path, op, client } of changes) {
+    const added = changes.map(({ path, op, client }): VaultChange => {
       this.latest += 1;
-      this.entries.push({ seq: this.latest, path, op, client, at });
-    }
+      return { seq: this.latest, path, op, client, at };
+    });
+    this.entries.push(...added);
     if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity);
     for (const waiter of [...this.waiters]) {
       const found = this.collect(waiter.since, waiter.client);
       if (found) waiter.finish(found);
     }
-    return this.cursor;
+    const cursor = this.cursor;
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(added.map((change) => ({ ...change })), cursor);
+      } catch (error) {
+        // The change is already recorded (and the write behind it done): a failing subscriber must not fail it
+        console.error("[vault-changes] subscriber failed:", error instanceof Error ? error.message : error);
+      }
+    }
+    return cursor;
+  }
+
+  /** Calls `listener` for every change recorded from now on, until the returned function is called. */
+  subscribe(listener: VaultChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /**
+   * What a poll with waitMs 0 answers, synchronously: the changes after `since` made by anyone but `client`
+   * (null = nothing is left out), the current cursor with no changes when `since` is missing, or reset: true when
+   * `since` is unusable or too far behind.
+   */
+  changesSince(since: unknown, client: string | null): VaultChangesResponse {
+    if (since === undefined || since === "") return this.answer(false, []);
+    const seq = this.parseCursor(since);
+    if (seq === null) return this.answer(true, []);
+    return this.collect(seq, client) ?? this.answer(false, []);
   }
 
   /**

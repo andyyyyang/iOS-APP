@@ -11,6 +11,13 @@ import {
 	REMOTE_SYNC_BUSY_RETRY_MS,
 	REMOTE_SYNC_DEBOUNCE_MS,
 	SLOW_RETRY_MS,
+	STREAM_IDLE_TIMEOUT_MS,
+	STREAM_NOT_CONFIGURED_MESSAGE,
+	STREAM_NOT_CONFIGURED_RETRY_MS,
+	STREAM_PING_INTERVAL_MS,
+	STREAM_RECHECK_MS,
+	STREAM_UNAUTHORIZED_MESSAGE,
+	browserWebSocket,
 	changesPath,
 	createClientId,
 	describeLiveSync,
@@ -18,10 +25,15 @@ import {
 	isClientId,
 	isReportablePath,
 	isSlowFailure,
+	parseStreamMessage,
 	parseVaultChanges,
 	retryDelay,
 	startRemotelySaveSync,
+	streamUrl,
+	type OpenStream,
 	type RemoteSyncResult,
+	type StreamConnection,
+	type StreamHandlers,
 	type VaultChange,
 } from "../src/live-sync";
 import { ApiError, LocalOcrClient, type HttpFn, type HttpRequest, type JsonRequestOptions } from "../src/sync-core";
@@ -485,8 +497,412 @@ describe("LiveSync", () => {
 	});
 });
 
+describe("streamUrl", () => {
+	it("turns http into ws and https into wss, keeping any path", () => {
+		expect(streamUrl("https://ocr.example.com")).toBe("wss://ocr.example.com/v1/vault/stream");
+		expect(streamUrl("http://192.168.1.5:3000/")).toBe("ws://192.168.1.5:3000/v1/vault/stream");
+		expect(streamUrl("HTTPS://ocr.example.com/api")).toBe("wss://ocr.example.com/api/v1/vault/stream");
+		for (const bad of ["", "ocr.example.com", "ftp://x", "https://"]) expect(streamUrl(bad), bad).toBeNull();
+	});
+});
+
+describe("parseStreamMessage", () => {
+	it("accepts the server's messages and ignores anything else", () => {
+		expect(parseStreamMessage('{"type":"ready","cursor":"e:5","reset":false}')).toEqual({ type: "ready", cursor: "e:5", reset: false });
+		expect(parseStreamMessage('{"type":"ready","cursor":"e:5","reset":true}')).toEqual({ type: "ready", cursor: "e:5", reset: true });
+		expect(parseStreamMessage(JSON.stringify({ type: "changes", cursor: "e:6", reset: false, changes: [change(6, "ipad")] }))).toEqual({
+			type: "changes",
+			changes: { cursor: "e:6", reset: false, changes: [change(6, "ipad")] },
+		});
+		expect(parseStreamMessage('{"type":"ack","cursor":"e:7"}')).toEqual({ type: "ack" });
+		expect(parseStreamMessage('{"type":"pong"}')).toEqual({ type: "pong" });
+		expect(parseStreamMessage('{"type":"error","code":"unauthorized"}')).toEqual({ type: "error", code: "unauthorized" });
+		for (const bad of ["", "{oops", "null", "[]", '{"type":"ready"}', '{"type":"changes","cursor":"e:1"}', '{"type":"error"}', '{"type":"hello"}', '{"cursor":"e:1"}']) {
+			expect(parseStreamMessage(bad), bad).toBeNull();
+		}
+	});
+});
+
+describe("browserWebSocket", () => {
+	class FakeSocket {
+		static instances: FakeSocket[] = [];
+		readyState = 0;
+		onopen: ((event: unknown) => void) | null = null;
+		onmessage: ((event: { data: unknown }) => void) | null = null;
+		onclose: ((event: { code: number }) => void) | null = null;
+		onerror: ((event: unknown) => void) | null = null;
+		readonly sent: string[] = [];
+		readonly closedWith: (number | undefined)[] = [];
+		constructor(readonly url: string) {
+			FakeSocket.instances.push(this);
+		}
+		send(data: string) {
+			this.sent.push(data);
+		}
+		close(code?: number) {
+			this.closedWith.push(code);
+		}
+	}
+
+	it("adapts the WebSocket events: text messages only, one close (an error counts as one)", () => {
+		const open = browserWebSocket(FakeSocket);
+		expect(open).not.toBeNull();
+		const events: string[] = [];
+		const handlers: StreamHandlers = {
+			open: () => events.push("open"),
+			message: (data) => events.push(`message ${data}`),
+			close: (code) => events.push(`close ${code}`),
+		};
+		const connection = open!("wss://ocr.example.com/v1/vault/stream", handlers);
+		const socket = FakeSocket.instances[0];
+		expect(socket.url).toBe("wss://ocr.example.com/v1/vault/stream");
+		socket.onopen?.({});
+		socket.onmessage?.({ data: '{"type":"pong"}' });
+		socket.onmessage?.({ data: new ArrayBuffer(2) });
+		connection.send("hello");
+		socket.onclose?.({ code: 4401 });
+		socket.onerror?.({});
+		socket.onclose?.({ code: 1006 });
+		expect(events).toEqual(["open", 'message {"type":"pong"}', "close 4401"]);
+		expect(socket.sent).toEqual(["hello"]);
+
+		// a failed connection: the error ends it, a close event after it is ignored
+		events.length = 0;
+		open!("wss://ocr.example.com/v1/vault/stream", handlers);
+		FakeSocket.instances[1].onerror?.({});
+		FakeSocket.instances[1].onclose?.({ code: 1006 });
+		expect(events).toEqual(["close 1006"]);
+
+		// closing it ourselves: code 1000, no more callbacks
+		const third = open!("wss://ocr.example.com/v1/vault/stream", handlers);
+		third.close();
+		expect(FakeSocket.instances[2].closedWith).toEqual([1000]);
+		expect(FakeSocket.instances[2].onclose).toBeNull();
+		expect(FakeSocket.instances[2].onerror).toBeNull();
+		expect(events).toHaveLength(1);
+	});
+
+	it("is null without a WebSocket", () => {
+		expect(browserWebSocket(null)).toBeNull();
+		expect(browserWebSocket({})).toBeNull();
+	});
+});
+
+describe("LiveSync over the stream", () => {
+	const URL = "wss://ocr.example.com/v1/vault/stream";
+	const TOKEN = "secret-key-123";
+
+	interface FakeConnection extends StreamConnection {
+		url: string;
+		handlers: StreamHandlers;
+		sent: Record<string, unknown>[];
+		closed: boolean;
+	}
+
+	interface Call {
+		path: string;
+		options: JsonRequestOptions;
+		resolve: (body: unknown) => void;
+		reject: (error: unknown) => void;
+	}
+
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function harness({ openFails = false }: { openFails?: boolean } = {}) {
+		const connections: FakeConnection[] = [];
+		const open: OpenStream = (url, handlers) => {
+			if (openFails) throw new SyntaxError("The URL is invalid");
+			const connection: FakeConnection = {
+				url,
+				handlers,
+				sent: [],
+				closed: false,
+				send(data) {
+					if (connection.closed) throw new Error("closed");
+					connection.sent.push(JSON.parse(data) as Record<string, unknown>);
+				},
+				close() {
+					connection.closed = true;
+				},
+			};
+			connections.push(connection);
+			return connection;
+		};
+		const calls: Call[] = [];
+		const client = {
+			requestJson: (path: string, options: JsonRequestOptions = {}) =>
+				new Promise<unknown>((resolve, reject) => calls.push({ path, options, resolve, reject })),
+		};
+		const syncRemote = vi.fn(async (): Promise<RemoteSyncResult> => "started");
+		const log = vi.fn();
+		const live = new LiveSync({ client, clientId: ME, configDir: ".obsidian", syncRemote, log, stream: { url: URL, token: TOKEN, open } });
+		const last = () => connections[connections.length - 1];
+		const push = (message: unknown) => last().handlers.message(typeof message === "string" ? message : JSON.stringify(message));
+		const drop = (code = 1006) => last().handlers.close(code);
+		/** The latest connection opens and the server answers ready. */
+		const ready = (cursor = "e:5", reset = false) => {
+			last().handlers.open();
+			push({ type: "ready", cursor, reset });
+		};
+		const polls = () => calls.filter((call) => (call.options.method ?? "GET") === "GET");
+		const reports = () => calls.filter((call) => call.options.method === "POST");
+		const lastPoll = () => polls()[polls().length - 1];
+		const pings = () => last().sent.filter((message) => message.type === "ping").length;
+		const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+		return { live, connections, last, push, drop, ready, polls, reports, lastPoll, pings, syncRemote, log, advance };
+	}
+
+	it("authenticates with the first message, then runs Remotely Save when another device's change is pushed", async () => {
+		const h = harness();
+		h.live.start();
+		expect(h.connections).toHaveLength(1);
+		expect(h.last().url).toBe(URL);
+		expect(h.live.status.state).toBe("connecting");
+		h.last().handlers.open();
+		expect(h.last().sent).toEqual([{ type: "auth", token: TOKEN, client: ME }]); // no since on the first connection
+		h.push({ type: "ready", cursor: "e:5", reset: true });
+		expect(h.live.status).toMatchObject({ state: "connected", transport: "stream", error: null });
+
+		h.push({ type: "changes", cursor: "e:6", reset: false, changes: [change(6, ME)] }); // our own change only
+		h.push("not json");
+		h.push({ type: "hello" });
+		await h.advance(5000);
+		expect(h.syncRemote).not.toHaveBeenCalled(); // nor for the first ready, even with reset
+
+		h.push({ type: "changes", cursor: "e:7", reset: false, changes: [change(7, "ipad-1")] });
+		await h.advance(REMOTE_SYNC_DEBOUNCE_MS - 1);
+		h.push({ type: "changes", cursor: "e:8", reset: false, changes: [change(8, "mcp")] }); // within the debounce
+		await h.advance(REMOTE_SYNC_DEBOUNCE_MS);
+		expect(h.syncRemote).toHaveBeenCalledTimes(1);
+		expect(h.live.status.lastRemoteChangeAt).not.toBeNull();
+		expect(h.polls()).toHaveLength(0);
+		h.live.stop();
+	});
+
+	it("reconnects with since after 1 s, then 2/5/15/60 s while attempts fail, and syncs on a reset", async () => {
+		const h = harness();
+		h.live.start();
+		h.ready("e:5");
+		h.drop(1001);
+		await h.advance(0);
+		expect(h.live.status).toMatchObject({ state: "retrying", error: "伺服器重新啟動" });
+		await h.advance(999);
+		expect(h.connections).toHaveLength(1);
+		await h.advance(1);
+		expect(h.connections).toHaveLength(2);
+		h.last().handlers.open();
+		expect(h.last().sent).toEqual([{ type: "auth", token: TOKEN, client: ME, since: "e:5" }]);
+		h.drop();
+
+		for (const delay of [2_000, 5_000, 15_000, 60_000, 60_000]) {
+			const count = h.connections.length;
+			await h.advance(delay - 1);
+			expect(h.connections).toHaveLength(count);
+			await h.advance(1);
+			expect(h.connections).toHaveLength(count + 1);
+			h.drop();
+		}
+		expect(h.polls()).toHaveLength(0); // the stream worked before: never falls back to polling
+		expect(h.log.mock.calls.filter(([message]) => String(message).includes("連線中斷"))).toHaveLength(1);
+
+		await h.advance(60_000);
+		h.ready("f:0", true); // the server restarted: changes may have been missed
+		expect(h.log).toHaveBeenCalledWith("即時同步已重新連線");
+		await h.advance(REMOTE_SYNC_DEBOUNCE_MS);
+		expect(h.syncRemote).toHaveBeenCalledTimes(1);
+		h.live.stop();
+	});
+
+	it("catches up from the changes sent right after ready", async () => {
+		const h = harness();
+		h.live.start();
+		h.ready("e:5");
+		h.drop();
+		await h.advance(1000);
+		h.ready("e:9");
+		h.push({ type: "changes", cursor: "e:9", reset: false, changes: [change(7, "ipad-1")] });
+		await h.advance(REMOTE_SYNC_DEBOUNCE_MS);
+		expect(h.syncRemote).toHaveBeenCalledTimes(1);
+		h.live.stop();
+	});
+
+	it("falls back to long-polling after three failed attempts before any ready, retrying the stream every 10 minutes", async () => {
+		const h = harness();
+		h.live.start();
+		h.drop(); // an old server answers the upgrade with 404: the WebSocket just fails
+		await h.advance(1000);
+		h.drop();
+		await h.advance(2000);
+		expect(h.polls()).toHaveLength(0);
+		h.drop();
+		await h.advance(0);
+		expect(h.connections).toHaveLength(3);
+		expect(h.polls()).toHaveLength(1);
+		expect(h.lastPoll().path).toBe("/v1/vault/changes");
+		expect(h.log).toHaveBeenCalledWith(expect.stringContaining("改用輪詢"));
+
+		h.lastPoll().resolve({ cursor: "e:3", reset: false, changes: [] });
+		await h.advance(1000);
+		expect(h.live.status).toMatchObject({ state: "connected", transport: "polling", error: null });
+		expect(h.lastPoll().path).toBe("/v1/vault/changes?since=e%3A3&wait=25");
+
+		// 10 minutes later the stream is tried again, quietly: the status keeps showing the working long poll
+		await h.advance(STREAM_RECHECK_MS);
+		h.lastPoll().resolve({ cursor: "e:3", reset: false, changes: [] });
+		await h.advance(0);
+		expect(h.connections).toHaveLength(4);
+		h.last().handlers.open();
+		expect(h.last().sent[0]).toMatchObject({ type: "auth", since: "e:3" });
+		h.drop();
+		await h.advance(1000);
+		h.drop();
+		await h.advance(2000);
+		h.drop();
+		await h.advance(0);
+		expect(h.live.status).toMatchObject({ state: "connected", transport: "polling", error: null });
+		expect(h.polls()).toHaveLength(3); // back to polling
+		expect(h.log.mock.calls.filter(([message]) => String(message).includes("改用輪詢"))).toHaveLength(1);
+
+		// …and once the stream works, polling stops
+		await h.advance(STREAM_RECHECK_MS);
+		h.lastPoll().resolve({ cursor: "e:4", reset: false, changes: [change(4, "ipad-1")] });
+		await h.advance(0);
+		expect(h.connections).toHaveLength(7);
+		h.ready("e:4");
+		expect(h.live.status).toMatchObject({ state: "connected", transport: "stream" });
+		await h.advance(120_000);
+		expect(h.polls()).toHaveLength(3); // none after the stream is back
+		expect(h.syncRemote).toHaveBeenCalledTimes(1); // for the change the last poll brought
+		h.live.stop();
+	});
+
+	it("counts a WebSocket that cannot even be created as a failed attempt", async () => {
+		const h = harness({ openFails: true });
+		h.live.start();
+		await h.advance(1000 + 2000);
+		expect(h.polls()).toHaveLength(1);
+		expect(h.log).toHaveBeenCalledWith(expect.stringContaining("無法開啟即時推送連線"));
+		h.live.stop();
+	});
+
+	it("stops on 4401 and shows the auth error until it tries again 10 minutes later", async () => {
+		const h = harness();
+		h.live.start();
+		h.last().handlers.open();
+		h.push({ type: "error", code: "unauthorized" });
+		h.drop(4401);
+		await h.advance(0);
+		expect(h.live.status).toMatchObject({ state: "unsupported", error: STREAM_UNAUTHORIZED_MESSAGE });
+		expect(describeLiveSync(h.live.status, String)).toContain("API 金鑰無效");
+		h.live.noteLocalChange(["a.md"]);
+		await h.advance(LOCAL_REPORT_DEBOUNCE_MS);
+		expect(h.reports()).toHaveLength(0);
+
+		await h.advance(SLOW_RETRY_MS - LOCAL_REPORT_DEBOUNCE_MS - 1);
+		expect(h.connections).toHaveLength(1);
+		await h.advance(1);
+		expect(h.connections).toHaveLength(2);
+		// the error message decides even when the close code got lost on the way
+		h.last().handlers.open();
+		h.push({ type: "error", code: "unauthorized" });
+		h.drop(1006);
+		await h.advance(SLOW_RETRY_MS - 1);
+		expect(h.connections).toHaveLength(2);
+		expect(h.polls()).toHaveLength(0);
+		expect(h.log.mock.calls.filter(([message]) => String(message).includes("無法登入"))).toHaveLength(1);
+		h.live.stop();
+	});
+
+	it("waits 60 s while the server has no vault (4503), never falling back to polling", async () => {
+		const h = harness();
+		h.live.start();
+		h.last().handlers.open();
+		h.drop(4503);
+		await h.advance(0);
+		expect(h.live.status).toMatchObject({ state: "retrying", error: STREAM_NOT_CONFIGURED_MESSAGE });
+		for (let i = 0; i < 4; i++) {
+			const count = h.connections.length;
+			await h.advance(STREAM_NOT_CONFIGURED_RETRY_MS - 1);
+			expect(h.connections).toHaveLength(count);
+			await h.advance(1);
+			expect(h.connections).toHaveLength(count + 1);
+			h.last().handlers.open();
+			h.push({ type: "error", code: "vault_not_configured" });
+			h.drop(4503);
+		}
+		expect(h.polls()).toHaveLength(0);
+		h.live.stop();
+	});
+
+	it("pings every 30 s and reconnects after 75 s without any message", async () => {
+		const h = harness();
+		h.live.start();
+		h.ready();
+		await h.advance(STREAM_PING_INTERVAL_MS);
+		expect(h.pings()).toBe(1);
+		h.push({ type: "pong" });
+		await h.advance(STREAM_IDLE_TIMEOUT_MS - 1);
+		expect(h.pings()).toBe(3);
+		expect(h.last().closed).toBe(false);
+		await h.advance(1);
+		expect(h.connections[0].closed).toBe(true);
+		expect(h.live.status).toMatchObject({ state: "retrying", error: "連線逾時（75 秒沒有回應）" });
+		await h.advance(1000);
+		expect(h.connections).toHaveLength(2);
+		h.live.stop();
+	});
+
+	it("reports local edits over the socket while connected, else with POST", async () => {
+		const h = harness();
+		h.live.start();
+		h.ready();
+		h.live.noteLocalChange(["Daily/2026-10-14.md", ".obsidian/app.json"]);
+		await h.advance(LOCAL_REPORT_DEBOUNCE_MS);
+		expect(h.last().sent.at(-1)).toEqual({ type: "report", paths: ["Daily/2026-10-14.md"] });
+		expect(h.reports()).toHaveLength(0);
+		expect(h.live.status.lastReportAt).toBeNull();
+		h.push({ type: "ack", cursor: "e:6" });
+		expect(h.live.status.lastReportAt).not.toBeNull();
+
+		h.drop();
+		h.live.noteLocalChange(["b.md"]);
+		await h.advance(LOCAL_REPORT_DEBOUNCE_MS); // reconnecting, not ready yet
+		expect(h.reports().map((r) => [r.path, r.options.body, r.options.headers])).toEqual([
+			["/v1/vault/changes", { paths: ["b.md"] }, { [CLIENT_HEADER]: ME }],
+		]);
+		h.live.stop();
+	});
+
+	it("stop() closes the socket and ignores anything that arrives later", async () => {
+		const h = harness();
+		h.live.start();
+		h.ready();
+		const connection = h.last();
+		h.live.stop();
+		expect(connection.closed).toBe(true);
+		expect(h.live.status.state).toBe("stopped");
+		connection.handlers.message(JSON.stringify({ type: "changes", cursor: "e:6", reset: false, changes: [change(6, "ipad-1")] }));
+		connection.handlers.close(1006);
+		await h.advance(120_000);
+		expect(h.syncRemote).not.toHaveBeenCalled();
+		expect(h.connections).toHaveLength(1);
+		expect(vi.getTimerCount()).toBe(0);
+
+		// also while waiting to reconnect
+		const again = harness();
+		again.live.start();
+		again.drop();
+		await again.advance(0);
+		again.live.stop();
+		await again.advance(120_000);
+		expect(again.connections).toHaveLength(1);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});
+
 describe("describeLiveSync", () => {
-	const base = { lastRemoteChangeAt: null, lastReportAt: null, error: null, remotelySaveUnavailable: false };
+	const base = { transport: null, lastRemoteChangeAt: null, lastReportAt: null, error: null, remotelySaveUnavailable: false };
 	const time = (ms: number) => `t${ms}`;
 
 	it("describes each state in Traditional Chinese", () => {
@@ -495,6 +911,8 @@ describe("describeLiveSync", () => {
 		expect(describeLiveSync({ ...base, state: "connected", lastRemoteChangeAt: 1, lastReportAt: 2 }, time)).toBe(
 			"已連線，等待其他裝置的修改。上次收到其他裝置的修改：t1。上次通知其他裝置：t2。",
 		);
+		expect(describeLiveSync({ ...base, state: "connected", transport: "stream" }, time)).toBe("已連線（即時推送），等待其他裝置的修改。");
+		expect(describeLiveSync({ ...base, state: "connected", transport: "polling" }, time)).toBe("已連線（輪詢），等待其他裝置的修改。");
 		expect(describeLiveSync({ ...base, state: "retrying", error: "逾時" }, time)).toBe("連線中斷，稍後自動重試（逾時）。");
 		expect(describeLiveSync({ ...base, state: "unsupported", error: "404" }, time)).toContain("10 分鐘後再試");
 		expect(describeLiveSync({ ...base, state: "connected", remotelySaveUnavailable: true }, time)).toContain("尚未啟用 Remotely Save");

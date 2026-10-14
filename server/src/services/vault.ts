@@ -1,6 +1,8 @@
 import type { VaultConfig } from "../config.js";
 import { AppError, notFound } from "../errors.js";
 import {
+  MAX_VAULT_CHANGE_PATHS,
+  MAX_VAULT_CLIENT_LENGTH,
   remotelySaveQuerySchema,
   vaultChangesQuerySchema,
   vaultChangesReportSchema,
@@ -120,6 +122,14 @@ export class VaultService {
     return parse(vaultClientSchema, raw, `${VAULT_CLIENT_HEADER}: `);
   }
 
+  /**
+   * The `client` of a WebSocket "auth" message: trimmed and cut to 100 characters instead of rejected;
+   * null when it is not a string or is empty.
+   */
+  streamClientId(raw: unknown): string | null {
+    return typeof raw === "string" ? raw.trim().slice(0, MAX_VAULT_CLIENT_LENGTH) || null : null;
+  }
+
   status(): VaultStatus {
     return { configured: this.store !== null, prefix: this.store?.prefix ?? "" };
   }
@@ -225,7 +235,33 @@ export class VaultService {
   reportExternal(body: unknown, client: string | null): { cursor: string } {
     this.storage();
     const { paths = [] } = parse(vaultChangesReportSchema, body ?? {});
-    const unique = [...new Set(paths.map((path) => vaultPath(path)))];
+    return this.recordExternal(paths.map((path) => vaultPath(path)), client);
+  }
+
+  /**
+   * A "report" message on the WebSocket GET /v1/vault/stream: like reportExternal, but nothing is rejected (a bad
+   * message must not end the stream). Entries that are not valid vault paths are skipped; when `paths` is not an
+   * array, names more than MAX_VAULT_CHANGE_PATHS entries, or leaves no valid path, one change with path null
+   * ("something changed") is recorded instead. Returns the new cursor.
+   */
+  reportExternalLenient(paths: unknown, client: string | null): { cursor: string } {
+    this.storage();
+    const valid: string[] = [];
+    if (Array.isArray(paths) && paths.length <= MAX_VAULT_CHANGE_PATHS) {
+      for (const path of paths) {
+        try {
+          valid.push(vaultPath(path));
+        } catch {
+          // not a valid vault path: skipped
+        }
+      }
+    }
+    return this.recordExternal(valid, client);
+  }
+
+  /** One "external" change per path (deduplicated), or one with path null when there are none. */
+  private recordExternal(paths: readonly string[], client: string | null): { cursor: string } {
+    const unique = [...new Set(paths)];
     const changes: VaultChangeInput[] = unique.length
       ? unique.map((path) => ({ path, op: "external", client }))
       : [{ path: null, op: "external", client }];

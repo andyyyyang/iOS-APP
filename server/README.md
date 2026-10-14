@@ -10,7 +10,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 
 ## 端點
 
-除了 `GET /health`、`POST /pair` 與 `GET /obsidian-plugin/*`，所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
+除了 `GET /health`、`POST /pair`、`GET /obsidian-plugin/*` 與 WebSocket `GET /v1/vault/stream`（以第一個訊息驗證），所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
 錯誤一律回傳 `{"error":{"code":"...","message":"..."}}`。
 
 | 方法與路徑 | 說明 |
@@ -34,6 +34,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/vault/search?q=&prefix=&limit=` | 搜尋筆記檔名與內容 `{"items":[{"path","mtime","snippet"}]}` |
 | `GET /v1/vault/changes?since=&wait=` | 變更通知（長輪詢，`wait` 最多 25 秒）：經伺服器的寫入／刪除與裝置回報的變更 `{"cursor","reset","changes":[{"seq","path","op","client","at"}]}`；`X-LocalOCR-Client` 標頭相同的變更不列出 |
 | `POST /v1/vault/changes` | 回報裝置自己上傳到儲存桶的檔案 `{"paths"?:[...]}` → 202 `{"cursor"}`（Obsidian 插件在 Remotely Save 上傳後呼叫） |
+| `GET /v1/vault/stream`（WebSocket） | 即時推送變更（取代長輪詢，見下方「Vault 即時推送」）：第一個訊息 `{"type":"auth","token","client","since"?}` → `{"type":"ready","cursor","reset"}`，之後其他用戶端的變更即時送來 `{"type":"changes","cursor","reset":false,"changes":[...]}` |
 | `GET /v1/vault/remotely-save?vault=` | Remotely Save 的 S3 設定（含儲存桶金鑰）與匯入用的 `obsidian://remotely-save?…` 網址 `{"settings":{...},"uri":"..."}`；未設定 vault 時 503 `vault_not_configured` |
 | `POST /v1/pairing` | 建立配對碼（`XXXX-XXXX`，10 分鐘、只能用一次）：`{"vaultName"?,"notesFolder"?}` → 201 `{"code","expiresAt","pairUrl"}` |
 | `POST /pair` | **不需要金鑰**：`{"code":"XXXX-XXXX"}` → `{"apiKey","vaultName","notesFolder"}`；無效／過期／已用過 404 `invalid_code`；每個 IP 每 10 分鐘最多 10 次，超過 429 `rate_limited` |
@@ -54,6 +55,18 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 注意：刪除不會出現在增量同步中。
 
 配對碼存在記憶體中（伺服器只有一個實例；重新啟動後未使用的配對碼失效），只會交出建立配對碼時所用的那把 API 金鑰。配對與 Remotely Save 設定的回應都帶 `Cache-Control: no-store`，金鑰不會寫入紀錄。
+
+### Vault 即時推送（WebSocket `GET /v1/vault/stream`）
+
+與 REST 同一個連接埠（`index.ts` 在 `app.listen` 之後以 `attachVaultStream(server, app)` 接上 HTTP 伺服器的 `upgrade` 事件；其他路徑的升級請求直接斷線）。瀏覽器的 WebSocket 不能帶標頭，所以升級本身不需要金鑰，改由第一個訊息驗證：
+
+1. 用戶端在 10 秒內送 `{"type":"auth","token":"<API 金鑰>","client":"<用戶端代碼>","since":"<cursor，選用>"}`；逾時關閉 4401。金鑰錯誤回 `{"type":"error","code":"unauthorized"}` 並關閉 4401；未設定 vault 回 `{"type":"error","code":"vault_not_configured"}` 並關閉 4503。
+2. 成功回 `{"type":"ready","cursor","reset"}`。帶 `since` 時與 `GET /v1/vault/changes?since=` 相同的規則（其他 epoch、太舊、無法辨識或變更太多 → `reset: true`），漏掉的其他用戶端變更緊接著以一個 `changes` 訊息送出。
+3. 之後每筆變更（50 毫秒內的合併成一則）即時推送 `{"type":"changes","cursor","reset":false,"changes":[{"seq","path","op","client","at"}]}`；`client` 與這條連線相同的變更不送。
+4. 用戶端可送 `{"type":"report","paths":[...]}`（自己上傳到儲存桶的檔案，同 `POST /v1/vault/changes`；無效路徑略過，沒有路徑或超過 100 個時記一筆 `path: null`）→ `{"type":"ack","cursor"}`，以及 `{"type":"ping"}` → `{"type":"pong"}`；其他訊息忽略。
+5. 伺服器每 30 秒送 WebSocket ping，沒回應上一次 ping 的連線會被中斷；關機時以 1001 關閉所有連線。
+
+變更紀錄在記憶體中（`services/vault-changes.ts`，長輪詢與推送共用）。iPad App 與 Obsidian 插件（1.5.0 起）優先使用推送；舊版伺服器沒有這個端點（升級回 404）時，插件改用長輪詢。
 
 Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../docs/API.md`](../docs/API.md) 的「Vault（Obsidian 筆記）」；裝置端的 Remotely Save 設定見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
 
@@ -249,7 +262,7 @@ src/
   vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證、Remotely Save 設定
   templates/builtin.ts 內建樣板
   templates/managed.ts 讀取並同步 templates/managed/*.json
-  http/               createApp、驗證、錯誤處理、/pair 頻率限制、路由、OpenAPI
+  http/               createApp、驗證、錯誤處理、/pair 頻率限制、路由、OpenAPI、vault-stream.ts（WebSocket 即時推送）
   mcp/                MCP 工具與無狀態 /mcp 路由
 templates/managed/    受管理樣板（repo 控管的 JSON 檔）
 test/                 vitest + supertest（fixtures/managed/ 為測試用樣板檔）

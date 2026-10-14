@@ -3080,6 +3080,18 @@ var IGNORE_AFTER_REMOTE_SYNC_END_MS = 2e3;
 var RETRY_DELAYS_MS = [5e3, 15e3, 6e4];
 var SLOW_RETRY_MS = 10 * 6e4;
 var MAX_REPORT_PATHS = 100;
+var STREAM_PATH = "/v1/vault/stream";
+var STREAM_PING_INTERVAL_MS = 3e4;
+var STREAM_IDLE_TIMEOUT_MS = 75e3;
+var STREAM_RETRY_DELAYS_MS = [1e3, 2e3, 5e3, 15e3, 6e4];
+var STREAM_NOT_CONFIGURED_RETRY_MS = 6e4;
+var STREAM_FAILURES_BEFORE_POLLING = 3;
+var STREAM_RECHECK_MS = 10 * 6e4;
+var STREAM_CLOSE_UNAUTHORIZED = 4401;
+var STREAM_CLOSE_NOT_CONFIGURED = 4503;
+var STREAM_CLOSE_ABNORMAL = 1006;
+var STREAM_UNAUTHORIZED_MESSAGE = "API \u91D1\u9470\u7121\u6548\u6216\u672A\u63D0\u4F9B\uFF08401\uFF09";
+var STREAM_NOT_CONFIGURED_MESSAGE = "\u4F3A\u670D\u5668\u5C1A\u672A\u8A2D\u5B9A Obsidian \u5132\u5B58\u6876\uFF08503\uFF09";
 function changesPath(since, waitSeconds = POLL_WAIT_SECONDS) {
   if (since === null) return CHANGES_PATH;
   return `${CHANGES_PATH}?since=${encodeURIComponent(since)}&wait=${encodeURIComponent(String(waitSeconds))}`;
@@ -3112,6 +3124,68 @@ function isSlowFailure(error) {
 function retryDelay(error, failures) {
   if (isSlowFailure(error)) return SLOW_RETRY_MS;
   return RETRY_DELAYS_MS[Math.min(Math.max(failures, 1), RETRY_DELAYS_MS.length) - 1];
+}
+function streamUrl(baseUrl) {
+  const match = /^(https?):\/\/(.+)$/i.exec(baseUrl.trim().replace(/\/+$/, ""));
+  if (!match) return null;
+  return `${match[1].toLowerCase() === "https" ? "wss" : "ws"}://${match[2]}${STREAM_PATH}`;
+}
+function parseStreamMessage(text) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+  if (!isObject2(value)) return null;
+  switch (value.type) {
+    case "ready":
+      return typeof value.cursor === "string" && value.cursor ? { type: "ready", cursor: value.cursor, reset: value.reset === true } : null;
+    case "changes":
+      try {
+        return { type: "changes", changes: parseVaultChanges(value) };
+      } catch (e) {
+        return null;
+      }
+    case "ack":
+      return { type: "ack" };
+    case "pong":
+      return { type: "pong" };
+    case "error":
+      return typeof value.code === "string" ? { type: "error", code: value.code } : null;
+    default:
+      return null;
+  }
+}
+function browserWebSocket(Socket = globalThis.WebSocket) {
+  if (typeof Socket !== "function") return null;
+  const Ctor = Socket;
+  return (url, handlers) => {
+    const socket = new Ctor(url);
+    let ended = false;
+    const end = (code) => {
+      if (ended) return;
+      ended = true;
+      handlers.close(code);
+    };
+    socket.onopen = () => handlers.open();
+    socket.onmessage = (event) => {
+      if (typeof event.data === "string") handlers.message(event.data);
+    };
+    socket.onclose = (event) => end(typeof event.code === "number" ? event.code : STREAM_CLOSE_ABNORMAL);
+    socket.onerror = () => end(STREAM_CLOSE_ABNORMAL);
+    return {
+      send: (data) => socket.send(data),
+      close: () => {
+        ended = true;
+        socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+        try {
+          socket.close(1e3);
+        } catch (e) {
+        }
+      }
+    };
+  };
 }
 var ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 var CLIENT_ID_PATTERN = /^obsidian-[a-z0-9]{8,40}$/;
@@ -3196,12 +3270,23 @@ async function startRemotelySaveSync(app) {
   }
   return "unavailable";
 }
+function describeStreamEnd({ ready, code, idle }) {
+  if (idle) return `\u9023\u7DDA\u903E\u6642\uFF08${STREAM_IDLE_TIMEOUT_MS / 1e3} \u79D2\u6C92\u6709\u56DE\u61C9\uFF09`;
+  if (!ready) return "\u7121\u6CD5\u5EFA\u7ACB\u5373\u6642\u63A8\u9001\u9023\u7DDA";
+  return code === 1001 ? "\u4F3A\u670D\u5668\u91CD\u65B0\u555F\u52D5" : `\u5373\u6642\u63A8\u9001\u9023\u7DDA\u4E2D\u65B7\uFF08${code}\uFF09`;
+}
 var LiveSync = class {
   constructor(deps) {
     this.deps = deps;
     this.generation = 0;
     this.running = false;
     this.wake = null;
+    /** Ends the current stream connection (stop()). */
+    this.endStream = null;
+    /** The current stream connection once the server answered ready: reports go over it. */
+    this.liveStream = null;
+    /** The latest cursor, shared by the stream and the long poll; null until the first answer. */
+    this.cursor = null;
     this.ignoreLocalUntil = 0;
     this.remoteSyncRunning = false;
     this.remoteSyncAgain = false;
@@ -3209,6 +3294,7 @@ var LiveSync = class {
     this.queue = new PathQueue();
     this.current = {
       state: "stopped",
+      transport: null,
       lastRemoteChangeAt: null,
       lastReportAt: null,
       error: null,
@@ -3231,17 +3317,19 @@ var LiveSync = class {
     this.running = true;
     const generation = ++this.generation;
     this.update({ state: "connecting", error: null });
-    void this.loop(generation);
+    if (this.deps.stream) void this.streamLoop(generation, false);
+    else void this.pollLoop(generation, false);
   }
   stop() {
-    var _a;
+    var _a, _b;
     if (!this.running) return;
     this.running = false;
     this.generation++;
     this.remoteSync.cancel();
     this.report.cancel();
     this.queue.clear();
-    (_a = this.wake) == null ? void 0 : _a.call(this);
+    (_a = this.endStream) == null ? void 0 : _a.call(this);
+    (_b = this.wake) == null ? void 0 : _b.call(this);
     this.update({ state: "stopped" });
   }
   /**
@@ -3269,23 +3357,167 @@ var LiveSync = class {
     var _a, _b;
     (_b = (_a = this.deps).log) == null ? void 0 : _b.call(_a, message);
   }
-  async loop(generation) {
-    let cursor = null;
+  /**
+   * An answer from the change feed (poll, stream ready or push): Remotely Save runs (debounced) for another client's
+   * change or a reset, but never for the first answer, which only gives the cursor.
+   */
+  applyChanges(response) {
+    if (this.cursor !== null && hasRemoteChanges(response, this.deps.clientId)) {
+      this.update({ lastRemoteChangeAt: this.now() });
+      this.remoteSync.schedule();
+    }
+    this.cursor = response.cursor;
+  }
+  /**
+   * Keeps a stream connection open: reconnects after 1/2/5/15/60 s, waits 10 minutes after a rejected key (4401) and
+   * 60 s while the server has no vault (4503). Hands over to the long poll after STREAM_FAILURES_BEFORE_POLLING failed
+   * attempts in a row when the server never answered on the WebSocket. `recheck`: trying the stream again while
+   * long-polling (failed attempts change nothing on show).
+   */
+  async streamLoop(generation, recheck) {
+    let answered = false;
+    let retries = 0;
+    while (generation === this.generation) {
+      const outcome = await this.connectStream(generation);
+      if (generation !== this.generation) return;
+      if (outcome.code === STREAM_CLOSE_UNAUTHORIZED) {
+        if (this.current.error !== STREAM_UNAUTHORIZED_MESSAGE) this.log(`\u5373\u6642\u540C\u6B65\u7121\u6CD5\u767B\u5165\uFF1A${STREAM_UNAUTHORIZED_MESSAGE}`);
+        this.update({ state: "unsupported", error: STREAM_UNAUTHORIZED_MESSAGE });
+        answered = true;
+        retries = 0;
+        await this.sleep(SLOW_RETRY_MS, generation);
+        continue;
+      }
+      if (outcome.code === STREAM_CLOSE_NOT_CONFIGURED) {
+        if (this.current.error !== STREAM_NOT_CONFIGURED_MESSAGE) this.log(`\u5373\u6642\u540C\u6B65\u66AB\u505C\uFF1A${STREAM_NOT_CONFIGURED_MESSAGE}`);
+        this.update({ state: "retrying", error: STREAM_NOT_CONFIGURED_MESSAGE });
+        answered = true;
+        retries = 0;
+        await this.sleep(STREAM_NOT_CONFIGURED_RETRY_MS, generation);
+        continue;
+      }
+      if (outcome.ready) answered = true;
+      retries = outcome.ready ? 1 : retries + 1;
+      if (!answered && retries >= STREAM_FAILURES_BEFORE_POLLING) {
+        if (!recheck) this.log("\u7121\u6CD5\u5EFA\u7ACB\u5373\u6642\u63A8\u9001\u9023\u7DDA\uFF08\u4F3A\u670D\u5668\u53EF\u80FD\u662F\u820A\u7248\uFF0C\u6216\u7DB2\u8DEF\u4E0D\u5141\u8A31 WebSocket\uFF09\uFF0C\u6539\u7528\u8F2A\u8A62");
+        void this.pollLoop(generation, true);
+        return;
+      }
+      if (!recheck || answered) {
+        const message = describeStreamEnd(outcome);
+        if (retries === 1) this.log(`\u5373\u6642\u540C\u6B65\u9023\u7DDA\u4E2D\u65B7\uFF0C\u7A0D\u5F8C\u91CD\u8A66\uFF1A${message}`);
+        this.update({ state: "retrying", error: message });
+      }
+      await this.sleep(STREAM_RETRY_DELAYS_MS[Math.min(retries, STREAM_RETRY_DELAYS_MS.length) - 1], generation);
+    }
+  }
+  /** One stream connection: authenticates, then applies what the server pushes. Resolves when it has ended. */
+  connectStream(generation) {
+    const stream = this.deps.stream;
+    return new Promise((resolve) => {
+      let connection = null;
+      let ready = false;
+      let done = false;
+      let serverError = null;
+      let idleTimer = null;
+      let pingTimer = null;
+      const finish = (code, idle = false) => {
+        if (done) return;
+        done = true;
+        this.timers.clearTimeout(idleTimer);
+        this.timers.clearTimeout(pingTimer);
+        if (this.liveStream === connection) this.liveStream = null;
+        this.endStream = null;
+        connection == null ? void 0 : connection.close();
+        if (serverError === "unauthorized") code = STREAM_CLOSE_UNAUTHORIZED;
+        else if (serverError === "vault_not_configured") code = STREAM_CLOSE_NOT_CONFIGURED;
+        resolve({ ready, code, idle });
+      };
+      const send = (message) => {
+        try {
+          connection == null ? void 0 : connection.send(JSON.stringify(message));
+        } catch (e) {
+        }
+      };
+      const watch = () => {
+        this.timers.clearTimeout(idleTimer);
+        idleTimer = this.timers.setTimeout(() => finish(STREAM_CLOSE_ABNORMAL, true), STREAM_IDLE_TIMEOUT_MS);
+      };
+      const ping = () => {
+        pingTimer = this.timers.setTimeout(() => {
+          send({ type: "ping" });
+          ping();
+        }, STREAM_PING_INTERVAL_MS);
+      };
+      const onMessage = (message) => {
+        switch (message.type) {
+          case "ready":
+            if (ready) return;
+            ready = true;
+            if (this.current.state === "retrying" || this.current.state === "unsupported") this.log("\u5373\u6642\u540C\u6B65\u5DF2\u91CD\u65B0\u9023\u7DDA");
+            this.applyChanges({ cursor: message.cursor, reset: message.reset, changes: [] });
+            this.liveStream = connection;
+            this.update({ state: "connected", transport: "stream", error: null });
+            return;
+          case "changes":
+            if (ready) this.applyChanges(message.changes);
+            return;
+          case "ack":
+            this.update({ lastReportAt: this.now() });
+            return;
+          case "error":
+            serverError = message.code;
+            return;
+          case "pong":
+            return;
+        }
+      };
+      this.endStream = () => finish(1e3);
+      watch();
+      try {
+        connection = stream.open(stream.url, {
+          open: () => {
+            if (done || generation !== this.generation) return;
+            const auth = { type: "auth", token: stream.token, client: this.deps.clientId };
+            if (this.cursor !== null) auth.since = this.cursor;
+            send(auth);
+            ping();
+          },
+          message: (data) => {
+            if (done || generation !== this.generation) return;
+            watch();
+            const message = parseStreamMessage(data);
+            if (message) onMessage(message);
+          },
+          close: (code) => finish(code)
+        });
+        if (done) connection.close();
+      } catch (error) {
+        this.log(`\u7121\u6CD5\u958B\u555F\u5373\u6642\u63A8\u9001\u9023\u7DDA\uFF1A${describeError(error)}`);
+        finish(STREAM_CLOSE_ABNORMAL);
+      }
+    });
+  }
+  /**
+   * The long poll. `fallback`: started because the stream could not be used; the stream is tried again every
+   * STREAM_RECHECK_MS.
+   */
+  async pollLoop(generation, fallback) {
+    const pollingSince = this.now();
     let failures = 0;
     while (generation === this.generation) {
+      if (fallback && this.deps.stream && this.now() - pollingSince >= STREAM_RECHECK_MS) {
+        void this.streamLoop(generation, true);
+        return;
+      }
       const startedAt = this.now();
       try {
-        const body = await this.deps.client.requestJson(changesPath(cursor), { headers: this.headers() });
+        const body = await this.deps.client.requestJson(changesPath(this.cursor), { headers: this.headers() });
         if (generation !== this.generation) return;
-        const response = parseVaultChanges(body);
-        if (cursor !== null && hasRemoteChanges(response, this.deps.clientId)) {
-          this.update({ lastRemoteChangeAt: this.now() });
-          this.remoteSync.schedule();
-        }
-        cursor = response.cursor;
+        this.applyChanges(parseVaultChanges(body));
         if (failures > 0) this.log("\u5373\u6642\u540C\u6B65\u5DF2\u91CD\u65B0\u9023\u7DDA");
         failures = 0;
-        this.update({ state: "connected", error: null });
+        this.update({ state: "connected", transport: "polling", error: null });
         const elapsed = this.now() - startedAt;
         if (elapsed < MIN_POLL_INTERVAL_MS) await this.sleep(MIN_POLL_INTERVAL_MS - elapsed, generation);
       } catch (error) {
@@ -3356,6 +3588,13 @@ var LiveSync = class {
     const paths = this.queue.take();
     if (paths === null || !this.running) return;
     const generation = this.generation;
+    if (this.liveStream) {
+      try {
+        this.liveStream.send(JSON.stringify({ type: "report", paths }));
+        return;
+      } catch (e) {
+      }
+    }
     try {
       await this.deps.client.requestJson(CHANGES_PATH, { method: "POST", body: { paths }, headers: this.headers() });
       if (generation === this.generation) this.update({ lastReportAt: this.now() });
@@ -3374,7 +3613,9 @@ function describeLiveSync(status, formatTime) {
       parts.push("\u9023\u7DDA\u4E2D\u2026");
       break;
     case "connected":
-      parts.push("\u5DF2\u9023\u7DDA\uFF0C\u7B49\u5F85\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\u3002");
+      parts.push(
+        status.transport === "stream" ? "\u5DF2\u9023\u7DDA\uFF08\u5373\u6642\u63A8\u9001\uFF09\uFF0C\u7B49\u5F85\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\u3002" : status.transport === "polling" ? "\u5DF2\u9023\u7DDA\uFF08\u8F2A\u8A62\uFF09\uFF0C\u7B49\u5F85\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\u3002" : "\u5DF2\u9023\u7DDA\uFF0C\u7B49\u5F85\u5176\u4ED6\u88DD\u7F6E\u7684\u4FEE\u6539\u3002"
+      );
       break;
     case "retrying":
       parts.push(`\u9023\u7DDA\u4E2D\u65B7\uFF0C\u7A0D\u5F8C\u81EA\u52D5\u91CD\u8A66${status.error ? `\uFF08${status.error}\uFF09` : ""}\u3002`);
@@ -3500,7 +3741,7 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
     contentEl.empty();
     contentEl.createEl("h4", { text: "\u9019\u53F0\u88DD\u7F6E" });
     contentEl.createEl("p", {
-      text: "\u628A\u4F3A\u670D\u5668\u7684\u5132\u5B58\u6876\u8A2D\u5B9A\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E\u7684 Remotely Save\uFF1AS3 \u9023\u7DDA\u3001\u555F\u52D5 10 \u79D2\u5F8C\u540C\u6B65\u4E00\u6B21\u3001\u6BCF\u5206\u9418\u81EA\u52D5\u540C\u6B65\u3001\u5132\u5B58\u6642\u540C\u6B65\u3002Remotely Save \u7684\u5176\u4ED6\u8A2D\u5B9A\uFF08\u4F8B\u5982\u52A0\u5BC6\u5BC6\u78BC\uFF0C\u8ACB\u4FDD\u6301\u7A7A\u767D\uFF09\u4E0D\u6703\u8B8A\u66F4\u3002"
+      text: "\u628A\u4F3A\u670D\u5668\u7684\u5132\u5B58\u6876\u8A2D\u5B9A\u5957\u7528\u5230\u9019\u53F0\u88DD\u7F6E\u7684 Remotely Save\uFF1AS3 \u9023\u7DDA\u3001\u555F\u52D5 10 \u79D2\u5F8C\u540C\u6B65\u4E00\u6B21\u3001\u6BCF 5 \u5206\u9418\u81EA\u52D5\u540C\u6B65\u3001\u5132\u5B58\u6642\u540C\u6B65\u3002Remotely Save \u7684\u5176\u4ED6\u8A2D\u5B9A\uFF08\u4F8B\u5982\u52A0\u5BC6\u5BC6\u78BC\uFF0C\u8ACB\u4FDD\u6301\u7A7A\u767D\uFF09\u4E0D\u6703\u8B8A\u66F4\u3002"
     });
     if (isPluginEnabled(this.app, REMOTELY_SAVE_PLUGIN_ID) === false) {
       contentEl.createEl("p", {
@@ -4045,11 +4286,14 @@ ${this.settings.apiKey}` : "";
     this.liveSync = null;
     this.liveSyncKey = key;
     if (!wanted) return;
+    const url = streamUrl(normalizeServerUrl(this.settings.serverUrl));
+    const open = browserWebSocket();
     this.liveSync = new LiveSync({
       client: this.createClient(),
       clientId: this.deviceClientId(),
       configDir: this.app.vault.configDir,
       syncRemote: () => startRemotelySaveSync(this.app),
+      stream: url && open ? { url, token: this.settings.apiKey, open } : null,
       log: (message) => console.info(LOG_PREFIX, message)
     });
     this.liveSync.start();
