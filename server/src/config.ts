@@ -1,3 +1,5 @@
+import { parseRecordOutputs, type RecordOutput } from "./services/scan-records.js";
+
 export interface Config {
   port: number;
   nodeEnv: string;
@@ -16,6 +18,8 @@ export interface Config {
   anthropicApiKey: string | undefined;
   /** ANTHROPIC_WORKSPACE_ID: needed when the API key is not scoped to a workspace (sent as anthropic-workspace-id). */
   anthropicWorkspaceId: string | undefined;
+  /** SCAN_RECORD_OUTPUTS: scans → JSON record files in the vault (default: FV60 into its record file when it exists). */
+  scanRecordOutputs: RecordOutput[];
   /** ASSISTANT_MODEL: the large tier. "latest" (default, newest Opus), "latest-sonnet" etc., or a fixed model id. */
   assistantModel: string;
   /** ASSISTANT_MODEL_MEDIUM: the medium tier (default latest-sonnet). */
@@ -146,6 +150,7 @@ export function loadConfig(
     githubToken: nonEmpty(env.GITHUB_TOKEN),
     anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
     anthropicWorkspaceId: nonEmpty(env.ANTHROPIC_WORKSPACE_ID),
+    scanRecordOutputs: parseRecordOutputs(env.SCAN_RECORD_OUTPUTS),
     assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "latest",
     assistantModelMedium: nonEmpty(env.ASSISTANT_MODEL_MEDIUM) ?? "latest-sonnet",
     assistantModelSmall: nonEmpty(env.ASSISTANT_MODEL_SMALL) ?? "latest-haiku",

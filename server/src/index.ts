@@ -32,6 +32,7 @@ async function main() {
     publicUrl: config.publicUrl,
     obsidianPlugin,
     assistant: createAssistantOptions(config),
+    recordOutputs: config.scanRecordOutputs,
   });
   // Mirrors the Obsidian plugin's GitHub releases into the bucket: shortly after startup, then every 30 minutes
   const stopPluginMirror = vault ? schedulePluginMirror(obsidianPlugin) : () => {};

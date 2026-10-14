@@ -4,6 +4,7 @@ import { scanIdSchema, scanInputSchema, scanListQuerySchema, scanPatchSchema } f
 import type { ScanListOptions, Store, WriteResult } from "../store/types.js";
 import type { Scan } from "../types.js";
 import { parse } from "./parse.js";
+import type { ScanRecordExporter } from "./scan-records.js";
 
 export interface ScanPage {
   items: Scan[];
@@ -11,7 +12,11 @@ export interface ScanPage {
 }
 
 export class ScanService {
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    /** Adds uploaded scans to their JSON record files in the vault (FV60 → the FV60 tool's records). */
+    private readonly records: ScanRecordExporter | null = null,
+  ) {}
 
   /** Normalizes a UUID path parameter to canonical uppercase (the iOS app sends uppercase). */
   parseId(rawId: unknown): string {
@@ -32,7 +37,7 @@ export class ScanService {
     if (input.id !== undefined && input.id.toUpperCase() !== id) {
       throw invalidRequest("Body id does not match the URL id");
     }
-    return this.store.putScan({
+    const result = await this.store.putScan({
       id,
       createdAt: input.createdAt ?? null,
       source: input.source,
@@ -45,6 +50,8 @@ export class ScanService {
       pageCount: input.pageCount ?? null,
       device: input.device ?? null,
     });
+    await this.records?.export(result.value);
+    return result;
   }
 
   async patch(rawId: unknown, body: unknown): Promise<Scan> {
@@ -52,6 +59,7 @@ export class ScanService {
     const patch = parse(scanPatchSchema, body);
     const scan = await this.store.patchScan(id, patch);
     if (!scan) throw notFound("Scan", id);
+    if (patch.data !== undefined || patch.templateId !== undefined) await this.records?.export(scan);
     return scan;
   }
 

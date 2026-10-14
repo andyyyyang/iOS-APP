@@ -187,6 +187,8 @@ tags: [localocr, localocr/receipt]
 
 ### 範例：FV60 廠商請款紀錄
 
+> 伺服器現在會在 App 上傳掃描時直接把 FV60 紀錄寫進這個檔（見伺服器的 `SCAN_RECORD_OUTPUTS`），不必開著 Obsidian；插件的 JSON 陣列輸出可以保留（同一筆紀錄不會重複寫入）或關閉。
+
 保險庫中的 `11 SOP/fv60-廠商請款-紀錄.json` 是 FV60 廠商請款紀錄的 JSON 陣列（最新的在最前面、縮排 2 格）。樣板 `fv60_air`（空運）與 `fv60_sea`（海運）抽取出的物件就是這個紀錄格式，包含 `id`（base36 時間戳加 3 個隨機字元，例如 `"mum0takt3q2"`）、`docNo`（之後才由你填入的 SAP 傳票號碼）與 `done`（在 SAP 過帳後由你改成 `true`）。
 
 在設定的「JSON 陣列輸出」新增兩列對應：

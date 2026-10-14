@@ -6,6 +6,7 @@ import type { VaultStore } from "../vault/types.js";
 import { ClassifyService } from "./classify.js";
 import { ObsidianPluginService } from "./obsidian-plugin.js";
 import { PairingService } from "./pairing.js";
+import { DEFAULT_RECORD_OUTPUTS, ScanRecordExporter, type RecordOutput } from "./scan-records.js";
 import { ScanService } from "./scans.js";
 import { TemplateService } from "./templates.js";
 import { ValidateService } from "./validate.js";
@@ -39,6 +40,7 @@ export function createServices({
   vaultChanges = new VaultChangeFeed(),
   obsidianPlugin,
   assistant = { model: null },
+  recordOutputs = DEFAULT_RECORD_OUTPUTS,
   now = Date.now,
 }: {
   store: Store;
@@ -53,6 +55,8 @@ export function createServices({
   obsidianPlugin?: ObsidianPluginService;
   /** Cloud AI (model, Jev routing, limits); default: off. */
   assistant?: AssistantOptions;
+  /** Scans → JSON record files in the vault (SCAN_RECORD_OUTPUTS); default: the FV60 record file, when it exists. */
+  recordOutputs?: RecordOutput[];
   /** Clock in milliseconds (pairing code expiry). */
   now?: () => number;
 }): Services {
@@ -60,7 +64,7 @@ export function createServices({
   const vaultIndex = new VaultIndexService(vaultService, vaultChanges);
   return {
     store,
-    scans: new ScanService(store),
+    scans: new ScanService(store, recordOutputs.length ? new ScanRecordExporter(vaultService, recordOutputs) : null),
     templates: new TemplateService(store),
     classify: new ClassifyService(store, classifier),
     validate: new ValidateService(store),

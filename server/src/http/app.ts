@@ -5,6 +5,7 @@ import type { Classifier } from "../classifier/types.js";
 import type { VaultConfig } from "../config.js";
 import { mcpRouter } from "../mcp/route.js";
 import { createServices } from "../services/index.js";
+import type { RecordOutput } from "../services/scan-records.js";
 import type { ObsidianPluginService } from "../services/obsidian-plugin.js";
 import type { VaultChangeFeed } from "../services/vault-changes.js";
 import type { Store } from "../store/types.js";
@@ -43,6 +44,8 @@ export interface AppOptions {
   now?: () => number;
   /** Cloud AI (/v1/assistant): model, Jev routing and limits; omitted = off (runs answer 503). */
   assistant?: AssistantOptions;
+  /** Scans → JSON record files in the vault (SCAN_RECORD_OUTPUTS); omitted = the FV60 record file, when it exists. */
+  recordOutputs?: RecordOutput[];
 }
 
 /** /pair: attempts per client IP per window. */
@@ -63,8 +66,9 @@ export function createApp({
   obsidianPlugin,
   now = Date.now,
   assistant,
+  recordOutputs,
 }: AppOptions): Express {
-  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, assistant, now });
+  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, assistant, recordOutputs, now });
   const auth = requireApiKey(apiKeys);
   const app = express();
   registerVaultStream(app, { services, apiKeys }); // for attachVaultStream(server, app)
