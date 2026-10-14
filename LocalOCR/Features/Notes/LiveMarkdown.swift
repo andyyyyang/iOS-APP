@@ -47,42 +47,77 @@ final class MarkdownImageInfo: NSObject {
 }
 
 /// 畫成格線表的 Markdown 表格：每格已套好行內樣式（粗體、連結、程式碼…），欄寬依內容與文字欄寬分配，放不下的儲存格自動換行。
+/// 欄位太多、連縮小字級都放不下時（手機上的寬表格），每一列改成一張卡片：第一欄當標題，其他欄是「欄名　內容」。
 final class MarkdownTableInfo: NSObject {
     static let horizontalPadding: CGFloat = 10
     static let verticalPadding: CGFloat = 7
-
-    let cells: [[NSAttributedString]]
-    let hasHeader: Bool
-    let columnWidths: [CGFloat]
-    let rowHeights: [CGFloat]
-
-    var size: CGSize { CGSize(width: columnWidths.reduce(0, +), height: rowHeights.reduce(0, +)) }
-
     /// 同一張表（內容、欄寬、字級都一樣）不用每打一個字就重新量。
     static let cache = NSCache<NSString, MarkdownTableInfo>()
 
+    /// 一段畫在表格裡的文字與位置（相對於表格左上角）。
+    struct Piece {
+        let text: NSAttributedString
+        let frame: CGRect
+    }
+
+    let cells: [[NSAttributedString]]
+    let hasHeader: Bool
+    /// 每一列畫成卡片（寬表格）。
+    let stacked: Bool
+    let columnWidths: [CGFloat]
+    /// 格線表每一列的高度；卡片模式是每張卡片的高度。
+    let rowHeights: [CGFloat]
+    let cards: [CGRect]
+    let pieces: [Piece]
+    let size: CGSize
+
     init(cells: [[NSAttributedString]], hasHeader: Bool, width available: CGFloat) {
-        var cells = cells
+        let grid = MarkdownTableInfo.grid(cells, width: available)
+        if hasHeader, cells.count > 1, !grid.fits {
+            let stack = MarkdownTableInfo.stack(cells, width: available)
+            self.cells = cells
+            stacked = true
+            columnWidths = []
+            rowHeights = stack.heights
+            cards = stack.cards
+            pieces = stack.pieces
+            size = stack.size
+        } else {
+            self.cells = grid.cells
+            stacked = false
+            columnWidths = grid.widths
+            rowHeights = grid.heights
+            cards = []
+            pieces = grid.pieces
+            size = CGSize(width: grid.widths.reduce(0, +), height: grid.heights.reduce(0, +))
+        }
+        self.hasHeader = hasHeader
+    }
+
+    /// 格線表：窄的欄位用原本的寬度，剩下的空間分給寬的欄位；`fits` 表示縮小字級後最小欄寬放得下。
+    private static func grid(_ input: [[NSAttributedString]], width available: CGFloat) -> (cells: [[NSAttributedString]], widths: [CGFloat], heights: [CGFloat], pieces: [Piece], fits: Bool) {
+        var cells = input
         let columns = cells.map(\.count).max() ?? 0
-        let padding = MarkdownTableInfo.horizontalPadding * 2
+        let padding = horizontalPadding * 2
         func natural(_ cells: [[NSAttributedString]]) -> [CGFloat] {
             (0..<columns).map { column in
-                cells.map { row in column < row.count ? ceil(MarkdownTableInfo.measure(row[column], width: .greatestFiniteMagnitude).width) + padding : padding }.max() ?? padding
+                cells.map { row in column < row.count ? ceil(measure(row[column], width: .greatestFiniteMagnitude).width) + padding : padding }.max() ?? padding
             }.map { max($0, 44) }
         }
         var naturalWidths = natural(cells)
         var minimumWidths = naturalWidths.map { min($0, 96) }
+        var fits = true
         // 欄位很多、連最小寬度都放不下時，整張表的字縮小一點
         let minimumTotal = minimumWidths.reduce(0, +)
         if minimumTotal > available, available > 0 {
             let scale = max(0.78, available / minimumTotal)
-            cells = cells.map { $0.map { MarkdownTableInfo.scaled($0, by: scale) } }
+            cells = cells.map { $0.map { restyled($0, scale: scale, keepsAlignment: true) } }
             naturalWidths = natural(cells)
             minimumWidths = naturalWidths.map { min($0, 96 * scale) }
+            fits = minimumWidths.reduce(0, +) <= available + 0.5
         }
         var widths = naturalWidths
         if widths.reduce(0, +) > available {
-            // 窄的欄位用原本的寬度，剩下的空間平均分給寬的欄位（不小於最小寬度）
             var remaining = available
             var open = Array(0..<columns)
             while !open.isEmpty {
@@ -99,22 +134,75 @@ final class MarkdownTableInfo: NSObject {
                 let fair = remaining / CGFloat(open.count)
                 for column in open { widths[column] = floor(max(fair, minimumWidths[column])) }
             }
-            // 還是太寬（欄位非常多）：全部等比縮到文字欄寬，儲存格多換幾行
+            // 還是太寬：全部等比縮到文字欄寬，儲存格多換幾行
             let total = widths.reduce(0, +)
             if total > available, available > 0 {
                 widths = widths.map { floor($0 * available / total) }
             }
         }
-        rowHeights = cells.map { row in
+        var heights: [CGFloat] = []
+        var pieces: [Piece] = []
+        var y: CGFloat = 0
+        for row in cells {
             var height: CGFloat = 0
             for (column, cell) in row.enumerated() where column < widths.count {
-                height = max(height, ceil(MarkdownTableInfo.measure(cell, width: widths[column] - padding).height))
+                height = max(height, ceil(measure(cell, width: widths[column] - padding).height))
             }
-            return max(height + MarkdownTableInfo.verticalPadding * 2, 30)
+            height = max(height + verticalPadding * 2, 30)
+            var x: CGFloat = 0
+            for (column, width) in widths.enumerated() {
+                if column < row.count, row[column].length > 0 {
+                    pieces.append(Piece(text: row[column], frame: CGRect(x: x + horizontalPadding, y: y + verticalPadding, width: width - padding, height: height - verticalPadding * 2)))
+                }
+                x += width
+            }
+            heights.append(height)
+            y += height
         }
-        self.cells = cells
-        self.hasHeader = hasHeader
-        columnWidths = widths
+        return (cells, widths, heights, pieces, fits)
+    }
+
+    /// 卡片：第一欄是粗體標題，其他欄左邊是欄名（淡色小字）、右邊是內容，各自換行。
+    private static func stack(_ cells: [[NSAttributedString]], width available: CGFloat) -> (heights: [CGFloat], cards: [CGRect], pieces: [Piece], size: CGSize) {
+        let inset: CGFloat = 12
+        let gap: CGFloat = 10
+        let inner = max(available - inset * 2, 60)
+        let labels = cells[0].map { restyled($0, scale: 0.86, color: LiveMarkdown.Theme.secondary) }
+        let widest = labels.dropFirst().map { ceil(measure($0, width: .greatestFiniteMagnitude).width) }.max() ?? 0
+        let labelWidth = min(max(widest, 44), floor(inner * 0.36))
+        var heights: [CGFloat] = []
+        var cards: [CGRect] = []
+        var pieces: [Piece] = []
+        var y: CGFloat = 0
+        for row in cells.dropFirst() {
+            var cursor = y + 10
+            if let first = row.first, first.length > 0 {
+                let title = restyled(first, bold: true)
+                let height = ceil(measure(title, width: inner).height)
+                pieces.append(Piece(text: title, frame: CGRect(x: inset, y: cursor, width: inner, height: height)))
+                cursor += height + 6
+            }
+            for column in row.indices.dropFirst() where row[column].length > 0 {
+                let value = restyled(row[column])
+                if column < labels.count, labels[column].length > 0 {
+                    let valueWidth = inner - labelWidth - gap
+                    let labelHeight = ceil(measure(labels[column], width: labelWidth).height)
+                    let valueHeight = ceil(measure(value, width: valueWidth).height)
+                    pieces.append(Piece(text: labels[column], frame: CGRect(x: inset, y: cursor + 1, width: labelWidth, height: labelHeight)))
+                    pieces.append(Piece(text: value, frame: CGRect(x: inset + labelWidth + gap, y: cursor, width: valueWidth, height: valueHeight)))
+                    cursor += max(labelHeight + 1, valueHeight) + 4
+                } else {
+                    let height = ceil(measure(value, width: inner).height)
+                    pieces.append(Piece(text: value, frame: CGRect(x: inset, y: cursor, width: inner, height: height)))
+                    cursor += height + 4
+                }
+            }
+            let height = cursor - y + 6
+            cards.append(CGRect(x: 0, y: y, width: available, height: height))
+            heights.append(height)
+            y += height + 8
+        }
+        return (heights, cards, pieces, CGSize(width: available, height: max(y - 8, 0)))
     }
 
     static func measure(_ text: NSAttributedString, width: CGFloat) -> CGSize {
@@ -122,43 +210,41 @@ final class MarkdownTableInfo: NSObject {
         return text.boundingRect(with: CGSize(width: max(width, 1), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).size
     }
 
-    private static func scaled(_ text: NSAttributedString, by scale: CGFloat) -> NSAttributedString {
+    /// 改字級、粗細或顏色（藏起來的語法不動），卡片裡的文字一律靠左。
+    private static func restyled(_ text: NSAttributedString, scale: CGFloat = 1, color: UIColor? = nil, bold: Bool = false, keepsAlignment: Bool = false) -> NSAttributedString {
         let copy = NSMutableAttributedString(attributedString: text)
-        copy.enumerateAttribute(.font, in: NSRange(location: 0, length: copy.length)) { value, range, _ in
-            guard let font = value as? UIFont, font.pointSize > 1 else { return }
-            copy.addAttribute(.font, value: font.withSize(font.pointSize * scale), range: range)
+        let all = NSRange(location: 0, length: copy.length)
+        copy.enumerateAttributes(in: all) { attributes, range, _ in
+            guard let font = attributes[.font] as? UIFont, font.pointSize > 1 else { return }
+            var result = scale == 1 ? font : font.withSize(font.pointSize * scale)
+            if bold { result = result.withTraits(.traitBold) }
+            copy.addAttribute(.font, value: result, range: range)
+            if let color { copy.addAttribute(.foregroundColor, value: color, range: range) }
+        }
+        if !keepsAlignment, all.length > 0 {
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = 2
+            copy.addAttribute(.paragraphStyle, value: style, range: all)
         }
         return copy
     }
 
     /// 表格裡某一點（相對於表格左上角）的連結：點 [[連結]] 或網址時開啟，不進入編輯。
     func link(at point: CGPoint) -> MarkdownTapTarget? {
-        var top: CGFloat = 0
-        var row: Int?
-        for (index, height) in rowHeights.enumerated() {
-            if point.y >= top, point.y < top + height {
-                row = index
-                break
-            }
-            top += height
+        for piece in pieces where piece.frame.insetBy(dx: -4, dy: -4).contains(point) {
+            let local = CGPoint(x: point.x - piece.frame.minX, y: point.y - piece.frame.minY)
+            if let target = Self.link(in: piece.text, width: piece.frame.width, at: local) { return target }
         }
-        var left: CGFloat = 0
-        var column: Int?
-        for (index, width) in columnWidths.enumerated() {
-            if point.x >= left, point.x < left + width {
-                column = index
-                break
-            }
-            left += width
-        }
-        guard let row, let column, column < cells[row].count, cells[row][column].length > 0 else { return nil }
-        let storage = NSTextStorage(attributedString: cells[row][column])
+        return nil
+    }
+
+    private static func link(in text: NSAttributedString, width: CGFloat, at local: CGPoint) -> MarkdownTapTarget? {
+        let storage = NSTextStorage(attributedString: text)
         let layout = NSLayoutManager()
-        let container = NSTextContainer(size: CGSize(width: max(columnWidths[column] - Self.horizontalPadding * 2, 1), height: .greatestFiniteMagnitude))
+        let container = NSTextContainer(size: CGSize(width: max(width, 1), height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         layout.addTextContainer(container)
         storage.addLayoutManager(layout)
-        let local = CGPoint(x: point.x - left - Self.horizontalPadding, y: point.y - top - Self.verticalPadding)
         var result: MarkdownTapTarget?
         storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { attributes, range, stop in
             var target: MarkdownTapTarget?
@@ -177,48 +263,50 @@ final class MarkdownTableInfo: NSObject {
         return result
     }
 
-    /// 畫在文字欄中（圓角外框、標題列底色、格線、儲存格文字）。
+    /// 畫在文字欄中：格線表（圓角外框、標題列底色、格線）或卡片，再畫上文字。
     func draw(in frame: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
-        let outline = UIBezierPath(roundedRect: frame, cornerRadius: 8)
-        context.saveGState()
-        outline.addClip()
-        LiveMarkdown.Theme.tableBackground.setFill()
-        UIRectFill(frame)
-        if hasHeader, let first = rowHeights.first {
-            LiveMarkdown.Theme.tableHeader.setFill()
-            UIRectFill(CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: first))
-        }
-        LiveMarkdown.Theme.line.setFill()
-        var y = frame.minY
-        for (row, height) in rowHeights.enumerated() {
-            if row > 0 {
-                UIRectFill(CGRect(x: frame.minX, y: y - 0.5, width: frame.width, height: row == 1 && hasHeader ? 1 : 0.5))
+        let theme = LiveMarkdown.Theme.self
+        if stacked {
+            for card in cards {
+                let path = UIBezierPath(roundedRect: card.offsetBy(dx: frame.minX, dy: frame.minY).insetBy(dx: 0.5, dy: 0.5), cornerRadius: 10)
+                theme.tableBackground.setFill()
+                path.fill()
+                theme.line.setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+        } else {
+            let outline = UIBezierPath(roundedRect: frame, cornerRadius: 8)
+            context.saveGState()
+            outline.addClip()
+            theme.tableBackground.setFill()
+            UIRectFill(frame)
+            if hasHeader, let first = rowHeights.first {
+                theme.tableHeader.setFill()
+                UIRectFill(CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: first))
+            }
+            theme.line.setFill()
+            var y = frame.minY
+            for (row, height) in rowHeights.enumerated() {
+                if row > 0 {
+                    UIRectFill(CGRect(x: frame.minX, y: y - 0.5, width: frame.width, height: row == 1 && hasHeader ? 1 : 0.5))
+                }
+                y += height
             }
             var x = frame.minX
-            for (column, width) in columnWidths.enumerated() {
-                if column < cells[row].count {
-                    let rect = CGRect(
-                        x: x + Self.horizontalPadding,
-                        y: y + Self.verticalPadding,
-                        width: width - Self.horizontalPadding * 2,
-                        height: height - Self.verticalPadding * 2
-                    )
-                    cells[row][column].draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-                }
+            for width in columnWidths.dropLast() {
                 x += width
+                UIRectFill(CGRect(x: x - 0.25, y: frame.minY, width: 0.5, height: frame.height))
             }
-            y += height
+            context.restoreGState()
+            theme.line.setStroke()
+            outline.lineWidth = 1
+            outline.stroke()
         }
-        var x = frame.minX
-        for width in columnWidths.dropLast() {
-            x += width
-            UIRectFill(CGRect(x: x - 0.25, y: frame.minY, width: 0.5, height: frame.height))
+        for piece in pieces {
+            piece.text.draw(with: piece.frame.offsetBy(dx: frame.minX, dy: frame.minY), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
         }
-        context.restoreGState()
-        LiveMarkdown.Theme.line.setStroke()
-        outline.lineWidth = 1
-        outline.stroke()
     }
 }
 

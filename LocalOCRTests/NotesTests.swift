@@ -272,14 +272,35 @@ final class NotesTests: XCTestCase {
         XCTAssertNil(editing.attribute(.mdTable, at: 0, effectiveRange: nil))
         XCTAssertFalse(isHidden(editing, at: ns.range(of: "K3").location))
 
-        // 欄位很多、內容很長：縮到文字欄寬內，儲存格換行
-        let header = (1...9).map { "欄位\($0)" }.joined(separator: " | ")
-        let row = (1...9).map { _ in String(repeating: "很長的內容", count: 6) }.joined(separator: " | ")
-        let wide = styled("| \(header) |\n|" + String(repeating: "---|", count: 9) + "\n| \(row) |")
-        let wideTable = wide.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
-        XCTAssertNotNil(wideTable)
-        XCTAssertLessThanOrEqual(wideTable?.size.width ?? 999, 600)
-        XCTAssertGreaterThan(wideTable?.rowHeights.last ?? 0, 40, "放不下的儲存格換行")
+        XCTAssertEqual(table?.stacked, false, "放得下的表格畫成格線表")
+
+        // 四欄、內容長：縮小字級後放得下，仍是格線表，儲存格換行
+        let four = styled("| 名稱 | 部門 | 職稱 | 備註 |\n|---|---|---|---|\n| " + Array(repeating: String(repeating: "很長的內容", count: 8), count: 4).joined(separator: " | ") + " |")
+        let fourTable = four.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
+        XCTAssertEqual(fourTable?.stacked, false)
+        XCTAssertLessThanOrEqual(fourTable?.size.width ?? 999, 600)
+        XCTAssertGreaterThan(fourTable?.rowHeights.last ?? 0, 40, "放不下的儲存格換行")
+
+        // 手機上的寬表格（像聯絡人清單）：每一列改成卡片，第一欄是標題，其他欄是「欄名　內容」
+        let contacts = "| 姓名 | 部門 / 單位 | 職稱 / 角色 | 分機 / MVPN | Email | 評估職掌重點 |\n|---|---|---|---|---|---|\n"
+            + "| **[[黃暐庭 - 研發一課\\|黃暐庭]]** | 研發一處 研發一課 | 工程師 | — / **25787** | `weitinghuang@jentech.com.tw` | **Amkor CNC 案主責**、樣品試作與開案排程對接 |\n"
+            + "| **簡禕蓀** | 研發一處 研發一課 | 課長 | **5524** / — | — | 黃暐庭直屬主管 |"
+        let narrow = NSTextStorage(string: contacts)
+        LiveMarkdown.apply(to: narrow, options: LiveMarkdown.Options(selection: nil, width: 330))
+        let cards = narrow.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
+        XCTAssertEqual(cards?.stacked, true)
+        XCTAssertEqual(cards?.cards.count, 2, "兩列資料兩張卡片")
+        XCTAssertLessThanOrEqual(cards?.size.width ?? 999, 330)
+        let texts = cards?.pieces.map(\.text.string) ?? []
+        XCTAssertTrue(texts.contains("Email"), "欄名當標籤")
+        XCTAssertTrue(texts.contains("**[[黃暐庭 - 研發一課|黃暐庭]]**"), "第一欄當卡片標題（跳脫的 | 還原）")
+        if let title = cards?.pieces.first {
+            XCTAssertEqual(cards?.link(at: CGPoint(x: title.frame.minX + 6, y: title.frame.midY)), .wikiLink("黃暐庭 - 研發一課"), "卡片標題的連結點得到")
+        }
+        // 同一張表在平板寬度：格線表
+        let wideScreen = NSTextStorage(string: contacts)
+        LiveMarkdown.apply(to: wideScreen, options: LiveMarkdown.Options(selection: nil, width: 900))
+        XCTAssertEqual((wideScreen.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo)?.stacked, false)
 
         // 儲存格裡的連結點得到
         let linked = styled("| 筆記 |\n| --- |\n| [[專案]] |")

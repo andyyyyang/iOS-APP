@@ -187,10 +187,55 @@ struct MarkdownTableText: Equatable {
 }
 
 /// AI 回答裡的表格：標題列粗體、列與列之間有細線、外框圓角；放不下時儲存格自動換行。
+/// 手機上欄位很多（5 欄以上）時，每一列改成一張卡片：第一欄當標題，其他欄是「欄名　內容」。
 struct AssistantTableView: View {
     let table: MarkdownTableText
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     var body: some View {
+        if sizeClass == .compact, table.hasHeader, table.columns >= 5, table.rows.count > 1 {
+            cards
+        } else {
+            grid
+        }
+    }
+
+    private var cards: some View {
+        let header = table.rows[0]
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(table.rows.dropFirst().enumerated()), id: \.offset) { _, row in
+                VStack(alignment: .leading, spacing: 5) {
+                    if let first = row.first, !first.isEmpty {
+                        Text(AssistantText.attributed(first))
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.bottom, 1)
+                    }
+                    ForEach(Array(row.enumerated()).dropFirst(), id: \.offset) { column, value in
+                        if !value.isEmpty {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(column < header.count ? header[column] : "")
+                                    .font(.caption)
+                                    .foregroundStyle(DS.textSecondary)
+                                    .frame(width: 84, alignment: .leading)
+                                Text(AssistantText.attributed(value))
+                                    .font(.subheadline)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                        .stroke(DS.hairline, lineWidth: 1)
+                )
+            }
+        }
+    }
+
+    private var grid: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
             ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
                 if index > 0 {
