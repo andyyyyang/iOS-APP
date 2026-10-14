@@ -221,11 +221,12 @@ describe("GET /v1/vault/index", () => {
         snippet: "See [[Plan]] and ![[img/sketch.png|200]]",
         notebook: null,
         properties: { tags: ["idea"], aliases: ["點子"] },
+        fields: {},
       },
       expect.objectContaining({ path: "Projects/Plan.md", title: "Plan", links: ["Idea"], snippet: "Plan body [[Idea]]", properties: {} }),
     ]);
     expect(Object.keys(res.body.notes[0])).toEqual([
-      "path", "mtime", "size", "etag", "title", "aliases", "tags", "links", "firstEmbed", "tasks", "snippet", "notebook", "properties",
+      "path", "mtime", "size", "etag", "title", "aliases", "tags", "links", "firstEmbed", "tasks", "snippet", "notebook", "properties", "fields",
     ]);
     expect(res.body.files).toEqual([{ path: "img/sketch.png", mtime: expect.any(Number), size: 4 }]);
 
@@ -348,5 +349,33 @@ describe("MCP vault_links", () => {
     const missing = await client.callTool({ name: "vault_links", arguments: { path: "Nope.md" } });
     expect(missing.isError).toBe(true);
     expect(JSON.parse((missing.content as { text: string }[])[0]!.text).error.code).toBe("not_found");
+  });
+});
+
+describe("Dataview inline fields", () => {
+  it("reads whole-line and bracketed fields outside code and tasks", async () => {
+    const { extractInlineFields } = await import("../src/vault/markdown.js");
+    const body = [
+      "Status:: active",
+      "**Due Date**:: 2026-10-20",
+      "- owner:: [[Andy]]",
+      "Meeting with [mood:: good] and (rating:: 4)",
+      "- [ ] task [due:: 2026-11-01]",
+      "```",
+      "code:: not a field",
+      "```",
+      "`inline:: code`",
+      "tag:: a",
+      "tag:: b",
+      "See https://example.com::x",
+    ].join("\n");
+    expect(extractInlineFields(body)).toEqual({
+      Status: "active",
+      "Due Date": "2026-10-20",
+      owner: "[[Andy]]",
+      mood: "good",
+      rating: "4",
+      tag: ["a", "b"],
+    });
   });
 });

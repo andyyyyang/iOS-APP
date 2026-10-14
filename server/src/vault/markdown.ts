@@ -2,7 +2,7 @@
 // own parser, so the graph, backlinks, tags and tasks look the same whether a note was downloaded or not.
 
 /** Bump when the parsed output changes: it is part of the index ETag, so clients refetch. */
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 export const MAX_TASKS = 200;
 export const SNIPPET_MAX_CHARS = 160;
@@ -45,6 +45,8 @@ export interface ParsedNote {
   notebook: string | null;
   /** The frontmatter as simple YAML (Dataview's page fields): string, list of strings, or null for empty/nested. */
   properties: Record<string, FrontmatterValue>;
+  /** Dataview inline fields in the body (`Key:: value`, `[key:: value]`, `(key:: value)`); repeated keys become lists. */
+  fields: Record<string, string | string[]>;
 }
 
 /** ParsedNote plus every wikilink target (attachments included), for link resolution and retargeting. */
@@ -217,6 +219,49 @@ export function extractTasks(text: string, max = MAX_TASKS): NoteTask[] {
 }
 
 const FENCE = /^\s{0,3}(```|~~~)/;
+const MAX_INLINE_FIELDS = 200;
+/** A whole-line field: "Key:: value" (also after a list marker, and with **bold** keys). Not a task line. */
+const LINE_FIELD = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?([^\s:*_[\]()`][^:[\]()`]*?)(?:\*\*|__)?::\s*(.*)$/u;
+const BRACKET_FIELD = /[[(]([^[\]():`]+?)::\s*([^\])]*)[\])]/gu;
+
+/**
+ * Dataview inline fields outside code: whole-line `Key:: value` and inline `[key:: value]` / `(key:: value)`.
+ * Values stay text (the app's Dataview parses numbers, dates and links); a key seen twice becomes a list.
+ */
+export function extractInlineFields(body: string): Record<string, string | string[]> {
+  const fields: Record<string, string | string[]> = {};
+  let count = 0;
+  const add = (rawKey: string, rawValue: string) => {
+    const key = rawKey.trim();
+    if (!key || key.length > 80 || count >= MAX_INLINE_FIELDS) return;
+    const value = rawValue.trim();
+    count += 1;
+    const current = fields[key];
+    if (current === undefined) fields[key] = value;
+    else fields[key] = Array.isArray(current) ? [...current, value] : [current, value];
+  };
+  let fence: string | null = null;
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    const opening = FENCE.exec(line);
+    if (opening) {
+      if (fence === null) fence = opening[1]!;
+      else if (opening[1] === fence) fence = null;
+      continue;
+    }
+    if (fence !== null || TASK_PATTERN.test(line)) continue;
+    const text = line.replace(/`[^`]*`/g, "");
+    let inline = false;
+    for (const match of text.matchAll(BRACKET_FIELD)) {
+      inline = true;
+      add(match[1]!, match[2]!);
+    }
+    if (inline) continue;
+    const whole = LINE_FIELD.exec(text);
+    if (whole && !/^\s*https?$/i.test(whole[1]!)) add(whole[1]!, whole[2]!);
+  }
+  return fields;
+}
 const HEADING = /^\s{0,3}#{1,6}(\s|$)/;
 const THEMATIC_BREAK = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
@@ -278,6 +323,7 @@ export function parseNote(path: string, text: string): ParsedNoteDetail {
     snippet: extractSnippet(body),
     notebook: typeof notebook === "string" && notebook !== "" ? notebook : null,
     properties: data,
+    fields: extractInlineFields(body),
     allLinks,
   };
 }

@@ -151,6 +151,7 @@ export class VaultIndexService {
         snippet: detail.snippet,
         notebook: detail.notebook,
         properties: detail.properties,
+        fields: detail.fields,
       });
     });
     for (const entry of files) {

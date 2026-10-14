@@ -182,6 +182,11 @@ export const assistantSchemas = {
               description: "The frontmatter as simple YAML: each value a string, a list of strings, or null (empty or nested)",
               additionalProperties: { oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }, { type: "null" }] },
             },
+            fields: {
+              type: "object",
+              description: "Dataview inline fields in the body (Key:: value, [key:: value], (key:: value)); a repeated key is a list",
+              additionalProperties: { oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+            },
           },
         },
       },
