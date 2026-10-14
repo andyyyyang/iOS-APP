@@ -1,5 +1,6 @@
 import cors from "cors";
 import express, { type Express } from "express";
+import type { AssistantOptions } from "../assistant/service.js";
 import type { Classifier } from "../classifier/types.js";
 import type { VaultConfig } from "../config.js";
 import { mcpRouter } from "../mcp/route.js";
@@ -9,6 +10,8 @@ import type { VaultChangeFeed } from "../services/vault-changes.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { VERSION } from "../version.js";
+import { assistantRouter } from "./routes/assistant.js";
+import { vaultIndexRouter } from "./routes/vault-index.js";
 import { requireApiKey } from "./auth.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { buildOpenApi } from "./openapi.js";
@@ -37,6 +40,8 @@ export interface AppOptions {
   obsidianPlugin?: ObsidianPluginService;
   /** Clock in milliseconds for pairing code expiry and the /pair rate limit (injectable for tests). */
   now?: () => number;
+  /** Cloud AI (/v1/assistant): model, Jev routing and limits; omitted = off (runs answer 503). */
+  assistant?: AssistantOptions;
 }
 
 /** /pair: attempts per client IP per window. */
@@ -53,8 +58,9 @@ export function createApp({
   publicUrl,
   obsidianPlugin,
   now = Date.now,
+  assistant,
 }: AppOptions): Express {
-  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, now });
+  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, assistant, now });
   const auth = requireApiKey(apiKeys);
   const app = express();
 
@@ -62,11 +68,18 @@ export function createApp({
   app.set("trust proxy", true); // Railway terminates TLS at its proxy
   app.use(cors({ origin: "*", exposedHeaders: ["WWW-Authenticate", ...VAULT_EXPOSED_HEADERS] }));
   // Before the JSON parser: vault uploads are raw bytes (a .json note must not be parsed or size-limited to 5mb)
+  app.use("/v1/vault/index", auth, vaultIndexRouter(services));
   app.use("/v1/vault", auth, vaultRouter(services));
   app.use(express.json({ limit: "5mb" }));
 
   app.get("/health", (_req, res) => {
-    res.json({ status: "ok", version: VERSION, database: store.kind, jev: services.classify.available });
+    res.json({
+      status: "ok",
+      version: VERSION,
+      database: store.kind,
+      jev: services.classify.available,
+      assistant: services.assistant.available,
+    });
   });
 
   // No auth: this is how a new device obtains the key. After the JSON parser, rate-limited per IP.
@@ -85,6 +98,7 @@ export function createApp({
   v1.use("/scans", scansRouter(services));
   v1.use("/templates", templatesRouter(services));
   v1.use(classifyRouter(services));
+  v1.use("/assistant", assistantRouter(services));
   app.use("/v1", v1);
 
   app.use("/mcp", auth, mcpRouter(services));

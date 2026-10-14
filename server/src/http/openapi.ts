@@ -17,6 +17,7 @@ import {
   REMOTELY_SAVE_SYNC_ON_SAVE_MS,
 } from "../vault/remotely-save.js";
 import { VERSION } from "../version.js";
+import { assistantPaths, assistantSchemas } from "./openapi-assistant.js";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: object) => ({ content: { "application/json": { schema } } });
@@ -498,6 +499,7 @@ export function buildOpenApi(serverUrl?: string) {
           responses: { "200": response({ type: "object" }), "401": commonErrors["401"] },
         },
       },
+      ...assistantPaths,
     },
     components: {
       securitySchemes: {
@@ -523,6 +525,7 @@ export function buildOpenApi(serverUrl?: string) {
             version: { type: "string" },
             database: { type: "string", enum: ["postgres", "memory"] },
             jev: { type: "boolean", description: "Whether server-side classification is configured" },
+            assistant: { type: "boolean", description: "Whether cloud AI runs are available (ANTHROPIC_API_KEY and the vault are set)" },
           },
         },
         Classification: {
@@ -935,6 +938,7 @@ export function buildOpenApi(serverUrl?: string) {
             },
           },
         },
+        ...assistantSchemas,
       },
     },
   };

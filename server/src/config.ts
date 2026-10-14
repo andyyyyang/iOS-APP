@@ -12,6 +12,16 @@ export interface Config {
   publicUrl: string | undefined;
   /** GITHUB_TOKEN: optional, only raises the GitHub API rate limit when mirroring plugin releases. Never logged. */
   githubToken: string | undefined;
+  /** ANTHROPIC_API_KEY: enables cloud AI runs (/v1/assistant/runs). Never logged. */
+  anthropicApiKey: string | undefined;
+  /** ASSISTANT_MODEL (default claude-opus-5-5). */
+  assistantModel: string;
+  /** ASSISTANT_MAX_TURNS: model calls per run (default 40). */
+  assistantMaxTurns: number;
+  /** ASSISTANT_CODE_EXECUTION: Anthropic's code-execution sandbox (default on; "0" disables). */
+  assistantCodeExecution: boolean;
+  /** ASSISTANT_WEB_SEARCH: Anthropic's web search (default off). */
+  assistantWebSearch: boolean;
 }
 
 export interface VaultConfig {
@@ -79,6 +89,17 @@ export function parsePublicUrl(raw: string | undefined): string | undefined {
   return value;
 }
 
+const isFalse = (value: string | undefined) => ["0", "false", "no", "off"].includes(value?.trim().toLowerCase() ?? "");
+
+/** ASSISTANT_MAX_TURNS: a positive integer, default 40. */
+export function parseMaxTurns(raw: string | undefined): number {
+  const value = nonEmpty(raw);
+  if (value === undefined) return 40;
+  const turns = Number(value);
+  if (!Number.isInteger(turns) || turns < 1 || turns > 1000) throw new Error(`Invalid ASSISTANT_MAX_TURNS: ${value}`);
+  return turns;
+}
+
 export function parseApiKeys(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
@@ -117,5 +138,10 @@ export function loadConfig(
     vault: parseVaultConfig(env, logger),
     publicUrl: parsePublicUrl(env.PUBLIC_URL),
     githubToken: nonEmpty(env.GITHUB_TOKEN),
+    anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
+    assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "claude-opus-5-5",
+    assistantMaxTurns: parseMaxTurns(env.ASSISTANT_MAX_TURNS),
+    assistantCodeExecution: !isFalse(env.ASSISTANT_CODE_EXECUTION),
+    assistantWebSearch: isTrue(env.ASSISTANT_WEB_SEARCH),
   };
 }

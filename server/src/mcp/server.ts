@@ -354,5 +354,20 @@ export function createMcpServer(services: Services): McpServer {
     ({ query, prefix, limit }) => run(() => services.vault.search(query, { prefix, limit })),
   );
 
+  server.registerTool(
+    "vault_links",
+    {
+      title: "Vault note links",
+      description:
+        "列出筆記的對外連結（[[wikilink]] 解析成的檔案路徑）與反向連結（連到這則筆記的其他筆記），解析方式與 Obsidian 相同：" +
+        "先比對路徑（不含 .md），再比對檔名（路徑最短者優先），最後比對 aliases，不分大小寫。回傳 { path, outgoing, backlinks }。\n" +
+        "Outgoing links (wikilinks resolved to vault paths) and backlinks (notes linking here) of a note, resolved like Obsidian: " +
+        "by path without .md, then by file name (shortest path wins), then aliases; case-insensitive. Returns { path, outgoing, backlinks }.",
+      inputSchema: { path: vaultPath.describe("筆記路徑，或像 [[筆記]] 那樣的連結名稱 Note path, or a link target such as a note name") },
+      annotations: { readOnlyHint: true },
+    },
+    ({ path }) => run(() => services.vaultIndex.links(path)),
+  );
+
   return server;
 }

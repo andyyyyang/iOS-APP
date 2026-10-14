@@ -2,6 +2,7 @@ import type { Express } from "express";
 import pg from "pg";
 import { afterEach } from "vitest";
 import { bootstrapStore } from "../src/bootstrap.js";
+import type { AssistantOptions } from "../src/assistant/service.js";
 import type { ClassificationCandidate, Classifier, ClassifierResult } from "../src/classifier/types.js";
 import type { VaultConfig } from "../src/config.js";
 import { createApp } from "../src/http/app.js";
@@ -70,6 +71,8 @@ export async function setup(
     now?: () => number;
     /** Fake GitHub (plus token and logger) for the plugin release mirror; default: real fetch (never called) and a silent logger. */
     pluginMirror?: { fetch?: FetchFn; githubToken?: string; logger?: Pick<Console, "info" | "warn" | "error"> };
+    /** Cloud AI (scripted model, fake Jev); default: off. */
+    assistant?: AssistantOptions;
   } = {},
 ): Promise<{
   app: Express;
@@ -90,6 +93,7 @@ export async function setup(
     publicUrl: options.publicUrl,
     obsidianPlugin,
     now: options.now,
+    assistant: options.assistant,
   });
   return { app, store };
 }
