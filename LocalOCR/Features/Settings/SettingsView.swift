@@ -9,6 +9,8 @@ struct SettingsView: View {
     @AppStorage(OCRSettings.Key.autoSaveHistory) private var autoSaveHistory = true
     @AppStorage(ServerSettings.Key.useJev) private var useJev = true
     @AppStorage(AIPrivacy.localOnlyKey) private var localOnly = false
+    @AppStorage(AssistantEngineMode.key) private var engine = AssistantEngineMode.medium.rawValue
+    @State private var assistant = KnowledgeAssistant.shared
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @State private var aiStatus = OnDeviceAIStatus.current
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.light.rawValue
@@ -30,37 +32,64 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Toggle(isOn: $localOnly) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("只使用裝置端模型")
+                            Text("不使用雲端 AI 與 Jev")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if !localOnly {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("AI 預算")
+                            Picker("AI 預算", selection: $engine) {
+                                ForEach(AssistantEngineMode.budgets) { mode in
+                                    Text(mode.shortTitle).tag(mode.rawValue)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+                        .padding(.vertical, 2)
+                    }
                     NavigationLink {
-                        TemplateListView()
+                        AssistantSettingsView()
                     } label: {
-                        LabeledContent("情境樣板", value: "\(library.all.count) 種")
+                        statusRow("知識庫 AI", localOnly ? "裝置端" : (assistant.cloudAvailable ? "雲端可用" : "雲端未設定"), color: .secondary)
                     }
                     NavigationLink {
                         AIDiagnosticsView()
                     } label: {
-                        LabeledContent("Apple Intelligence") {
-                            switch aiStatus {
-                            case .available:
-                                Label("可使用", systemImage: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            case .unavailable(let reason):
-                                Text(reason)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                            }
+                        switch aiStatus {
+                        case .available:
+                            statusRow("Apple Intelligence", "可使用", systemImage: "checkmark.circle.fill", color: DS.success)
+                        case .unavailable(let reason):
+                            statusRow("Apple Intelligence", reason, color: .secondary)
                         }
+                    }
+                } header: {
+                    Text("AI")
+                } footer: {
+                    Text(localOnly
+                         ? "所有 AI 都在這台裝置的 Apple Intelligence 上執行：首頁 AI 不交給雲端、不請 Jev 判斷，智慧掃描用裝置端判斷情境。伺服器只用來搜尋與同步 vault。"
+                         : "Jev 依要求的種類與難度自動選裝置端或雲端模型，以成本為先：簡單的每個等級都用裝置端（免費）。低：盡量留在裝置端；中：依難度用 Haiku、Sonnet 或 Opus 級；高：難的工作早一點用上最好的模型。")
+                }
+
+                Section {
+                    NavigationLink {
+                        TemplateListView()
+                    } label: {
+                        statusRow("情境樣板", "\(library.all.count) 種", color: .secondary)
                     }
                     Toggle("以 Jev 判斷情境", isOn: $useJev)
                         .disabled(localOnly)
-                    if localOnly {
-                        Text("已開啟「只使用裝置端模型」（設定 → 知識庫 AI），情境由裝置端判斷。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
                 } header: {
                     Text("智慧掃描")
                 } footer: {
-                    Text("判斷情境的順序：Jev（經你的伺服器，速度快、費用極低）→ 裝置端 Apple Intelligence → 關鍵字。JSON 一律由裝置端模型產生，不需網路。")
+                    Text(localOnly
+                         ? "已開啟「只使用裝置端模型」：情境由裝置端 Apple Intelligence 與關鍵字判斷。JSON 一律由裝置端模型產生，不需網路。"
+                         : "判斷情境的順序：Jev（經你的伺服器，速度快、費用極低）→ 裝置端 Apple Intelligence → 關鍵字。JSON 一律由裝置端模型產生，不需網路。")
                 }
 
                 Section {
@@ -118,7 +147,33 @@ struct SettingsView: View {
             }
             .canvasList()
             .navigationTitle("設定")
-            .onAppear { aiStatus = OnDeviceAIStatus.current }
+            .onAppear {
+                aiStatus = OnDeviceAIStatus.current
+                // 舊版的「只用裝置端」改成開關；「自動」「一律用雲端」換成新的等級
+                if engine == AssistantEngineMode.device.rawValue {
+                    localOnly = true
+                    engine = AssistantEngineMode.medium.rawValue
+                } else if AssistantEngineMode(rawValue: engine) == nil {
+                    engine = AssistantEngineMode.from(engine).rawValue
+                }
+            }
+            .task { await assistant.checkCloud(force: true) }
+        }
+    }
+
+    /// 一列：左邊名稱，右邊狀態（一行，太長時截斷），箭頭不會被擠到下一行。
+    private func statusRow(_ title: String, _ value: String, systemImage: String? = nil, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: 8)
+            HStack(spacing: 4) {
+                if let systemImage { Image(systemName: systemImage) }
+                Text(value).lineLimit(1)
+            }
+            .font(.subheadline)
+            .foregroundStyle(color)
         }
     }
 

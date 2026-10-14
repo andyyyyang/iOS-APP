@@ -156,6 +156,8 @@ extension View {
     func canvasList() -> some View {
         scrollContentBackground(.hidden)
             .background(DS.sidebar.ignoresSafeArea())
+            // App 的主色在深色模式是白色：開關會變成白底白圓點看不出來，表單改用藍色
+            .tint(DS.link)
     }
 }
 
