@@ -4,7 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(TemplateLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.dark.rawValue
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.light.rawValue
     @State private var workspace = Workspace()
     @State private var pairingLink: PairingLinkItem?
 
@@ -12,9 +12,8 @@ struct ContentView: View {
         // 像 Obsidian 的工作區：筆記是主角，掃描、相機、紀錄是附加的工具
         WorkspaceView()
             .environment(workspace)
-            .tint(Midnight.accent)
-            .fontDesign(.rounded)
-            .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).colorScheme)
+            .tint(DS.primary)
+            .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .light).colorScheme)
             .task { await refreshServerTemplates() }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {

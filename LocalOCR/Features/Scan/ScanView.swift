@@ -23,7 +23,7 @@ struct ScanView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    BannerRow(systemImage: "sparkles", title: bannerTitle, subtitle: bannerSubtitle)
+                    BannerRow(systemImage: "doc.text.viewfinder", title: bannerTitle, subtitle: bannerSubtitle)
                     ShelfHeader(title: "智慧掃描", detail: "\(records.count) 份紀錄")
                     sourceGrid
                     if !draft.isEmpty {

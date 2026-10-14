@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 指令面板（⌘P）：搜尋筆記並開啟，或執行指令。上下鍵選擇、Return 執行、Esc 關閉。
+/// 指令面板（⌘K）：搜尋筆記並開啟，或執行指令。上下鍵選擇、Return 執行、Esc 關閉。
 struct CommandPalette: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -21,39 +21,36 @@ struct CommandPalette: View {
     var body: some View {
         let items = results
         ZStack(alignment: .top) {
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.25)
                 .ignoresSafeArea()
                 .onTapGesture { close() }
 
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 17, weight: .semibold))
-                        .gradientForeground()
-                    TextField("搜尋筆記或輸入指令…", text: $query)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(DS.textSecondary)
+                    TextField("搜尋筆記或輸入指令", text: $query)
                         .textFieldStyle(.plain)
-                        .font(.system(.title3, design: .rounded))
+                        .font(.system(size: 17))
                         .focused($focused)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .submitLabel(.go)
                         .onSubmit { run(items) }
-                    Text("esc")
-                        .font(.system(.caption2, design: .rounded).weight(.semibold))
-                        .foregroundStyle(Midnight.textTertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Midnight.hairline, lineWidth: 1))
-                        .onTapGesture { close() }
+                    Button("取消") { close() }
+                        .font(.subheadline)
+                        .foregroundStyle(DS.textSecondary)
+                        .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 18)
-                .frame(height: 58)
+                .padding(.horizontal, 16)
+                .frame(height: 52)
 
-                Divider().overlay(Midnight.hairline)
+                Rectangle().fill(DS.hairline).frame(height: 1)
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: 1) {
                             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                 row(item, isSelected: index == selection)
                                     .id(index)
@@ -64,12 +61,12 @@ struct CommandPalette: View {
                             }
                             if items.isEmpty {
                                 Text("找不到「\(query)」")
-                                    .font(.callout)
-                                    .foregroundStyle(Midnight.textTertiary)
-                                    .padding(18)
+                                    .font(.subheadline)
+                                    .foregroundStyle(DS.textTertiary)
+                                    .padding(16)
                             }
                         }
-                        .padding(8)
+                        .padding(6)
                     }
                     .frame(maxHeight: 420)
                     .onChange(of: selection) { _, value in
@@ -77,12 +74,12 @@ struct CommandPalette: View {
                     }
                 }
             }
-            .frame(maxWidth: 640)
-            .glass(cornerRadius: 22)
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Midnight.gradient, lineWidth: 1).opacity(0.35))
-            .glow(Midnight.violet, radius: 40, opacity: 0.25)
-            .padding(.horizontal, 16)
-            .padding(.top, sizeClass == .compact ? 12 : 72)
+            .frame(maxWidth: 620)
+            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
+            .padding(.horizontal, 12)
+            .padding(.top, sizeClass == .compact ? 8 : 64)
         }
         .onAppear {
             query = ""
@@ -107,35 +104,32 @@ struct CommandPalette: View {
     private func row(_ item: Item, isSelected: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: item.systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(isSelected ? AnyShapeStyle(Color.white) : AnyShapeStyle(Midnight.textSecondary))
+                .font(.system(size: 14))
+                .foregroundStyle(isSelected ? DS.onPrimary : DS.textSecondary)
                 .frame(width: 30, height: 30)
-                .background {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isSelected ? AnyShapeStyle(Midnight.gradient) : AnyShapeStyle(Midnight.raised))
-                }
+                .background(isSelected ? DS.primary : DS.control, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title)
-                    .font(.system(.body, design: .rounded).weight(isSelected ? .semibold : .regular))
-                    .foregroundStyle(Midnight.text)
+                    .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(DS.text)
                     .lineLimit(1)
                 if !item.detail.isEmpty {
                     Text(item.detail)
-                        .font(.system(.caption, design: .rounded))
-                        .foregroundStyle(Midnight.textTertiary)
+                        .font(.caption)
+                        .foregroundStyle(DS.textTertiary)
                         .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
             if item.isCommand {
                 Text("指令")
-                    .font(.system(.caption2, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(DS.textTertiary)
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(isSelected ? Midnight.raised : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.vertical, 6)
+        .background(isSelected ? DS.control : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .contentShape(Rectangle())
     }
 
@@ -162,7 +156,7 @@ struct CommandPalette: View {
             id: "note:" + note.path,
             title: note.title,
             detail: note.folder.isEmpty ? "最上層" : note.folder,
-            systemImage: note.isNotebook ? "pencil.and.scribble" : "doc.text",
+            systemImage: note.isNotebook ? "pencil" : "doc.text",
             isCommand: false,
             action: { workspace.openNote(note.path) }
         )
@@ -170,26 +164,26 @@ struct CommandPalette: View {
 
     private var commands: [Item] {
         var items: [Item] = [
-            Item(id: "new-note", title: "新增筆記", detail: "⌘N", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
-            Item(id: "new-notebook", title: "新增手寫筆記本", detail: "", systemImage: "pencil.and.scribble", isCommand: true, action: { workspace.requestNewNotebook() }),
-            Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checklist", isCommand: true, action: { workspace.newTaskNote() }),
-            Item(id: "graph", title: "開啟關聯圖", detail: "⌘G", systemImage: "circle.hexagongrid", isCommand: true, action: { workspace.open(.graph) }),
-            Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checklist.checked", isCommand: true, action: { workspace.open(.tasks) }),
-            Item(id: "vault", title: "瀏覽整個 vault", detail: "", systemImage: "books.vertical", isCommand: true, action: { workspace.open(.folder("")) }),
-            Item(id: "scan", title: "掃描文件", detail: "", systemImage: "doc.viewfinder", isCommand: true, action: { workspace.open(.scan) }),
+            Item(id: "new-note", title: "新增筆記", detail: "", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
+            Item(id: "new-notebook", title: "新增手寫筆記本", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.requestNewNotebook() }),
+            Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.newTaskNote() }),
+            Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
+            Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),
+            Item(id: "vault", title: "瀏覽整個 vault", detail: "", systemImage: "folder", isCommand: true, action: { workspace.open(.folder("")) }),
+            Item(id: "scan", title: "掃描文件", detail: "", systemImage: "viewfinder", isCommand: true, action: { workspace.open(.scan) }),
             Item(id: "camera", title: "開啟相機連續拍照", detail: "", systemImage: "camera", isCommand: true, action: { workspace.showsCamera = true }),
-            Item(id: "history", title: "掃描紀錄", detail: "", systemImage: "clock.arrow.circlepath", isCommand: true, action: { workspace.open(.history) }),
-            Item(id: "left", title: "切換左側欄", detail: "⌘[", systemImage: "sidebar.left", isCommand: true, action: { workspace.toggleLeft() }),
-            Item(id: "right", title: "切換右側欄", detail: "⌘]", systemImage: "sidebar.right", isCommand: true, action: { workspace.toggleRight() }),
-            Item(id: "search", title: "搜尋內文", detail: "⇧⌘F", systemImage: "magnifyingglass", isCommand: true, action: { workspace.showLeft(.search) }),
-            Item(id: "sync", title: "立即同步", detail: "", systemImage: "arrow.triangle.2.circlepath.icloud", isCommand: true, action: { Task { await VaultSyncCenter.shared.syncNow() } }),
-            Item(id: "settings", title: "設定", detail: "", systemImage: "gearshape", isCommand: true, action: { workspace.open(.settings) }),
+            Item(id: "history", title: "掃描紀錄", detail: "", systemImage: "clock", isCommand: true, action: { workspace.open(.history) }),
+            Item(id: "left", title: "切換左側欄", detail: "", systemImage: "sidebar.left", isCommand: true, action: { workspace.toggleLeft() }),
+            Item(id: "right", title: "切換右側欄", detail: "", systemImage: "sidebar.right", isCommand: true, action: { workspace.toggleRight() }),
+            Item(id: "search", title: "搜尋內文", detail: "", systemImage: "magnifyingglass", isCommand: true, action: { workspace.showLeft(.search) }),
+            Item(id: "sync", title: "立即同步", detail: "", systemImage: "arrow.triangle.2.circlepath", isCommand: true, action: { Task { await VaultSyncCenter.shared.syncNow() } }),
+            Item(id: "settings", title: "設定", detail: "", systemImage: "slider.horizontal.3", isCommand: true, action: { workspace.open(.settings) }),
         ]
         if !VaultSyncCenter.shared.isConfigured {
-            items.insert(Item(id: "pair", title: "與 Obsidian 配對", detail: "", systemImage: "qrcode.viewfinder", isCommand: true, action: { workspace.showsPairing = true }), at: 0)
+            items.insert(Item(id: "pair", title: "與 Obsidian 配對", detail: "", systemImage: "link", isCommand: true, action: { workspace.showsPairing = true }), at: 0)
         }
         if workspace.active != .start {
-            items.append(Item(id: "close", title: "關閉目前分頁", detail: "⌘W", systemImage: "xmark.square", isCommand: true, action: { workspace.closeActive() }))
+            items.append(Item(id: "close", title: "關閉目前分頁", detail: "", systemImage: "xmark", isCommand: true, action: { workspace.closeActive() }))
         }
         return items
     }

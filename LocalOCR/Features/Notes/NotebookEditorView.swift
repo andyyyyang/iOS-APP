@@ -123,7 +123,9 @@ struct NotebookEditorView: View {
             Button {
                 showsInspector.toggle()
             } label: {
-                Label("Apple Intelligence", systemImage: "sparkles")
+                Text("AI")
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityLabel("Apple Intelligence")
             }
         }
     }
@@ -385,7 +387,7 @@ private struct NotebookInspector: View {
                     Task { await analyze() }
                 } label: {
                     HStack {
-                        Label(archive?.insights == nil ? "整理這份筆記" : "重新整理", systemImage: "sparkles")
+                        Text(archive?.insights == nil ? "整理這份筆記" : "重新整理")
                         Spacer()
                         if isWorking { ProgressView() }
                     }

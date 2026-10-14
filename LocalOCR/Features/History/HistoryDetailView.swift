@@ -154,7 +154,7 @@ struct HistoryDetailView: View {
             Button {
                 showsAnalysis = true
             } label: {
-                Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "wand.and.stars")
+                Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

@@ -47,7 +47,7 @@ enum WorkspaceTab: Hashable, Identifiable {
 
     var title: String {
         switch self {
-        case .start: return "新分頁"
+        case .start: return "首頁"
         case .note(let path): return ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         case .folder(let path):
             guard !path.isEmpty else { return NotesSettings.vaultName.isEmpty ? "Vault" : NotesSettings.vaultName }
@@ -62,14 +62,14 @@ enum WorkspaceTab: Hashable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .start: return "sparkles"
+        case .start: return "house"
         case .note: return "doc.text"
         case .folder: return "folder"
-        case .graph: return "circle.hexagongrid"
-        case .tasks: return "checklist"
-        case .scan: return "doc.viewfinder"
-        case .history: return "clock.arrow.circlepath"
-        case .settings: return "gearshape"
+        case .graph: return "point.3.connected.trianglepath.dotted"
+        case .tasks: return "checkmark.square"
+        case .scan: return "viewfinder"
+        case .history: return "clock"
+        case .settings: return "slider.horizontal.3"
         }
     }
 
@@ -99,7 +99,7 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
         switch self {
         case .files: return "folder"
         case .search: return "magnifyingglass"
-        case .tags: return "number"
+        case .tags: return "tag"
         }
     }
 }
@@ -107,9 +107,8 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
 /// 右側欄的內容（目前筆記的資訊）。
 enum RightPanelMode: String, CaseIterable, Identifiable {
     case outline
-    case backlinks
+    case links
     case properties
-    case graph
     case ai
 
     var id: Self { self }
@@ -117,20 +116,9 @@ enum RightPanelMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .outline: return "大綱"
-        case .backlinks: return "反向連結"
+        case .links: return "連結"
         case .properties: return "屬性"
-        case .graph: return "局部關聯圖"
-        case .ai: return "Apple Intelligence"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .outline: return "list.bullet.indent"
-        case .backlinks: return "link"
-        case .properties: return "info.circle"
-        case .graph: return "circle.hexagongrid"
-        case .ai: return "sparkles"
+        case .ai: return "AI"
         }
     }
 }
@@ -162,8 +150,8 @@ final class Workspace {
     var leftMode: LeftPanelMode = .files
     private(set) var isLeftOpen = true
     private(set) var isRightOpen = true
-    private(set) var leftWidth: CGFloat = 288
-    private(set) var rightWidth: CGFloat = 312
+    private(set) var leftWidth: CGFloat = 264
+    private(set) var rightWidth: CGFloat = 300
     var rightMode: RightPanelMode = .outline
     private(set) var expandedFolders: Set<String> = []
 
@@ -180,6 +168,8 @@ final class Workspace {
     /// Apple Intelligence 對各筆記的整理結果（切換面板時保留）。
     var insights: [String: NoteInsights] = [:]
 
+    /// 黑色功能列的寬度。
+    static let railWidth: CGFloat = 56
     static let leftWidthRange: ClosedRange<CGFloat> = 220...440
     static let rightWidthRange: ClosedRange<CGFloat> = 260...460
     private static let maxTabs = 10

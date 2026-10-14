@@ -60,7 +60,7 @@ struct NewNotebookSheet: View {
                     .padding(.vertical, 4)
                 }
             }
-            .midnightList()
+            .canvasList()
             .navigationTitle("新增手寫筆記本")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -74,7 +74,6 @@ struct NewNotebookSheet: View {
             .onAppear { titleFocused = true }
         }
         .presentationDetents([.medium, .large])
-        .presentationBackground(.ultraThinMaterial)
     }
 
     private func create() {
@@ -107,11 +106,11 @@ private struct PaperPreview: View {
             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(isSelected ? AnyShapeStyle(Midnight.gradient) : AnyShapeStyle(Midnight.hairline), lineWidth: isSelected ? 2.5 : 1)
+                    .strokeBorder(isSelected ? DS.primary : DS.hairline, lineWidth: isSelected ? 2.5 : 1)
             }
             Text(style.title)
                 .font(.caption)
-                .foregroundStyle(isSelected ? Midnight.accent : Midnight.textSecondary)
+                .foregroundStyle(isSelected ? DS.text : DS.textSecondary)
         }
     }
 }

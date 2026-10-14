@@ -57,7 +57,7 @@ struct GraphData {
                 path: path,
                 title: WorkspaceTab.note(path).title,
                 degree: adjacency[path]?.count ?? 0,
-                color: Midnight.hue(for: (path as NSString).deletingLastPathComponent)
+                color: DS.textTertiary
             )
         }
         return GraphData(nodes: nodes, edges: edges)
@@ -227,7 +227,6 @@ struct GraphView: View {
             let size = proxy.size
             let tick = frame
             ZStack {
-                DotGrid(spacing: 26, opacity: 0.07)
                 if let model {
                     Canvas { context, canvasSize in
                         _ = tick
@@ -236,7 +235,7 @@ struct GraphView: View {
                     if model.data.nodes.isEmpty || (focus == nil && model.data.edges.isEmpty && model.data.nodes.count < 2) {
                         Text(focus == nil ? "筆記之間還沒有連結。在筆記中寫 [[筆記名稱]] 就會出現在這裡。" : "這則筆記還沒有連結。")
                             .font(.footnote)
-                            .foregroundStyle(Midnight.textTertiary)
+                            .foregroundStyle(DS.textTertiary)
                             .multilineTextAlignment(.center)
                             .padding(24)
                     }
@@ -269,7 +268,7 @@ struct GraphView: View {
             .task(id: dataKey) { rebuild(size: size) }
             .task(id: model.map { ObjectIdentifier($0) }) { await run() }
         }
-        .clipShape(RoundedRectangle(cornerRadius: Midnight.radiusM, style: .continuous))
+        .clipShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(focus == nil ? "關聯圖" : "局部關聯圖")
         .accessibilityValue("\(model?.data.nodes.count ?? 0) 則筆記，\(model?.data.edges.count ?? 0) 條連結")
@@ -378,7 +377,7 @@ struct GraphView: View {
         let lit: Set<Int> = highlight.map { model.neighbors[$0].union([$0]) } ?? []
         let screen = positions.map { toScreen($0, size: size) }
 
-        // 連線：一般的淡淡一條，與目前節點相連的用紫青漸層
+        // 連線：一般的淡淡一條，與目前節點相連的加深
         var plain = Path()
         var bright = Path()
         for (a, b) in model.data.edges {
@@ -390,38 +389,24 @@ struct GraphView: View {
                 plain.addLine(to: screen[b])
             }
         }
-        context.stroke(plain, with: .color(Midnight.text.opacity(highlight == nil ? 0.16 : 0.07)), lineWidth: 0.8)
-        context.stroke(
-            bright,
-            with: .linearGradient(Gradient(colors: [Midnight.violet, Midnight.cyan]), startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)),
-            lineWidth: 1.6
-        )
+        context.stroke(plain, with: .color(DS.textTertiary.opacity(highlight == nil ? 0.55 : 0.25)), lineWidth: 0.8)
+        context.stroke(bright, with: .color(DS.text.opacity(0.7)), lineWidth: 1.2)
 
-        // 光暈
-        context.drawLayer { layer in
-            layer.addFilter(.blur(radius: 9))
-            for index in lit.isEmpty ? Set(model.labeled.prefix(6)) : lit {
-                let radius = model.radius(index) * scale * 2.4
-                let point = screen[index]
-                layer.fill(
-                    Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)),
-                    with: .color((index == highlight ? Midnight.violet : model.data.nodes[index].color).opacity(0.55))
-                )
-            }
-        }
-
-        // 節點
-        for (index, node) in model.data.nodes.enumerated() {
+        // 節點：灰色；目前的節點是黑色，相鄰的深灰，其他變淡
+        for index in model.data.nodes.indices {
             let radius = model.radius(index) * scale
             let point = screen[index]
             let rect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
             let dimmed = highlight != nil && !lit.contains(index)
+            let color: Color
             if index == highlight || index == model.focusIndex {
-                context.fill(Path(ellipseIn: rect), with: .linearGradient(Gradient(colors: [Midnight.violet, Midnight.cyan]), startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.maxX, y: rect.maxY)))
-                context.stroke(Path(ellipseIn: rect.insetBy(dx: -2.5, dy: -2.5)), with: .color(Color.white.opacity(0.5)), lineWidth: 1)
+                color = DS.primary
+            } else if lit.contains(index) {
+                color = DS.textSecondary
             } else {
-                context.fill(Path(ellipseIn: rect), with: .color(node.color.opacity(dimmed ? 0.22 : 0.92)))
+                color = DS.textTertiary.opacity(dimmed ? 0.35 : 0.9)
             }
+            context.fill(Path(ellipseIn: rect), with: .color(color))
         }
 
         // 名稱：目前節點與相鄰的、連結最多的幾個；放大後全部顯示
@@ -431,8 +416,8 @@ struct GraphView: View {
             let dimmed = highlight != nil && !lit.contains(index)
             let point = screen[index]
             let label = Text(node.title)
-                .font(.system(size: index == highlight ? 12 : 10, weight: index == highlight ? .semibold : .medium, design: .rounded))
-                .foregroundStyle(index == highlight ? Midnight.text : Midnight.textSecondary.opacity(dimmed ? 0.35 : 1))
+                .font(.system(size: index == highlight ? 12 : 10, weight: index == highlight ? .semibold : .regular))
+                .foregroundStyle(index == highlight ? DS.text : DS.textSecondary.opacity(dimmed ? 0.35 : 1))
             context.draw(label, at: CGPoint(x: point.x, y: point.y + model.radius(index) * scale + 5), anchor: .top)
         }
     }
@@ -449,7 +434,7 @@ struct GraphView: View {
                         }
                         frame &+= 1
                     } label: {
-                        Image(systemName: "plus.magnifyingglass")
+                        Image(systemName: "plus")
                     }
                     .accessibilityLabel("放大")
                     Button {
@@ -459,25 +444,26 @@ struct GraphView: View {
                         }
                         frame &+= 1
                     } label: {
-                        Image(systemName: "minus.magnifyingglass")
+                        Image(systemName: "minus")
                     }
                     .accessibilityLabel("縮小")
                     Button {
                         fit(size: size)
                     } label: {
-                        Image(systemName: "scope")
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
                     }
                     .accessibilityLabel("整張圖置中")
                     Button {
                         model?.simulation.reheat(1)
                     } label: {
-                        Image(systemName: "wind")
+                        Image(systemName: "arrow.clockwise")
                     }
                     .accessibilityLabel("重新排列")
                 }
-                .buttonStyle(GlassIconButtonStyle(size: 36))
+                .buttonStyle(IconButtonStyle(size: 34))
                 .padding(4)
-                .glass(cornerRadius: 14, shadow: false)
+                .background(DS.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
             }
             Spacer()
         }
@@ -492,20 +478,17 @@ struct GraphPage: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             GraphView(focus: nil, showsControls: true)
-                .padding(10)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("關聯圖")
-                    .font(.system(size: 38, weight: .bold, design: .rounded))
-                    .gradientForeground()
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(DS.text)
                 let links = store.notes.reduce(0) { $0 + $1.links.count }
-                Text("\(store.notes.count) 則筆記 · \(links) 個連結")
-                    .font(.system(.subheadline, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Midnight.textSecondary)
-                Text("拖曳移動 · 兩指縮放 · 點一下開啟")
-                    .font(.system(.caption, design: .rounded))
-                    .foregroundStyle(Midnight.textTertiary)
+                Text("\(store.notes.count) 則筆記 · \(links) 個連結 · 拖曳移動、兩指縮放、點一下開啟")
+                    .font(.subheadline)
+                    .foregroundStyle(DS.textSecondary)
             }
-            .padding(28)
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
             .allowsHitTesting(false)
         }
     }

@@ -17,32 +17,53 @@ struct LeftSidebar: View {
     }
 }
 
-/// 側欄標題列：大標題＋右側按鈕。
+/// 側欄標題列：標題、說明與右側按鈕。
 struct PanelHeader<Trailing: View>: View {
     let title: String
     var subtitle: String?
+    var showsSyncDot = false
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(.title3, design: .rounded).weight(.bold))
-                    .foregroundStyle(Midnight.text)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(DS.text)
                     .lineLimit(1)
                 if let subtitle {
-                    Text(subtitle)
-                        .font(.system(.caption, design: .rounded))
-                        .foregroundStyle(Midnight.textTertiary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if showsSyncDot {
+                            Circle().fill(DS.success).frame(width: 7, height: 7)
+                        }
+                        Text(subtitle)
+                            .lineLimit(1)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(DS.textSecondary)
                 }
             }
             Spacer(minLength: 8)
             trailing()
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 16)
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .padding(.top, 14)
         .padding(.bottom, 10)
+    }
+}
+
+/// 側欄標題列右側的小按鈕（白底細框）。
+private struct SmallBoxButtonLabel: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(DS.text)
+            .frame(width: 30, height: 30)
+            .background(DS.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
     }
 }
 
@@ -63,21 +84,21 @@ private struct ExplorerRow: Identifiable {
 struct FileExplorer: View {
     @Environment(Workspace.self) private var workspace
     @State private var store = NotesStore.shared
+    @State private var sync = VaultSyncCenter.shared
     @State private var previewURL: URL?
     @State private var folderPrompt: String?
     @State private var folderName = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: NotesStore.folderTitle(""), subtitle: "\(store.notes.count) 則筆記 · \(store.folders.count) 個資料夾") {
+            PanelHeader(title: "檔案", subtitle: subtitle, showsSyncDot: sync.isConfigured && sync.lastError == nil) {
                 Menu {
                     Button { workspace.newTextNote(in: "") } label: { Label("新增筆記", systemImage: "square.and.pencil") }
-                    Button { workspace.requestNewNotebook(in: "") } label: { Label("新增手寫筆記本", systemImage: "pencil.and.scribble") }
+                    Button { workspace.requestNewNotebook(in: "") } label: { Label("新增手寫筆記本", systemImage: "pencil") }
                     Button { promptFolder(in: "") } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
-                    Image(systemName: "plus")
+                    SmallBoxButtonLabel(systemImage: "plus")
                 }
-                .buttonStyle(GlassIconButtonStyle(size: 32))
                 .accessibilityLabel("新增")
             }
 
@@ -87,17 +108,17 @@ struct FileExplorer: View {
                         rowView(row)
                     }
                     if store.notes.isEmpty && store.folders.isEmpty {
-                        Text(VaultSyncCenter.shared.isConfigured ? "vault 是空的" : "與 Obsidian 配對後，整個 vault 會出現在這裡。")
+                        Text(sync.isConfigured ? "vault 是空的" : "與 Obsidian 配對後，整個 vault 會出現在這裡。")
                             .font(.footnote)
-                            .foregroundStyle(Midnight.textTertiary)
-                            .padding(16)
+                            .foregroundStyle(DS.textTertiary)
+                            .padding(14)
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 16)
             }
             .scrollIndicators(.hidden)
-            .refreshable { await VaultSyncCenter.shared.syncNow() }
+            .refreshable { await sync.syncNow() }
         }
         .quickLookPreview($previewURL)
         .alert("新增資料夾", isPresented: Binding(get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })) {
@@ -109,6 +130,13 @@ struct FileExplorer: View {
         } message: {
             Text(folderPrompt.map { $0.isEmpty ? "建立在最上層" : "建立在「\($0)」中" } ?? "")
         }
+    }
+
+    private var subtitle: String {
+        if !sync.isConfigured { return "尚未配對 · \(store.notes.count) 則筆記" }
+        if sync.isSyncing { return sync.progress.map { "下載中 \($0.done)/\($0.total)" } ?? "同步中…" }
+        if sync.lastError != nil { return "同步失敗 · \(store.notes.count) 則筆記" }
+        return "已同步 · \(store.notes.count) 則筆記"
     }
 
     /// 展開中的資料夾樹攤平成一列列（資料夾在前，再來是筆記與其他檔案）。
@@ -142,36 +170,37 @@ struct FileExplorer: View {
             TreeRow(depth: row.depth, isSelected: workspace.active == .folder(folder)) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Midnight.textTertiary)
+                    .foregroundStyle(DS.textTertiary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .frame(width: 12)
-                Image(systemName: expanded ? "folder.fill" : "folder")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Midnight.hue(for: folder))
+                    .frame(width: 10)
+                Image(systemName: "folder")
+                    .font(.system(size: 13))
+                    .foregroundStyle(DS.textSecondary)
                 Text(NotesStore.folderTitle(folder))
-                    .foregroundStyle(Midnight.text)
+                    .foregroundStyle(DS.text)
                 Spacer(minLength: 4)
                 Text("\(store.fileCount(inFolder: folder))")
-                    .font(.system(.caption2, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(DS.textTertiary)
             } action: {
-                withAnimation(.snappy(duration: 0.22)) { workspace.toggleFolder(folder) }
+                withAnimation(.snappy(duration: 0.2)) { workspace.toggleFolder(folder) }
             }
             .contextMenu {
                 Button { workspace.newTextNote(in: folder) } label: { Label("新增筆記", systemImage: "square.and.pencil") }
-                Button { workspace.requestNewNotebook(in: folder) } label: { Label("新增手寫筆記本", systemImage: "pencil.and.scribble") }
+                Button { workspace.requestNewNotebook(in: folder) } label: { Label("新增手寫筆記本", systemImage: "pencil") }
                 Button { promptFolder(in: folder) } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 Divider()
                 Button { workspace.open(.folder(folder)) } label: { Label("在分頁中開啟", systemImage: "rectangle.on.rectangle") }
             }
         case .note(let note):
-            TreeRow(depth: row.depth, isSelected: workspace.activeNotePath == note.path) {
-                Color.clear.frame(width: 12)
-                Image(systemName: note.isNotebook ? "pencil.and.scribble" : "doc.text")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(workspace.activeNotePath == note.path ? AnyShapeStyle(Midnight.textGradient) : AnyShapeStyle(Midnight.textSecondary))
+            let selected = workspace.activeNotePath == note.path
+            TreeRow(depth: row.depth, isSelected: selected) {
+                Color.clear.frame(width: 10)
+                Image(systemName: note.isNotebook ? "pencil" : "doc")
+                    .font(.system(size: 12))
+                    .foregroundStyle(selected ? DS.text : DS.textTertiary)
                 Text(note.title)
-                    .foregroundStyle(Midnight.text)
+                    .foregroundStyle(DS.text)
                 Spacer(minLength: 0)
             } action: {
                 workspace.openNote(note.path)
@@ -184,17 +213,17 @@ struct FileExplorer: View {
             }
         case .file(let file):
             TreeRow(depth: row.depth, isSelected: false) {
-                Color.clear.frame(width: 12)
+                Color.clear.frame(width: 10)
                 Image(systemName: file.systemImage)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(DS.textTertiary)
                 Text(file.name)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
                 Spacer(minLength: 0)
                 if !file.isLocal {
                     Image(systemName: "icloud.and.arrow.down")
                         .font(.caption2)
-                        .foregroundStyle(Midnight.textTertiary)
+                        .foregroundStyle(DS.textTertiary)
                 }
             } action: {
                 Task {
@@ -222,7 +251,7 @@ struct FileExplorer: View {
     }
 }
 
-/// 檔案樹的一列：縮排導引線、選取時的漸層光條。
+/// 檔案樹的一列：選取時是白底。
 private struct TreeRow<Content: View>: View {
     let depth: Int
     let isSelected: Bool
@@ -236,31 +265,16 @@ private struct TreeRow<Content: View>: View {
             HStack(spacing: 7) {
                 content()
             }
-            .font(.system(.subheadline, design: .rounded).weight(isSelected ? .semibold : .regular))
+            .font(.system(size: 13.5, weight: isSelected ? .semibold : .regular))
             .lineLimit(1)
-            .padding(.leading, CGFloat(depth) * 16 + 8)
+            .padding(.leading, CGFloat(depth) * 14 + 8)
             .padding(.trailing, 10)
             .frame(height: 30)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(alignment: .leading) {
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isSelected ? Midnight.raised : (isHovering ? Midnight.raised.opacity(0.6) : Color.clear))
-                    if isSelected {
-                        Capsule()
-                            .fill(Midnight.gradient)
-                            .frame(width: 3, height: 16)
-                            .glow(radius: 6)
-                            .padding(.leading, 2)
-                    }
-                    // 縮排導引線
-                    ForEach(0..<depth, id: \.self) { level in
-                        Rectangle()
-                            .fill(Midnight.hairline)
-                            .frame(width: 1)
-                            .padding(.leading, CGFloat(level) * 16 + 14)
-                    }
-                }
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? DS.card : (isHovering ? DS.card.opacity(0.6) : Color.clear))
+                    .shadow(color: .black.opacity(isSelected ? 0.06 : 0), radius: 1, y: 1)
             }
             .contentShape(Rectangle())
         }
@@ -282,7 +296,7 @@ struct SearchPanel: View {
             PanelHeader(title: "搜尋", subtitle: "標題、標籤與內文") { EmptyView() }
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Midnight.textTertiary)
+                    .foregroundStyle(DS.textTertiary)
                 TextField("搜尋整個 vault", text: $query)
                     .textFieldStyle(.plain)
                     .focused($focused)
@@ -292,58 +306,54 @@ struct SearchPanel: View {
                     Button {
                         query = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(Midnight.textTertiary)
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(DS.textTertiary)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("清除")
                 }
             }
-            .font(.system(.body, design: .rounded))
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .background(Midnight.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(focused ? AnyShapeStyle(Midnight.gradient) : AnyShapeStyle(Midnight.hairline), lineWidth: 1))
+            .font(.subheadline)
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous).strokeBorder(focused ? DS.textSecondary : DS.cardBorder, lineWidth: 1))
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
 
             let trimmed = query.trimmingCharacters(in: .whitespaces)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     if !trimmed.isEmpty {
                         let results = Array(store.notes(inFolder: nil, query: trimmed).prefix(80))
-                        SectionLabel("結果", trailing: "\(results.count)")
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
+                        Text("\(results.count) 個結果")
+                            .font(.caption)
+                            .foregroundStyle(DS.textTertiary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
                         ForEach(results) { note in
                             Button {
                                 workspace.openNote(note.path)
                             } label: {
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     Text(note.title)
-                                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                                        .foregroundStyle(Midnight.text)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(DS.text)
                                     Text(excerpt(for: note, query: trimmed))
                                         .font(.caption)
-                                        .foregroundStyle(Midnight.textSecondary)
+                                        .foregroundStyle(DS.textSecondary)
                                         .lineLimit(2)
                                     if !note.folder.isEmpty {
                                         Text(note.folder)
-                                            .font(.system(.caption2, design: .rounded))
-                                            .foregroundStyle(Midnight.textTertiary)
+                                            .font(.caption2)
+                                            .foregroundStyle(DS.textTertiary)
                                     }
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(workspace.activeNotePath == note.path ? Midnight.raised : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .background(workspace.activeNotePath == note.path ? DS.card : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                        }
-                        if results.isEmpty {
-                            Text("找不到「\(trimmed)」")
-                                .font(.footnote)
-                                .foregroundStyle(Midnight.textTertiary)
-                                .padding(10)
                         }
                     }
                 }
@@ -355,7 +365,7 @@ struct SearchPanel: View {
         .onAppear { focused = true }
     }
 
-    /// 內文中第一個符合處的前後文，符合的字以強調色標出。
+    /// 內文中第一個符合處的前後文，符合的字加粗。
     private func excerpt(for note: NoteSummary, query: String) -> AttributedString {
         let text = (store.text(of: note.path) ?? note.snippet).replacingOccurrences(of: "\n", with: " ")
         guard let range = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else {
@@ -365,7 +375,7 @@ struct SearchPanel: View {
         let end = text.index(range.upperBound, offsetBy: 80, limitedBy: text.endIndex) ?? text.endIndex
         var result = AttributedString((start > text.startIndex ? "…" : "") + String(text[start..<range.lowerBound]))
         var match = AttributedString(String(text[range]))
-        match.foregroundColor = Midnight.accent
+        match.foregroundColor = DS.text
         match.inlinePresentationIntent = .stronglyEmphasized
         result += match
         result += AttributedString(String(text[range.upperBound..<end]) + (end < text.endIndex ? "…" : ""))
@@ -384,26 +394,21 @@ struct TagsPanel: View {
         VStack(spacing: 0) {
             PanelHeader(title: "標籤", subtitle: "\(store.tagCounts.count) 個標籤") { EmptyView() }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(store.tagCounts, id: \.tag) { item in
                         Button {
-                            withAnimation(.snappy(duration: 0.22)) { expanded = expanded == item.tag ? nil : item.tag }
+                            withAnimation(.snappy(duration: 0.2)) { expanded = expanded == item.tag ? nil : item.tag }
                         } label: {
                             HStack(spacing: 8) {
-                                Text("#")
-                                    .font(.system(.subheadline, design: .rounded).weight(.bold))
-                                    .foregroundStyle(Midnight.hue(for: item.tag))
-                                Text(item.tag)
-                                    .font(.system(.subheadline, design: .rounded))
-                                    .foregroundStyle(Midnight.text)
+                                Chip(text: item.tag, pastel: DS.Pastel.stable(for: item.tag))
                                 Spacer()
                                 Text("\(item.count)")
-                                    .font(.system(.caption, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(Midnight.textTertiary)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(DS.textTertiary)
                             }
-                            .padding(.horizontal, 10)
-                            .frame(height: 32)
-                            .background(expanded == item.tag ? Midnight.raised : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .padding(.horizontal, 8)
+                            .frame(height: 34)
+                            .background(expanded == item.tag ? DS.card : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -412,11 +417,11 @@ struct TagsPanel: View {
                                 Button {
                                     workspace.openNote(note.path)
                                 } label: {
-                                    Label(note.title, systemImage: note.isNotebook ? "pencil.and.scribble" : "doc.text")
-                                        .font(.system(.subheadline, design: .rounded))
-                                        .foregroundStyle(Midnight.textSecondary)
+                                    Text(note.title)
+                                        .font(.system(size: 13.5))
+                                        .foregroundStyle(DS.text)
                                         .lineLimit(1)
-                                        .padding(.leading, 28)
+                                        .padding(.leading, 20)
                                         .frame(height: 28)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
@@ -426,10 +431,10 @@ struct TagsPanel: View {
                         }
                     }
                     if store.tagCounts.isEmpty {
-                        Text("在筆記的屬性加入 tags，或在內文寫 #標籤，就會出現在這裡。")
+                        Text("在筆記的屬性加入 tags，就會出現在這裡。")
                             .font(.footnote)
-                            .foregroundStyle(Midnight.textTertiary)
-                            .padding(16)
+                            .foregroundStyle(DS.textTertiary)
+                            .padding(14)
                     }
                 }
                 .padding(.horizontal, 8)

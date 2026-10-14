@@ -11,7 +11,7 @@ struct TemplateListView: View {
             section("伺服器", templates: library.all.filter { $0.origin == .server })
             section("自訂", templates: library.all.filter { $0.origin == .custom })
         }
-        .midnightList()
+        .canvasList()
         .navigationTitle("情境樣板")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -72,7 +72,7 @@ struct TemplateDetailView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     CardHeader(title: template.origin.displayName, systemImage: "square.stack.3d.up", trailing: template.id)
                     Text(template.name)
-                        .font(.system(size: 30, weight: .semibold, design: .rounded))
+                        .font(.system(size: 30, weight: .semibold))
                     Text(template.description)
                         .foregroundStyle(.secondary)
                 }

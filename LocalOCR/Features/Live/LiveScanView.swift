@@ -102,7 +102,7 @@ struct LiveScanView: View {
                 shutterButton
 
                 Button(action: analyzeDraft) {
-                    Label("分析（\(draft.pages.count)）", systemImage: "wand.and.stars")
+                    Label("分析（\(draft.pages.count)）", systemImage: "arrow.right")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(draft.pages.isEmpty || draft.pendingCount > 0)

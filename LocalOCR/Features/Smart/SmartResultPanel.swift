@@ -58,7 +58,7 @@ struct SmartResultPanel: View {
                     Button(template.name) { onRerun(template) }
                 }
                 Divider()
-                Button("重新自動判斷", systemImage: "wand.and.stars") { onRerun(nil) }
+                Button("重新自動判斷", systemImage: "arrow.clockwise") { onRerun(nil) }
             } label: {
                 Label("更換情境", systemImage: "arrow.triangle.2.circlepath")
                     .font(.subheadline.weight(.medium))
@@ -72,7 +72,7 @@ struct SmartResultPanel: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(template.name)
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .font(.system(size: 30, weight: .semibold))
                 Text(template.description)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

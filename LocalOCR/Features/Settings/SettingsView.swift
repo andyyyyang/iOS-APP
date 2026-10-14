@@ -10,7 +10,7 @@ struct SettingsView: View {
     @AppStorage(ServerSettings.Key.useJev) private var useJev = true
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @State private var aiStatus = OnDeviceAIStatus.current
-    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.dark.rawValue
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.light.rawValue
 
     var body: some View {
         NavigationStack {
@@ -25,7 +25,7 @@ struct SettingsView: View {
                 } header: {
                     Text("外觀")
                 } footer: {
-                    Text("Midnight 以深色為主；淺色模式改用霧白玻璃。")
+                    Text("預設為淺色；深色模式改用深灰底。")
                 }
 
                 Section {
@@ -109,7 +109,7 @@ struct SettingsView: View {
                     LabeledContent("版本", value: appVersion)
                 }
             }
-            .midnightList()
+            .canvasList()
             .navigationTitle("設定")
             .onAppear { aiStatus = OnDeviceAIStatus.current }
         }

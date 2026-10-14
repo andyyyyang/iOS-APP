@@ -30,9 +30,13 @@ enum MarkdownHighlighter {
         case heading, doneTask, taskMarker, listMarker, quote, bold, italic, highlight, code, link, tag, codeBlock, frontmatter
     }
 
-    static var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: .body).rounded }
-    /// Midnight 的強調色（清單符號、待辦、連結、標籤、游標）。
-    static let accent = UIColor { $0.userInterfaceStyle == .light ? UIColor(hex: 0x6D3FE0) : UIColor(hex: 0xB197FC) }
+    static var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: .body) }
+    /// 連結與標籤的顏色。
+    static let accent = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x9DAEFF) : UIColor(hex: 0x3D5BD9) }
+    /// 清單符號與待辦方框（灰色）。
+    static let marker = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x8A8A94) : UIColor(hex: 0x8A8A94) }
+    /// 游標與選取（黑色；深色模式為白色）。
+    static let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xF2F2F4) : UIColor(hex: 0x111113) }
 
     static func apply(to storage: NSTextStorage) {
         let text = storage.string as NSString
@@ -54,16 +58,16 @@ enum MarkdownHighlighter {
         case .heading:
             let level = match.range(at: 1).length
             let sizes: [UIFont.TextStyle] = [.title1, .title2, .title3, .headline, .headline, .headline]
-            let font = UIFont.preferredFont(forTextStyle: sizes[min(level, 6) - 1]).rounded
+            let font = UIFont.preferredFont(forTextStyle: sizes[min(level, 6) - 1])
             storage.addAttribute(.font, value: font.withTraits(.traitBold), range: range)
             storage.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: match.range(at: 1))
         case .doneTask:
             storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
             storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
         case .taskMarker:
-            storage.addAttribute(.foregroundColor, value: accent, range: range)
+            storage.addAttribute(.foregroundColor, value: marker, range: range)
         case .listMarker:
-            storage.addAttribute(.foregroundColor, value: accent, range: range)
+            storage.addAttribute(.foregroundColor, value: marker, range: range)
         case .quote:
             storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
         case .bold:
@@ -71,7 +75,7 @@ enum MarkdownHighlighter {
         case .italic:
             storage.addAttribute(.font, value: body.withTraits(.traitItalic), range: range)
         case .highlight:
-            storage.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.28), range: range)
+            storage.addAttribute(.backgroundColor, value: UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x3D3418) : UIColor(hex: 0xFCF0C8) }, range: range)
         case .code, .codeBlock:
             storage.addAttribute(.font, value: UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.92, weight: .regular), range: range)
             storage.addAttribute(.backgroundColor, value: UIColor.secondarySystemFill, range: range)
@@ -85,12 +89,6 @@ enum MarkdownHighlighter {
 }
 
 private extension UIFont {
-    /// SF Pro Rounded（Midnight 的字體）。
-    var rounded: UIFont {
-        guard let descriptor = fontDescriptor.withDesign(.rounded) else { return self }
-        return UIFont(descriptor: descriptor, size: pointSize)
-    }
-
     func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
         guard let descriptor = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits)) else { return self }
         return UIFont(descriptor: descriptor, size: pointSize)
@@ -196,7 +194,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.font = MarkdownHighlighter.bodyFont
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
-        textView.tintColor = MarkdownHighlighter.accent
+        textView.tintColor = MarkdownHighlighter.ink
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
         textView.textContainerInset = UIEdgeInsets(top: 24, left: 28, bottom: 140, right: 28)

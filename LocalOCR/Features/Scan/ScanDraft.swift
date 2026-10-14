@@ -100,7 +100,7 @@ struct DraftTray: View {
                 .buttonStyle(.bordered)
 
                 Button(action: onAnalyze) {
-                    Label("開始分析（\(draft.pages.count) 頁）", systemImage: "wand.and.stars")
+                    Label("開始分析（\(draft.pages.count) 頁）", systemImage: "arrow.right")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)

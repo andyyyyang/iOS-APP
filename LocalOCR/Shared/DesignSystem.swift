@@ -1,52 +1,73 @@
 import SwiftUI
 import UIKit
 
-// MARK: - Midnight 設計語言
+// MARK: - 設計語言
 
-/// Midnight：石墨深色底、毛玻璃面板、紫→青的光。深色為主，淺色模式改用霧白玻璃。
-enum Midnight {
-    /// 最底層的畫布。
-    static let canvas = Color.adaptive(dark: 0x0A0A0D, light: 0xEEEEF3)
-    /// 中間編輯區的紙面：比畫布亮一點的實色，閱讀與書寫最清楚。
-    static let pane = Color.adaptive(dark: 0x0F0F14, light: 0xFBFBFD)
-    /// 面板與卡片的底色（疊在毛玻璃上）。
-    static let surface = Color.adaptive(dark: 0x121217, light: 0xFFFFFF, darkOpacity: 0.62, lightOpacity: 0.72)
-    /// 浮起的元素（選取列、輸入框）。
-    static let raised = Color.adaptive(dark: 0xFFFFFF, light: 0x0B0B12, darkOpacity: 0.06, lightOpacity: 0.05)
-    /// 細線與邊框。
-    static let hairline = Color.adaptive(dark: 0xFFFFFF, light: 0x0B0B12, darkOpacity: 0.09, lightOpacity: 0.09)
+/// 黑色頂部列與功能列、白色內容、平面的粉彩色塊；沒有漸層與光暈。淺色為主，深色模式改用深灰。
+enum DS {
+    /// 頂部列與功能列。
+    static let ink = Color.adaptive(dark: 0x0B0B0C, light: 0x111113)
+    /// 黑色區塊上的按鈕（選取中）與搜尋框。
+    static let inkRaised = Color(hex: 0x2A2A2E)
+    static let inkField = Color(hex: 0x26262A)
+    /// 黑色區塊上的文字。
+    static let onInk = Color.white
+    static let onInkDim = Color.white.opacity(0.6)
 
-    static let text = Color.adaptive(dark: 0xEEEEF4, light: 0x14141B)
-    static let textSecondary = Color.adaptive(dark: 0x9B9BAA, light: 0x5B5B6A)
-    static let textTertiary = Color.adaptive(dark: 0x5F5F6D, light: 0x9A9AA7)
+    /// 中間內容。
+    static let pane = Color.adaptive(dark: 0x1C1C1E, light: 0xFFFFFF)
+    /// 左右側欄與設定等畫面的底色。
+    static let sidebar = Color.adaptive(dark: 0x151517, light: 0xF4F4F6)
+    /// 卡片。
+    static let card = Color.adaptive(dark: 0x242427, light: 0xFFFFFF)
+    static let cardBorder = Color.adaptive(dark: 0x2F2F33, light: 0xECECF0)
+    static let hairline = Color.adaptive(dark: 0x2A2A2E, light: 0xE8E8EC)
+    /// 淺灰按鈕、分段控制的底。
+    static let control = Color.adaptive(dark: 0x2C2C30, light: 0xF0F0F3)
+    static let controlTrack = Color.adaptive(dark: 0x2A2A2E, light: 0xE8E8EC)
 
-    static let violet = Color(hex: 0x8B5CF6)
-    static let cyan = Color(hex: 0x22D3EE)
-    static let magenta = Color(hex: 0xD946EF)
-    /// 單色強調（文字、圖示、系統元件的 tint）：深色用亮紫，淺色用深紫以維持對比。
-    static let accent = Color.adaptive(dark: 0xB197FC, light: 0x6D3FE0)
-    static let success = Color.adaptive(dark: 0x4ADE80, light: 0x16A34A)
-    static let warning = Color.adaptive(dark: 0xFBBF24, light: 0xC27803)
-    static let danger = Color.adaptive(dark: 0xF87171, light: 0xDC2626)
+    static let text = Color.adaptive(dark: 0xF2F2F4, light: 0x16161A)
+    static let textSecondary = Color.adaptive(dark: 0xA1A1AA, light: 0x6B6B76)
+    static let textTertiary = Color.adaptive(dark: 0x6E6E78, light: 0xA2A2AC)
+    /// 粉彩色塊上的次要文字。
+    static let onPastelSecondary = Color.adaptive(dark: 0xC9C9D1, light: 0x4D4D57)
 
-    /// 主要漸層：紫 → 青。
-    static let gradient = LinearGradient(colors: [violet, cyan], startPoint: .topLeading, endPoint: .bottomTrailing)
-    /// 文字用的漸層（淺色模式加深，避免太淡）。
-    static let textGradient = LinearGradient(
-        colors: [Color.adaptive(dark: 0xC4B5FD, light: 0x6D3FE0), Color.adaptive(dark: 0x67E8F9, light: 0x0E7490)],
-        startPoint: .leading,
-        endPoint: .trailing
-    )
+    /// 主要按鈕（黑底白字；深色模式反過來）。
+    static let primary = Color.adaptive(dark: 0xF2F2F4, light: 0x111113)
+    static let onPrimary = Color.adaptive(dark: 0x111113, light: 0xFFFFFF)
 
-    static let radiusS: CGFloat = 10
-    static let radiusM: CGFloat = 16
-    static let radiusL: CGFloat = 24
+    /// 連結與標籤。
+    static let link = Color.adaptive(dark: 0x9DAEFF, light: 0x3D5BD9)
+    static let success = Color.adaptive(dark: 0x4ADE80, light: 0x2F9E62)
+    static let warning = Color.adaptive(dark: 0xFBBF24, light: 0xB7791F)
+    static let danger = Color.adaptive(dark: 0xF87171, light: 0xD83A3A)
 
-    /// 依字串穩定地挑一個光色（資料夾、標籤、關聯圖節點）。
-    static func hue(for key: String) -> Color {
-        let palette: [Color] = [Color(hex: 0xA78BFA), Color(hex: 0x67E8F9), Color(hex: 0xF0ABFC), Color(hex: 0x93C5FD), Color(hex: 0x6EE7B7), Color(hex: 0xFCD34D)]
-        let sum = key.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
-        return palette[sum % palette.count]
+    static let radius: CGFloat = 12
+    static let radiusSmall: CGFloat = 9
+
+    /// 平面的粉彩色（淺色模式粉彩、深色模式低飽和的深色）。
+    enum Pastel: CaseIterable {
+        case sky
+        case mint
+        case lavender
+        case butter
+        case blush
+
+        var color: Color {
+            switch self {
+            case .sky: return .adaptive(dark: 0x1E3440, light: 0xDDF1FB)
+            case .mint: return .adaptive(dark: 0x1F3A26, light: 0xD7F3DA)
+            case .lavender: return .adaptive(dark: 0x33284A, light: 0xECE2FC)
+            case .butter: return .adaptive(dark: 0x3D3418, light: 0xFCF0C8)
+            case .blush: return .adaptive(dark: 0x432532, light: 0xFBE0E9)
+            }
+        }
+
+        /// 依字串穩定地挑一個顏色（同一則筆記、同一個資料夾每次顏色相同）。
+        static func stable(for key: String) -> Pastel {
+            let sum = key.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+            return allCases[sum % allCases.count]
+        }
     }
 }
 
@@ -61,12 +82,10 @@ extension Color {
         )
     }
 
-    /// 深色／淺色模式各自的顏色（未指定時當作深色）。
-    static func adaptive(dark: UInt32, light: UInt32, darkOpacity: Double = 1, lightOpacity: Double = 1) -> Color {
+    /// 深色／淺色模式各自的顏色。
+    static func adaptive(dark: UInt32, light: UInt32) -> Color {
         Color(UIColor { traits in
-            traits.userInterfaceStyle == .light
-                ? UIColor(hex: light, alpha: lightOpacity)
-                : UIColor(hex: dark, alpha: darkOpacity)
+            traits.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light)
         })
     }
 }
@@ -82,10 +101,10 @@ extension UIColor {
     }
 }
 
-/// 外觀設定：深色（預設）、淺色、跟隨系統。
+/// 外觀設定：淺色（預設）、深色、跟隨系統。
 enum AppAppearance: String, CaseIterable, Identifiable {
-    case dark
     case light
+    case dark
     case system
 
     static let key = "app.appearance"
@@ -94,338 +113,192 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .dark: return "深色"
         case .light: return "淺色"
+        case .dark: return "深色"
         case .system: return "跟隨系統"
         }
     }
 
     var colorScheme: ColorScheme? {
         switch self {
-        case .dark: return .dark
         case .light: return .light
+        case .dark: return .dark
         case .system: return nil
         }
     }
 }
 
-// MARK: - 背景
-
-/// 石墨畫布上緩慢漂移的極光：左上紫、右下青、中間一抹洋紅。
-struct MidnightBackground: View {
-    var animated = true
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drift = false
-
-    var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            let strength = colorScheme == .dark ? 1.0 : 0.55
-            ZStack {
-                Midnight.canvas
-                blob(Midnight.violet, opacity: 0.42 * strength, diameter: max(size.width, size.height) * 0.9)
-                    .offset(x: -size.width * (drift ? 0.30 : 0.38), y: -size.height * (drift ? 0.34 : 0.28))
-                blob(Midnight.cyan, opacity: 0.30 * strength, diameter: max(size.width, size.height) * 0.8)
-                    .offset(x: size.width * (drift ? 0.36 : 0.30), y: size.height * (drift ? 0.30 : 0.38))
-                blob(Midnight.magenta, opacity: 0.14 * strength, diameter: max(size.width, size.height) * 0.6)
-                    .offset(x: size.width * (drift ? 0.08 : -0.06), y: size.height * (drift ? -0.04 : 0.08))
-            }
-            .frame(width: size.width, height: size.height)
-            .drawingGroup()
-        }
-        .ignoresSafeArea()
-        .onAppear {
-            guard animated, !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 18).repeatForever(autoreverses: true)) { drift = true }
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func blob(_ color: Color, opacity: Double, diameter: CGFloat) -> some View {
-        Circle()
-            .fill(RadialGradient(colors: [color.opacity(opacity), color.opacity(0)], center: .center, startRadius: 0, endRadius: diameter / 2))
-            .frame(width: diameter, height: diameter)
-    }
-}
-
-/// 中間編輯區的底：實色紙面＋上方一抹紫光。
-struct PaneBackdrop: View {
-    var body: some View {
-        ZStack(alignment: .top) {
-            Midnight.pane
-            RadialGradient(colors: [Midnight.violet.opacity(0.14), Midnight.violet.opacity(0)], center: .top, startRadius: 0, endRadius: 560)
-                .frame(height: 560)
-                .allowsHitTesting(false)
-        }
-        .ignoresSafeArea()
-        .accessibilityHidden(true)
-    }
-}
-
-/// 淡淡的點陣格線（關聯圖、首頁英雄區）。
-struct DotGrid: View {
-    var spacing: CGFloat = 22
-    var opacity: Double = 0.10
-
-    var body: some View {
-        Canvas { context, size in
-            var path = Path()
-            var y: CGFloat = spacing / 2
-            while y < size.height {
-                var x: CGFloat = spacing / 2
-                while x < size.width {
-                    path.addEllipse(in: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6))
-                    x += spacing
-                }
-                y += spacing
-            }
-            context.fill(path, with: .color(Midnight.text.opacity(opacity)))
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-// MARK: - 玻璃
-
-private struct GlassModifier: ViewModifier {
-    var cornerRadius: CGFloat
-    var shadow: Bool
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        content
-            .background {
-                shape
-                    .fill(.ultraThinMaterial)
-                    .overlay(shape.fill(Midnight.surface))
-            }
-            .overlay {
-                // 上緣的高光、下緣幾乎看不見：像光從上方打在玻璃上
-                shape.strokeBorder(
-                    LinearGradient(
-                        colors: [Color.white.opacity(colorScheme == .dark ? 0.16 : 0.70), Color.white.opacity(colorScheme == .dark ? 0.03 : 0.25)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
-            }
-            .clipShape(shape)
-            .shadow(color: .black.opacity(shadow ? (colorScheme == .dark ? 0.45 : 0.10) : 0), radius: 28, y: 14)
-    }
-}
+// MARK: - 卡片與底色
 
 extension View {
-    /// 毛玻璃面板：半透明石墨、上緣高光、柔和陰影。
-    func glass(cornerRadius: CGFloat = Midnight.radiusL, shadow: Bool = true) -> some View {
-        modifier(GlassModifier(cornerRadius: cornerRadius, shadow: shadow))
-    }
-
-    /// 內距＋玻璃卡片。
-    func glassCard(padding: CGFloat = 18, cornerRadius: CGFloat = Midnight.radiusL) -> some View {
+    /// 卡片：白底、細框、極淡的陰影。
+    func card(padding: CGFloat = 16, cornerRadius: CGFloat = DS.radius, fill: Color = DS.card, bordered: Bool = true) -> some View {
         self.padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glass(cornerRadius: cornerRadius, shadow: false)
+            .background(fill, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                if bordered {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1)
+                }
+            }
     }
 
-    /// 紫青漸層的文字或圖示。
-    func gradientForeground() -> some View {
-        foregroundStyle(Midnight.textGradient)
+    /// 粉彩色塊卡片（沒有框線）。
+    func pastelCard(_ pastel: DS.Pastel, padding: CGFloat = 14, cornerRadius: CGFloat = DS.radius) -> some View {
+        card(padding: padding, cornerRadius: cornerRadius, fill: pastel.color, bordered: false)
     }
 
-    /// 柔和的光暈（強調的按鈕、選取的節點）。
-    func glow(_ color: Color = Midnight.violet, radius: CGFloat = 18, opacity: Double = 0.55) -> some View {
-        shadow(color: color.opacity(opacity), radius: radius)
+    func screenBackground() -> some View {
+        background(DS.sidebar.ignoresSafeArea())
     }
 
-    /// 清單與表單：隱藏系統底色，改用 Midnight 背景。
-    func midnightList() -> some View {
+    /// 清單與表單：隱藏系統底色，改用側欄的淺灰。
+    func canvasList() -> some View {
         scrollContentBackground(.hidden)
-            .background(MidnightBackground(animated: false))
+            .background(DS.sidebar.ignoresSafeArea())
     }
 }
 
 // MARK: - 按鈕
 
-/// 主要按鈕：漸層膠囊加光暈；次要：玻璃膠囊；幽靈：只有文字。
-struct MidnightButtonStyle: ButtonStyle {
+/// 膠囊按鈕：主要（黑底白字）、次要（淺灰底）。
+struct PillButtonStyle: ButtonStyle {
     enum Kind {
         case primary
         case secondary
-        case ghost
     }
 
     var kind: Kind = .primary
     var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let shape = Capsule(style: .continuous)
         configuration.label
-            .font(.system(compact ? .subheadline : .body, design: .rounded).weight(.semibold))
-            .padding(.horizontal, compact ? 14 : 20)
-            .padding(.vertical, compact ? 8 : 12)
-            .foregroundStyle(kind == .primary ? Color.white : Midnight.text)
-            .background {
-                switch kind {
-                case .primary:
-                    shape.fill(Midnight.gradient)
-                        .overlay(shape.strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
-                        .glow(radius: configuration.isPressed ? 8 : 16, opacity: 0.5)
-                case .secondary:
-                    shape.fill(.ultraThinMaterial)
-                        .overlay(shape.fill(Midnight.raised))
-                        .overlay(shape.strokeBorder(Midnight.hairline, lineWidth: 1))
-                case .ghost:
-                    Color.clear
-                }
-            }
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.snappy(duration: 0.2), value: configuration.isPressed)
-            .contentShape(shape)
+            .font(.system(compact ? .subheadline : .body).weight(.semibold))
+            .padding(.horizontal, compact ? 14 : 18)
+            .padding(.vertical, compact ? 8 : 11)
+            .foregroundStyle(kind == .primary ? DS.onPrimary : DS.text)
+            .background(kind == .primary ? DS.primary : DS.control, in: Capsule(style: .continuous))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Capsule())
     }
 }
 
-/// 圓形圖示按鈕（工具列、側邊欄切換）。
-struct GlassIconButtonStyle: ButtonStyle {
-    var size: CGFloat = 36
+/// 方形圖示按鈕（淺色區塊上）。
+struct IconButtonStyle: ButtonStyle {
+    var size: CGFloat = 32
     var isActive = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: size * 0.42, weight: .semibold))
-            .foregroundStyle(isActive ? AnyShapeStyle(Midnight.textGradient) : AnyShapeStyle(Midnight.textSecondary))
+            .font(.system(size: size * 0.46, weight: .medium))
+            .foregroundStyle(isActive ? DS.text : DS.textSecondary)
+            .frame(width: size, height: size)
+            .background(
+                isActive || configuration.isPressed ? DS.control : Color.clear,
+                in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+/// 黑色頂部列與功能列上的圖示按鈕。`highlighted`：功能列中目前的面板（白底黑字）。
+struct InkIconButtonStyle: ButtonStyle {
+    var size: CGFloat = 36
+    var isActive = false
+    var highlighted = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: size * 0.5, weight: .regular))
+            .foregroundStyle(highlighted ? DS.ink : (isActive ? DS.onInk : DS.onInkDim))
             .frame(width: size, height: size)
             .background {
-                RoundedRectangle(cornerRadius: size * 0.32, style: .continuous)
-                    .fill(isActive || configuration.isPressed ? Midnight.raised : Color.clear)
+                RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+                    .fill(highlighted ? Color.white : (isActive || configuration.isPressed ? DS.inkRaised : Color.clear))
             }
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
-            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
             .contentShape(Rectangle())
     }
 }
 
 // MARK: - 元件
 
-/// 漸層方塊中的圖示（帶光暈）。
-struct GlowIcon: View {
-    let systemImage: String
-    var size: CGFloat = 40
-    var tint: Color?
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-        Image(systemName: systemImage)
-            .font(.system(size: size * 0.44, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background {
-                if let tint {
-                    shape.fill(LinearGradient(colors: [tint, tint.opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                } else {
-                    shape.fill(Midnight.gradient)
-                }
-            }
-            .overlay(shape.strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
-            .glow(tint ?? Midnight.violet, radius: size * 0.35, opacity: 0.45)
-    }
-}
-
-/// 小標題：字距加寬的灰色字。
-struct SectionLabel: View {
-    let text: String
+/// 小標題列：標題＋右側的灰色說明。
+struct SectionHeader: View {
+    let title: String
     var trailing: String?
 
-    init(_ text: String, trailing: String? = nil) {
-        self.text = text
+    init(_ title: String, trailing: String? = nil) {
+        self.title = title
         self.trailing = trailing
     }
 
     var body: some View {
-        HStack {
-            Text(text)
-                .font(.system(.caption, design: .rounded).weight(.semibold))
-                .tracking(1.4)
-                .foregroundStyle(Midnight.textTertiary)
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(DS.text)
             Spacer()
             if let trailing {
                 Text(trailing)
-                    .font(.system(.caption, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(DS.textSecondary)
             }
         }
         .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// 膠囊標籤（#標籤、狀態）。
-struct GlassChip: View {
+/// 膠囊標籤：粉彩底，或只有框線。
+struct Chip: View {
     let text: String
-    var systemImage: String?
-    var tint: Color = Midnight.accent
+    var pastel: DS.Pastel?
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let systemImage { Image(systemName: systemImage).imageScale(.small) }
-            Text(text).lineLimit(1)
-        }
-        .font(.system(.caption, design: .rounded).weight(.medium))
-        .foregroundStyle(tint)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.12), in: Capsule())
-        .overlay(Capsule().strokeBorder(tint.opacity(0.22), lineWidth: 0.5))
-    }
-}
-
-/// 漸層大數字＋說明（首頁統計）。
-struct GlowStat: View {
-    let value: Int
-    let title: String
-    var systemImage: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if let systemImage {
-                    Image(systemName: systemImage).font(.caption.weight(.semibold))
+        Text(text)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(pastel == nil ? DS.textSecondary : DS.text)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background {
+                if let pastel {
+                    Capsule().fill(pastel.color)
+                } else {
+                    Capsule().strokeBorder(DS.cardBorder, lineWidth: 1)
                 }
-                Text(title).font(.system(.caption, design: .rounded).weight(.medium))
             }
-            .foregroundStyle(Midnight.textSecondary)
-            Text("\(value)")
-                .font(.system(size: 40, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .gradientForeground()
-                .contentTransition(.numericText())
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(padding: 16, cornerRadius: Midnight.radiusM + 4)
-        .accessibilityElement(children: .combine)
     }
 }
 
-/// 空狀態：漸層圖示、標題、說明。
-struct MidnightEmptyState: View {
-    let title: String
+/// 圓形底的圖示（卡片右上角）。
+struct CircleIcon: View {
     let systemImage: String
+    var fill: Color = DS.card
+    var size: CGFloat = 30
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: size * 0.46, weight: .regular))
+            .foregroundStyle(DS.text)
+            .frame(width: size, height: size)
+            .background(fill, in: Circle())
+    }
+}
+
+/// 空狀態：標題與說明，沒有插圖。
+struct EmptyStateView: View {
+    let title: String
     var message: String?
 
     var body: some View {
-        VStack(spacing: 14) {
-            GlowIcon(systemImage: systemImage, size: 56)
+        VStack(spacing: 6) {
             Text(title)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
-                .foregroundStyle(Midnight.text)
+                .font(.headline)
+                .foregroundStyle(DS.text)
             if let message {
                 Text(message)
-                    .font(.callout)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .font(.subheadline)
+                    .foregroundStyle(DS.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 340)
             }
@@ -477,24 +350,55 @@ struct FlowLayout: Layout {
     }
 }
 
-// MARK: - 既有畫面使用的元件（改為 Midnight 風格）
+/// 底部的黑色浮動工具列：粉彩圓鈕（參考圖的工具列）。
+struct FloatingPalette<Content: View>: View {
+    @ViewBuilder var content: () -> Content
 
-/// 舊名稱保留：掃描、紀錄等工具畫面透過它們套用新的風格。
-enum Theme {
-    static let cornerRadius: CGFloat = Midnight.radiusL
-    static let cardPadding: CGFloat = 18
-    static let screenBackground = Midnight.canvas
-    static let cardBackground = Midnight.raised
+    var body: some View {
+        HStack(spacing: 6) {
+            content()
+        }
+        .padding(6)
+        .background(DS.ink, in: Capsule(style: .continuous))
+        .shadow(color: .black.opacity(0.22), radius: 15, y: 8)
+    }
 }
 
-extension View {
-    func card(padding: CGFloat = Theme.cardPadding) -> some View {
-        glassCard(padding: padding)
-    }
+/// 浮動工具列中的一個圓鈕：粉彩底、黑色圖示或文字。
+struct PaletteButton: View {
+    let title: String
+    var systemImage: String?
+    var glyph: String?
+    var pastel: DS.Pastel?
+    var size: CGFloat = 40
+    let action: () -> Void
 
-    func screenBackground() -> some View {
-        background(MidnightBackground(animated: false))
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if let glyph {
+                    Text(glyph).font(.system(size: size * 0.4, weight: .bold))
+                } else if let systemImage {
+                    Image(systemName: systemImage).font(.system(size: size * 0.42, weight: .medium))
+                }
+            }
+            .foregroundStyle(pastel == nil ? Color.white : Color(hex: 0x16161A))
+            .frame(width: size, height: size)
+            .background(pastel?.color ?? DS.inkRaised, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .help(title)
     }
+}
+
+// MARK: - 掃描等工具畫面使用的元件
+
+enum Theme {
+    static let cornerRadius: CGFloat = DS.radius
+    static let cardPadding: CGFloat = 16
+    static let screenBackground = DS.sidebar
+    static let cardBackground = DS.card
 }
 
 /// 卡片標題列：圖示、標題、可選的箭頭，以及右側的灰色說明。
@@ -507,21 +411,21 @@ struct CardHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: systemImage)
-                .font(.subheadline.weight(.semibold))
-                .gradientForeground()
+                .font(.subheadline)
+                .foregroundStyle(DS.textSecondary)
             Text(title)
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .foregroundStyle(Midnight.text)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(DS.text)
             if showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Midnight.textTertiary)
+                    .foregroundStyle(DS.textTertiary)
             }
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
                     .font(.subheadline)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
                     .lineLimit(1)
             }
         }
@@ -536,13 +440,13 @@ struct StatValue: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(value)
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .font(.system(size: 30, weight: .medium))
                 .monospacedDigit()
-                .gradientForeground()
+                .foregroundStyle(DS.text)
             if let unit {
                 Text(unit)
-                    .font(.title3)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .font(.subheadline)
+                    .foregroundStyle(DS.textSecondary)
             }
         }
     }
@@ -556,13 +460,13 @@ struct ShelfHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                .foregroundStyle(Midnight.text)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(DS.text)
             Spacer()
             if let detail {
                 Text(detail)
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
             }
         }
     }
@@ -578,51 +482,50 @@ struct ShelfRow: View {
         HStack(spacing: 12) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.body.weight(.medium))
-                    .gradientForeground()
+                    .foregroundStyle(DS.textSecondary)
                     .frame(width: 24)
             }
             Text(title)
-                .font(.system(.body, design: .rounded).weight(.semibold))
-                .foregroundStyle(Midnight.text)
+                .font(.body.weight(.medium))
+                .foregroundStyle(DS.text)
             Spacer()
             if let detail {
                 Text(detail)
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
             }
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Midnight.textTertiary)
+                .foregroundStyle(DS.textTertiary)
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 }
 
-/// 頂部提示列：漸層圖示、標題與副標題。
+/// 頂部提示列：圓形圖示、標題與副標題。
 struct BannerRow: View {
     let systemImage: String
     let title: String
     let subtitle: String
 
     var body: some View {
-        HStack(spacing: 14) {
-            GlowIcon(systemImage: systemImage, size: 44)
+        HStack(spacing: 12) {
+            CircleIcon(systemImage: systemImage, fill: DS.Pastel.sky.color, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Midnight.text)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.text)
                 Text(subtitle)
                     .font(.footnote)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
             }
             Spacer(minLength: 0)
         }
     }
 }
 
-/// 分段弧形量表，用來顯示信心度（0~1）。
+/// 弧形量表，用來顯示信心度（0~1）。
 struct ConfidenceGauge: View {
     let value: Double
     var size: CGFloat = 64
@@ -633,21 +536,20 @@ struct ConfidenceGauge: View {
         ZStack {
             Circle()
                 .trim(from: 0.1, to: 0.9)
-                .stroke(Midnight.hairline, style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [6, 5]))
+                .stroke(DS.controlTrack, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 .rotationEffect(.degrees(90))
             Circle()
                 .trim(from: 0.1, to: 0.1 + 0.8 * clamped)
-                .stroke(Midnight.gradient, style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [6, 5]))
+                .stroke(DS.primary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 .rotationEffect(.degrees(90))
-                .glow(radius: 8, opacity: 0.4)
             VStack(spacing: 0) {
                 Text("\(Int((clamped * 100).rounded()))")
-                    .font(.system(.headline, design: .rounded))
+                    .font(.headline)
                     .monospacedDigit()
-                    .foregroundStyle(Midnight.text)
+                    .foregroundStyle(DS.text)
                 Text("%")
                     .font(.caption2)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.textSecondary)
             }
         }
         .frame(width: size, height: size)
@@ -664,13 +566,12 @@ struct JSONBlock: View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(json)
                 .font(.system(.footnote, design: .monospaced))
-                .foregroundStyle(Midnight.text)
+                .foregroundStyle(DS.text)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: true, vertical: false)
-                .padding(14)
+                .padding(12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: Midnight.radiusM, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Midnight.radiusM, style: .continuous).strokeBorder(Midnight.hairline, lineWidth: 1))
+        .background(DS.sidebar, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
     }
 }

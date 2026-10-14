@@ -75,7 +75,7 @@ struct ServerSettingsView: View {
                 }
             }
         }
-        .midnightList()
+        .canvasList()
         .navigationTitle("伺服器與同步")
         .onDisappear(perform: saveKey)
         .toast($toast)

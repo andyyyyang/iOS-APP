@@ -9,12 +9,12 @@ private struct ToastModifier: ViewModifier {
             .overlay(alignment: .bottom) {
                 if let message {
                     Text(message)
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                        .foregroundStyle(Midnight.text)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(DS.onPrimary)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 11)
-                        .glass(cornerRadius: 22)
-                        .overlay(Capsule().strokeBorder(Midnight.gradient, lineWidth: 1).opacity(0.4))
+                        .background(DS.primary, in: Capsule())
+                        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
                         .padding(.bottom, 24)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .task(id: message) {

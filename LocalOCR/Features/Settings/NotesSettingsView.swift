@@ -119,7 +119,7 @@ struct NotesSettingsView: View {
                 Text("筆記可以放在 vault 的任何資料夾：在資料夾中新增的筆記就放在那個資料夾；從首頁新增的放在「新筆記位置」（空白代表 vault 最上層，也可以填「日記/2026」這樣的路徑）。vault 名稱用來「在 Obsidian 開啟」。")
             }
         }
-        .midnightList()
+        .canvasList()
         .navigationTitle("筆記與 Obsidian")
         .sheet(isPresented: $showsPairing) {
             NavigationStack { PairingView() }

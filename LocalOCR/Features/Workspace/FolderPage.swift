@@ -17,114 +17,99 @@ struct FolderPage: View {
         let subfolders = store.childFolders(of: folder)
         let notes = store.notes(inFolder: folder, recursive: false)
         let files = store.files(inFolder: folder)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                header(noteCount: store.noteCount(inFolder: folder))
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
 
-                if !subfolders.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionLabel("資料夾", trailing: "\(subfolders.count)")
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompact ? 150 : 190), spacing: 14)], spacing: 14) {
-                            ForEach(subfolders, id: \.self) { subfolder in
-                                Button {
-                                    workspace.open(.folder(subfolder))
-                                } label: {
-                                    FolderTile(folder: subfolder, count: store.fileCount(inFolder: subfolder))
-                                }
-                                .buttonStyle(CardPressStyle())
-                                .hoverEffect(.lift)
-                            }
-                        }
-                    }
-                }
-
-                if !notes.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionLabel("筆記", trailing: "\(notes.count)")
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: 14)], alignment: .leading, spacing: 14) {
-                            ForEach(notes) { note in
-                                Button {
-                                    workspace.openNote(note.path)
-                                } label: {
-                                    RecentNoteCard(note: note)
-                                }
-                                .buttonStyle(CardPressStyle())
-                                .hoverEffect(.lift)
-                                .contextMenu {
-                                    if let url = NotesSettings.obsidianURL(for: note.path) {
-                                        Link(destination: url) { Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app") }
+                    if !subfolders.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader("資料夾", trailing: "\(subfolders.count)")
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompact ? 150 : 180), spacing: 12)], spacing: 12) {
+                                ForEach(subfolders, id: \.self) { subfolder in
+                                    Button {
+                                        workspace.open(.folder(subfolder))
+                                    } label: {
+                                        FolderTile(folder: subfolder, count: store.fileCount(inFolder: subfolder))
                                     }
-                                    Button(role: .destructive) { workspace.pendingDelete = note } label: { Label("刪除", systemImage: "trash") }
+                                    .buttonStyle(CardPressStyle())
                                 }
                             }
                         }
                     }
-                }
 
-                if !files.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionLabel("檔案", trailing: "\(files.count)")
-                        VaultFilesList(files: files)
+                    if !notes.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader("筆記", trailing: "\(notes.count)")
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompact ? 280 : 210), spacing: 12)], alignment: .leading, spacing: 12) {
+                                ForEach(notes) { note in
+                                    Button {
+                                        workspace.openNote(note.path)
+                                    } label: {
+                                        NoteCard(note: note)
+                                    }
+                                    .buttonStyle(CardPressStyle())
+                                    .contextMenu {
+                                        if let url = NotesSettings.obsidianURL(for: note.path) {
+                                            Link(destination: url) { Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app") }
+                                        }
+                                        Button(role: .destructive) { workspace.pendingDelete = note } label: { Label("刪除", systemImage: "trash") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !files.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader("檔案", trailing: "\(files.count)")
+                            VaultFilesList(files: files)
+                        }
+                    }
+
+                    if subfolders.isEmpty && notes.isEmpty && files.isEmpty {
+                        EmptyStateView(title: "空的資料夾", message: "用下方的工具列新增筆記或手寫筆記本。")
                     }
                 }
-
-                if subfolders.isEmpty && notes.isEmpty && files.isEmpty {
-                    MidnightEmptyState(title: "空的資料夾", systemImage: "folder", message: "用上方的按鈕新增筆記或手寫筆記本。")
-                }
+                .padding(.horizontal, isCompact ? 16 : 24)
+                .padding(.top, isCompact ? 18 : 22)
+                .padding(.bottom, 100)
+                .frame(maxWidth: 1200, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, isCompact ? 20 : 40)
-            .padding(.vertical, isCompact ? 22 : 34)
-            .frame(maxWidth: 1180, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .scrollIndicators(.hidden)
+
+            CreatePalette()
+                .padding(.bottom, isCompact ? 14 : 20)
         }
-        .scrollIndicators(.hidden)
     }
 
-    private func header(noteCount: Int) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // 路徑：Vault › 工作 › 會議
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // 路徑：Vault / 工作 / 會議
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(Array(breadcrumbs.enumerated()), id: \.offset) { index, crumb in
                         if index > 0 {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(Midnight.textTertiary)
+                            Text("/").foregroundStyle(DS.textTertiary)
                         }
                         Button(NotesStore.folderTitle(crumb)) {
                             workspace.open(.folder(crumb))
                         }
                         .buttonStyle(.plain)
-                        .font(.system(.subheadline, design: .rounded).weight(crumb == folder ? .semibold : .regular))
-                        .foregroundStyle(crumb == folder ? Midnight.text : Midnight.textSecondary)
+                        .foregroundStyle(crumb == folder ? DS.text : DS.textSecondary)
                     }
                 }
+                .font(.footnote)
             }
-            HStack(alignment: .center, spacing: 16) {
-                GlowIcon(systemImage: folder.isEmpty ? "books.vertical.fill" : "folder.fill", size: isCompact ? 48 : 60, tint: folder.isEmpty ? nil : Midnight.hue(for: folder))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(NotesStore.folderTitle(folder))
-                        .font(.system(size: isCompact ? 32 : 44, weight: .bold, design: .rounded))
-                        .foregroundStyle(Midnight.text)
-                        .lineLimit(2)
-                    Text("\(noteCount) 則筆記 · \(store.fileCount(inFolder: folder)) 個檔案")
-                        .font(.system(.subheadline, design: .rounded).monospacedDigit())
-                        .foregroundStyle(Midnight.textSecondary)
-                }
-            }
-            FlowLayout(spacing: 10) {
-                Button {
-                    workspace.newTextNote(in: folder)
-                } label: {
-                    Label("新增筆記", systemImage: "square.and.pencil")
-                }
-                .buttonStyle(MidnightButtonStyle(kind: .primary, compact: true))
-                Button {
-                    workspace.requestNewNotebook(in: folder)
-                } label: {
-                    Label("手寫筆記本", systemImage: "pencil.and.scribble")
-                }
-                .buttonStyle(MidnightButtonStyle(kind: .secondary, compact: true))
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(NotesStore.folderTitle(folder))
+                    .font(.system(size: isCompact ? 26 : 28, weight: .semibold))
+                    .foregroundStyle(DS.text)
+                    .lineLimit(2)
+                Text("\(store.fileCount(inFolder: folder)) 個檔案")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(DS.textSecondary)
             }
         }
     }
@@ -140,30 +125,27 @@ struct FolderPage: View {
     }
 }
 
-/// 資料夾卡片：發光的資料夾圖示、名稱與檔案數。
+/// 資料夾卡片：粉彩圓形圖示、名稱與檔案數。
 private struct FolderTile: View {
     let folder: String
     let count: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 30, weight: .medium))
-                .foregroundStyle(LinearGradient(colors: [Midnight.hue(for: folder), Midnight.hue(for: folder).opacity(0.55)], startPoint: .top, endPoint: .bottom))
-                .glow(Midnight.hue(for: folder), radius: 14, opacity: 0.45)
+        HStack(spacing: 12) {
+            CircleIcon(systemImage: "folder", fill: DS.Pastel.stable(for: folder).color, size: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(NotesStore.folderTitle(folder))
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundStyle(Midnight.text)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(DS.text)
                     .lineLimit(1)
                 Text("\(count) 個檔案")
-                    .font(.system(.caption, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(DS.textTertiary)
             }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(padding: 16, cornerRadius: 20)
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .card(padding: 12)
+        .contentShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
     }
 }
 
@@ -196,11 +178,11 @@ struct VaultFilesList: View {
                     }
                 }
                 if index < files.count - 1 {
-                    Divider().overlay(Midnight.hairline).padding(.leading, 72)
+                    Rectangle().fill(DS.hairline).frame(height: 1).padding(.leading, 66)
                 }
             }
         }
-        .glass(cornerRadius: 20, shadow: false)
+        .card(padding: 0)
         .quickLookPreview($previewURL)
         .alert("無法下載", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("好", role: .cancel) {}
@@ -210,17 +192,17 @@ struct VaultFilesList: View {
     }
 
     private func row(_ item: VaultItem) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             FileThumbnail(item: item)
-                .frame(width: 42, height: 42)
+                .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.system(.body, design: .rounded))
-                    .foregroundStyle(Midnight.text)
+                    .font(.subheadline)
+                    .foregroundStyle(DS.text)
                     .lineLimit(1)
                 Text("\(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)) · \(item.mtime.formatted(.relative(presentation: .named)))")
-                    .font(.system(.caption, design: .rounded))
-                    .foregroundStyle(Midnight.textTertiary)
+                    .font(.caption)
+                    .foregroundStyle(DS.textTertiary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -228,12 +210,12 @@ struct VaultFilesList: View {
                 ProgressView()
             } else if !item.isLocal {
                 Image(systemName: "icloud.and.arrow.down")
-                    .foregroundStyle(Midnight.textTertiary)
+                    .foregroundStyle(DS.textTertiary)
                     .accessibilityLabel("尚未下載")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
         .contentShape(Rectangle())
     }
 
@@ -263,25 +245,24 @@ struct FileThumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Midnight.hue(for: item.pathExtension).opacity(0.16))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(DS.control)
             if let image {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 Image(systemName: item.systemImage)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Midnight.hue(for: item.pathExtension))
+                    .font(.system(size: 15))
+                    .foregroundStyle(DS.textSecondary)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Midnight.hairline, lineWidth: 1))
         .task(id: item.isLocal ? item.path : nil) {
             guard item.isLocal else { return }
             let request = QLThumbnailGenerator.Request(
                 fileAt: LocalVault.shared.url(for: item.path),
-                size: CGSize(width: 42, height: 42),
+                size: CGSize(width: 38, height: 38),
                 scale: displayScale,
                 representationTypes: .thumbnail
             )

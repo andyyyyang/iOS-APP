@@ -12,58 +12,55 @@ struct TasksPage: View {
             return open.isEmpty ? nil : (note, open)
         }
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("待辦")
-                        .font(.system(size: sizeClass == .compact ? 38 : 52, weight: .heavy, design: .rounded))
-                        .tracking(-1)
-                        .gradientForeground()
-                    Text("\(store.openTasks.count) 件未完成 · 來自 \(groups.count) 則筆記")
-                        .font(.system(.subheadline, design: .rounded).monospacedDigit())
-                        .foregroundStyle(Midnight.textSecondary)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(DS.text)
+                    Text("\(store.openTasks.count) 件未完成 · \(groups.count) 則筆記")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(DS.textSecondary)
                 }
                 if groups.isEmpty {
-                    MidnightEmptyState(title: "全部完成了", systemImage: "checkmark.seal", message: "在筆記中寫「- [ ] 事項」就會出現在這裡。")
+                    EmptyStateView(title: "沒有待辦事項", message: "在筆記中寫「- [ ] 事項」就會出現在這裡。")
                         .padding(.top, 40)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 16)], alignment: .leading, spacing: 16) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], alignment: .leading, spacing: 12) {
                         ForEach(groups, id: \.note.path) { group in
-                            VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 Button {
                                     workspace.openNote(group.note.path)
                                 } label: {
                                     HStack(spacing: 8) {
-                                        Circle()
-                                            .fill(Midnight.hue(for: group.note.path))
-                                            .frame(width: 8, height: 8)
-                                            .glow(Midnight.hue(for: group.note.path), radius: 6)
                                         Text(group.note.title)
-                                            .font(.system(.headline, design: .rounded))
-                                            .foregroundStyle(Midnight.text)
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(DS.text)
                                             .lineLimit(1)
                                         Spacer()
                                         Text("\(group.tasks.count)")
-                                            .font(.system(.caption, design: .rounded).monospacedDigit())
-                                            .foregroundStyle(Midnight.textTertiary)
-                                        Image(systemName: "arrow.up.right")
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(Midnight.textTertiary)
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(DS.onPastelSecondary)
                                     }
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
-                                ForEach(group.tasks) { task in
-                                    TaskLine(task: task, onToggle: { store.toggle(task) }, onOpen: { workspace.openNote(task.notePath) })
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(group.tasks) { task in
+                                        TaskLine(task: task, onToggle: { store.toggle(task) }, onOpen: { workspace.openNote(task.notePath) })
+                                    }
                                 }
+                                .padding(10)
+                                .background(DS.card.opacity(0.7), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
-                            .glassCard(padding: 18)
+                            .pastelCard(DS.Pastel.stable(for: group.note.path), padding: 12)
                         }
                     }
                 }
             }
-            .padding(.horizontal, sizeClass == .compact ? 20 : 40)
-            .padding(.vertical, sizeClass == .compact ? 22 : 34)
-            .frame(maxWidth: 1180, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, sizeClass == .compact ? 16 : 24)
+            .padding(.vertical, sizeClass == .compact ? 18 : 22)
+            .frame(maxWidth: 1200, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
     }

@@ -296,6 +296,8 @@ struct MarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(DS.text)
+        .tint(DS.link)
         .environment(\.openURL, OpenURLAction { url in
             if let target = MarkdownInline.wikiTarget(from: url) {
                 onOpenLink(target)
@@ -323,7 +325,7 @@ struct MarkdownView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(DS.sidebar, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         case .heading(let level, let text):
             Text(MarkdownInline.attributed(text))
                 .font(headingFont(level))
@@ -335,15 +337,15 @@ struct MarkdownView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 switch marker {
                 case .bullet:
-                    Text("•").foregroundStyle(.secondary)
+                    Text("•").foregroundStyle(DS.textTertiary)
                 case .number(let number):
                     Text("\(number).").monospacedDigit().foregroundStyle(.secondary)
                 case .task(let done):
                     Button {
                         if let index = taskIndices[offset] { onToggleTask?(index) }
                     } label: {
-                        Image(systemName: done ? "checkmark.square.fill" : "square")
-                            .foregroundStyle(done ? Color.accentColor : .secondary)
+                        TaskCheckbox(done: done)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
                     }
                     .buttonStyle(.plain)
                     .disabled(onToggleTask == nil)
@@ -357,8 +359,8 @@ struct MarkdownView: View {
             .padding(.leading, CGFloat(indent) * 20)
         case .quote(let text):
             HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 2).fill(.tertiary).frame(width: 3)
-                Text(MarkdownInline.attributed(text)).foregroundStyle(.secondary)
+                RoundedRectangle(cornerRadius: 2).fill(DS.hairline).frame(width: 3)
+                Text(MarkdownInline.attributed(text)).foregroundStyle(DS.textSecondary)
             }
         case .callout(let kind, let title, let body):
             CalloutView(kind: kind, title: title, content: body)
@@ -369,7 +371,7 @@ struct MarkdownView: View {
                     .textSelection(.enabled)
                     .padding(12)
             }
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(DS.sidebar, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         case .embed(let name):
             if let onTapEmbed {
                 Button {
@@ -378,10 +380,13 @@ struct MarkdownView: View {
                     EmbeddedImage(name: name, load: loadEmbed)
                         .overlay(alignment: .topTrailing) {
                             if InkFiles.blockName(fromEmbed: name) != nil {
-                                Image(systemName: "pencil.tip.crop.circle.fill")
-                                    .font(.title2)
-                                    .symbolRenderingMode(.palette)
-                                    .foregroundStyle(.white, Color.accentColor)
+                                Text("編輯手寫")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(DS.text)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(DS.card, in: Capsule())
+                                    .overlay(Capsule().strokeBorder(DS.cardBorder, lineWidth: 1))
                                     .padding(8)
                             }
                         }
@@ -398,15 +403,15 @@ struct MarkdownView: View {
                     .font(.system(.footnote, design: .monospaced))
                     .padding(10)
             }
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(DS.sidebar, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .title.bold()
-        case 2: return .title2.bold()
-        case 3: return .title3.weight(.semibold)
+        case 1: return .system(size: 24, weight: .semibold)
+        case 2: return .system(size: 20, weight: .semibold)
+        case 3: return .system(size: 17, weight: .semibold)
         default: return .headline
         }
     }
@@ -417,34 +422,32 @@ private struct CalloutView: View {
     let title: String
     let content: String
 
-    private var style: (icon: String, color: Color) {
+    /// Obsidian 的 callout 類型對應到粉彩色。
+    private var pastel: DS.Pastel {
         switch kind {
-        case "summary", "abstract", "tldr": return ("doc.text.magnifyingglass", .teal)
-        case "tip", "hint", "important": return ("flame", .orange)
-        case "warning", "caution", "attention": return ("exclamationmark.triangle", .orange)
-        case "danger", "error", "bug", "failure": return ("xmark.octagon", .red)
-        case "success", "check", "done": return ("checkmark.circle", .green)
-        case "question", "help", "faq": return ("questionmark.circle", .yellow)
-        case "todo": return ("checklist", .blue)
-        case "quote", "cite": return ("quote.opening", .gray)
-        default: return ("info.circle", .blue)
+        case "tip", "hint", "important", "warning", "caution", "attention", "question", "help", "faq": return .butter
+        case "danger", "error", "bug", "failure": return .blush
+        case "success", "check", "done": return .mint
+        case "todo", "quote", "cite": return .lavender
+        default: return .sky
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title.isEmpty ? kind.capitalized : title, systemImage: style.icon)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.isEmpty ? kind.capitalized : title)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(style.color)
+                .foregroundStyle(DS.text)
             if !content.isEmpty {
                 Text(MarkdownInline.attributed(content))
                     .font(.callout)
+                    .foregroundStyle(DS.text)
                     .textSelection(.enabled)
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(style.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(pastel.color, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

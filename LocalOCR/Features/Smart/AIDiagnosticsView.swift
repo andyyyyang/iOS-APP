@@ -48,7 +48,7 @@ struct AIDiagnosticsView: View {
                     Task { await runTest() }
                 } label: {
                     HStack {
-                        Label("用範例收據測試", systemImage: "wand.and.stars")
+                        Label("用範例收據測試", systemImage: "play")
                         Spacer()
                         if isTesting { ProgressView() }
                     }
@@ -65,7 +65,7 @@ struct AIDiagnosticsView: View {
                 Text("在裝置上判斷情境並產生 JSON，不會上傳。若失敗，請把這裡的訊息提供給開發者。")
             }
         }
-        .midnightList()
+        .canvasList()
         .navigationTitle("Apple Intelligence 診斷")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { status = OnDeviceAIStatus.current }

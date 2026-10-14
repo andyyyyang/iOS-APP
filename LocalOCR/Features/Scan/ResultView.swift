@@ -121,7 +121,7 @@ struct ResultView: View {
                 mode = .json
                 Task { await runSmartScan(forcedTemplate: nil) }
             } label: {
-                Label("以目前文字重新產生 JSON", systemImage: "wand.and.stars")
+                Label("以目前文字重新產生 JSON", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

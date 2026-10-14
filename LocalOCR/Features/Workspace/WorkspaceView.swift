@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// App 的主畫面，版面邏輯同 Obsidian：
-/// 左邊是功能列＋檔案／搜尋／標籤，中間是分頁，右邊是目前筆記的大綱、反向連結、屬性、關聯圖與 Apple Intelligence。
+/// 黑色頂部列（左側欄開關與 vault 名稱｜分頁｜搜尋與右側欄開關）、黑色功能列，
+/// 下面是左側欄（檔案、搜尋、標籤）、中間的分頁內容、右側欄（大綱、連結、屬性、AI；首頁時是待辦）。
 /// iPad 的左右側欄可以收合、拖曳調整寬度；iPhone 從左右邊緣滑出。
 struct WorkspaceView: View {
     @Environment(Workspace.self) private var workspace
@@ -12,7 +13,7 @@ struct WorkspaceView: View {
     var body: some View {
         @Bindable var workspace = workspace
         ZStack {
-            MidnightBackground()
+            DS.ink.ignoresSafeArea()
             if sizeClass == .compact {
                 CompactWorkspace()
             } else {
@@ -20,11 +21,11 @@ struct WorkspaceView: View {
             }
             if workspace.showsPalette {
                 CommandPalette()
-                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                    .transition(.opacity)
                     .zIndex(10)
             }
         }
-        .animation(.snappy(duration: 0.26), value: workspace.showsPalette)
+        .animation(.easeOut(duration: 0.18), value: workspace.showsPalette)
         .background { KeyboardShortcuts() }
         .fullScreenCover(isPresented: $workspace.showsCamera) {
             LiveScanView(onClose: { workspace.showsCamera = false })
@@ -73,110 +74,118 @@ private struct FolderItem: Identifiable {
     var id: String { path }
 }
 
-// MARK: - iPad：三欄
+// MARK: - iPad
 
 private struct RegularWorkspace: View {
     @Environment(Workspace.self) private var workspace
 
     var body: some View {
-        HStack(spacing: 0) {
-            Ribbon()
-                .padding(.vertical, 12)
-                .padding(.leading, 8)
-                .padding(.trailing, 2)
-
-            if workspace.isLeftOpen {
-                LeftSidebar()
-                    .frame(width: workspace.leftWidth)
-                    .glass(cornerRadius: 22)
-                    .padding(.vertical, 10)
-                    .padding(.leading, 6)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                ResizeHandle(
-                    width: workspace.leftWidth,
-                    range: Workspace.leftWidthRange,
-                    grows: .trailing,
-                    onChange: { workspace.setLeftWidth($0, persist: $1) },
-                    onCollapse: { workspace.setLeftOpen(false) }
-                )
-            }
-
-            CenterPane(compact: false)
-                .padding(.vertical, 10)
-                .padding(.leading, workspace.isLeftOpen ? 0 : 6)
-                .padding(.trailing, workspace.isRightOpen ? 0 : 10)
-
-            if workspace.isRightOpen {
-                ResizeHandle(
-                    width: workspace.rightWidth,
-                    range: Workspace.rightWidthRange,
-                    grows: .leading,
-                    onChange: { workspace.setRightWidth($0, persist: $1) },
-                    onCollapse: { workspace.setRightOpen(false) }
-                )
-                RightSidebar()
-                    .frame(width: workspace.rightWidth)
-                    .glass(cornerRadius: 22)
-                    .padding(.vertical, 10)
-                    .padding(.trailing, 10)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+        VStack(spacing: 0) {
+            TopBar()
+            HStack(spacing: 0) {
+                Ribbon()
+                    .frame(width: Workspace.railWidth)
+                    .padding(.top, 6)
+                    .padding(.bottom, 14)
+                ContentPanel()
             }
         }
-        .animation(.smooth(duration: 0.34), value: workspace.isLeftOpen)
-        .animation(.smooth(duration: 0.34), value: workspace.isRightOpen)
+        .animation(.smooth(duration: 0.3), value: workspace.isLeftOpen)
+        .animation(.smooth(duration: 0.3), value: workspace.isRightOpen)
     }
 }
 
-/// 側欄之間的拖曳把手：拖曳調整寬度，往內拖過頭或點兩下收起。
+/// 內容面板：左側欄｜中間｜右側欄，上緣圓角接在頂部列下面。
+private struct ContentPanel: View {
+    @Environment(Workspace.self) private var workspace
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if workspace.isLeftOpen {
+                LeftSidebar()
+                    .frame(width: workspace.leftWidth)
+                    .background(DS.sidebar)
+                    .overlay(alignment: .trailing) {
+                        ResizeHandle(
+                            width: workspace.leftWidth,
+                            range: Workspace.leftWidthRange,
+                            growsTrailing: true,
+                            onChange: { workspace.setLeftWidth($0, persist: $1) },
+                            onCollapse: { workspace.setLeftOpen(false) }
+                        )
+                    }
+                    .transition(.move(edge: .leading))
+                    .zIndex(1)
+            }
+            CenterPane()
+            if workspace.isRightOpen {
+                RightSidebar()
+                    .frame(width: workspace.rightWidth)
+                    .background(DS.sidebar)
+                    .overlay(alignment: .leading) {
+                        ResizeHandle(
+                            width: workspace.rightWidth,
+                            range: Workspace.rightWidthRange,
+                            growsTrailing: false,
+                            onChange: { workspace.setRightWidth($0, persist: $1) },
+                            onCollapse: { workspace.setRightOpen(false) }
+                        )
+                    }
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
+            }
+        }
+        .background(DS.pane)
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: DS.radius, topTrailingRadius: DS.radius, style: .continuous))
+        .ignoresSafeArea(edges: .bottom)
+    }
+}
+
+/// 側欄與中間的分隔線：拖曳調整寬度，往內拖過頭或點兩下收起。
 private struct ResizeHandle: View {
     let width: CGFloat
     let range: ClosedRange<CGFloat>
-    /// 側欄往哪個方向變寬：左側欄往右（trailing），右側欄往左（leading）。
-    let grows: HorizontalEdge
+    /// 左側欄往右變寬；右側欄往左變寬。
+    let growsTrailing: Bool
     let onChange: (CGFloat, Bool) -> Void
     let onCollapse: () -> Void
 
     @State private var startWidth: CGFloat?
     @State private var isHovering = false
 
-    private var isActive: Bool { startWidth != nil || isHovering }
-
     var body: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: 12)
-            .contentShape(Rectangle())
-            .overlay {
-                Capsule()
-                    .fill(startWidth != nil ? AnyShapeStyle(Midnight.gradient) : AnyShapeStyle(Midnight.textTertiary.opacity(0.5)))
-                    .frame(width: isActive ? 3 : 2, height: isActive ? 64 : 28)
-                    .opacity(isActive ? 1 : 0.5)
-                    .animation(.snappy(duration: 0.2), value: isActive)
-            }
-            .onHover { isHovering = $0 }
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if startWidth == nil { startWidth = width }
-                        onChange(proposed(value.translation.width), false)
+        ZStack {
+            Rectangle()
+                .fill(startWidth != nil || isHovering ? DS.textTertiary : DS.hairline)
+                .frame(width: startWidth != nil ? 2 : 1)
+        }
+        .frame(width: 12)
+        .contentShape(Rectangle())
+        .offset(x: growsTrailing ? 6 : -6)
+        .onHover { isHovering = $0 }
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    if startWidth == nil { startWidth = width }
+                    onChange(proposed(value.translation.width), false)
+                }
+                .onEnded { value in
+                    let raw = (startWidth ?? width) + signed(value.translation.width)
+                    startWidth = nil
+                    if raw < range.lowerBound - 72 {
+                        onCollapse()
+                    } else {
+                        onChange(proposed(value.translation.width), true)
                     }
-                    .onEnded { value in
-                        let raw = (startWidth ?? width) + signed(value.translation.width)
-                        startWidth = nil
-                        if raw < range.lowerBound - 72 {
-                            onCollapse()
-                        } else {
-                            onChange(proposed(value.translation.width), true)
-                        }
-                    }
-            )
-            .onTapGesture(count: 2, perform: onCollapse)
-            .accessibilityLabel("調整側欄寬度")
-            .accessibilityHint("點兩下收起側欄")
+                }
+        )
+        .onTapGesture(count: 2, perform: onCollapse)
+        .accessibilityLabel("調整側欄寬度")
+        .accessibilityHint("點兩下收起側欄")
     }
 
     private func signed(_ translation: CGFloat) -> CGFloat {
-        grows == .trailing ? translation : -translation
+        growsTrailing ? translation : -translation
     }
 
     private func proposed(_ translation: CGFloat) -> CGFloat {
@@ -184,7 +193,7 @@ private struct ResizeHandle: View {
     }
 }
 
-// MARK: - iPhone：中間全螢幕，左右抽屜
+// MARK: - iPhone
 
 private struct CompactWorkspace: View {
     @Environment(Workspace.self) private var workspace
@@ -194,19 +203,19 @@ private struct CompactWorkspace: View {
 
     var body: some View {
         ZStack {
-            CenterPane(compact: true)
-                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: 64) }
-
-            CompactDock(
-                onLeft: { setDrawer(left: true) },
-                onRight: { setDrawer(right: true) },
-                onTabs: { showsTabs = true }
-            )
-            .frame(maxHeight: .infinity, alignment: .bottom)
-            .ignoresSafeArea(.keyboard, edges: .bottom)
+            VStack(spacing: 0) {
+                CompactTopBar(
+                    onLeft: { setDrawer(left: true) },
+                    onRight: { setDrawer(right: true) },
+                    onTabs: { showsTabs = true }
+                )
+                CenterPane()
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous))
+                    .ignoresSafeArea(edges: .bottom)
+            }
 
             if showsLeft || showsRight {
-                Color.black.opacity(0.45)
+                Color.black.opacity(0.4)
                     .ignoresSafeArea()
                     .onTapGesture { setDrawer() }
                     .transition(.opacity)
@@ -216,10 +225,10 @@ private struct CompactWorkspace: View {
                     VStack(spacing: 0) {
                         ScrollView(.horizontal, showsIndicators: false) {
                             Ribbon(axis: .horizontal, onAction: { setDrawer() })
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
                         }
-                        Divider().overlay(Midnight.hairline)
+                        .background(DS.ink.ignoresSafeArea(edges: .top))
                         LeftSidebar()
                     }
                 }
@@ -230,12 +239,11 @@ private struct CompactWorkspace: View {
         }
         .overlay(alignment: .leading) { edgeSwipe(opensLeft: true) }
         .overlay(alignment: .trailing) { edgeSwipe(opensLeft: false) }
-        .animation(.smooth(duration: 0.32), value: showsLeft)
-        .animation(.smooth(duration: 0.32), value: showsRight)
+        .animation(.smooth(duration: 0.3), value: showsLeft)
+        .animation(.smooth(duration: 0.3), value: showsRight)
         .sheet(isPresented: $showsTabs) {
             TabSwitcher()
                 .presentationDetents([.medium, .large])
-                .presentationBackground(.ultraThinMaterial)
         }
         .onChange(of: workspace.active) { _, _ in setDrawer() }
     }
@@ -249,9 +257,10 @@ private struct CompactWorkspace: View {
         let panel = content()
         return GeometryReader { proxy in
             panel
-                .frame(width: min(proxy.size.width * 0.86, 360))
+                .frame(width: min(proxy.size.width * 0.84, 330))
                 .frame(maxHeight: .infinity)
-                .glass(cornerRadius: 0)
+                .background(DS.sidebar.ignoresSafeArea())
+                .shadow(color: .black.opacity(0.2), radius: 20, x: edge == .leading ? 8 : -8)
                 .frame(maxWidth: .infinity, alignment: edge == .leading ? .leading : .trailing)
                 .gesture(
                     DragGesture(minimumDistance: 16).onEnded { value in
@@ -264,7 +273,7 @@ private struct CompactWorkspace: View {
         .zIndex(5)
     }
 
-    /// 從螢幕左右邊緣往內滑，打開抽屜。
+    /// 從螢幕左右邊緣往內滑，打開側欄。
     @ViewBuilder
     private func edgeSwipe(opensLeft: Bool) -> some View {
         if !showsLeft && !showsRight {
@@ -288,8 +297,8 @@ private struct KeyboardShortcuts: View {
 
     var body: some View {
         ZStack {
-            Button("指令面板") { workspace.showsPalette.toggle() }
-                .keyboardShortcut("p", modifiers: .command)
+            Button("搜尋筆記或指令") { workspace.showsPalette.toggle() }
+                .keyboardShortcut("k", modifiers: .command)
             Button("快速開啟筆記") { workspace.showsPalette = true }
                 .keyboardShortcut("o", modifiers: .command)
             Button("新增筆記") { workspace.newTextNote() }
@@ -306,10 +315,8 @@ private struct KeyboardShortcuts: View {
                 .keyboardShortcut("[", modifiers: .command)
             Button("切換右側欄") { workspace.toggleRight() }
                 .keyboardShortcut("]", modifiers: .command)
-            Button("搜尋") { workspace.showLeft(.search) }
+            Button("搜尋內文") { workspace.showLeft(.search) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
-            Button("關聯圖") { workspace.open(.graph) }
-                .keyboardShortcut("g", modifiers: .command)
         }
         .frame(width: 0, height: 0)
         .opacity(0)

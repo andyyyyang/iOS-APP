@@ -1,314 +1,217 @@
 import SwiftUI
 import UIKit
 
-/// 新分頁：大字問候、快速動作、統計、最近編輯、待辦與關聯圖預覽。
+/// 首頁（新分頁）：標題與日期、最近編輯的筆記卡片；底部是新增用的黑色浮動工具列。
 struct StartPage: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
-    @State private var appeared = false
 
     private var isCompact: Bool { sizeClass == .compact }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: isCompact ? 26 : 34) {
-                hero
-                    .reveal(appeared, index: 0, reduceMotion: reduceMotion)
-                actions
-                    .reveal(appeared, index: 1, reduceMotion: reduceMotion)
-                if !sync.isConfigured {
-                    pairingCard
-                        .reveal(appeared, index: 2, reduceMotion: reduceMotion)
-                }
-                stats
-                    .reveal(appeared, index: 2, reduceMotion: reduceMotion)
-                recent
-                    .reveal(appeared, index: 3, reduceMotion: reduceMotion)
-                if isCompact {
-                    tasksCard
-                    graphCard
-                } else {
-                    HStack(alignment: .top, spacing: 18) {
-                        tasksCard
-                        graphCard
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    if !sync.isConfigured {
+                        pairingCard
                     }
-                    .reveal(appeared, index: 4, reduceMotion: reduceMotion)
+                    recent
                 }
+                .padding(.horizontal, isCompact ? 16 : 24)
+                .padding(.top, isCompact ? 18 : 22)
+                .padding(.bottom, 100)
+                .frame(maxWidth: 1200, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, isCompact ? 20 : 44)
-            .padding(.vertical, isCompact ? 24 : 40)
-            .frame(maxWidth: 1120, alignment: .leading)
-            .frame(maxWidth: .infinity)
-        }
-        .scrollIndicators(.hidden)
-        .onAppear { appeared = true }
-    }
+            .scrollIndicators(.hidden)
 
-    // MARK: - 英雄區
-
-    private var greeting: String {
-        switch Calendar.current.component(.hour, from: Date()) {
-        case 5..<11: return "早安"
-        case 11..<14: return "午安"
-        case 14..<18: return "午後好"
-        case 18..<23: return "晚安"
-        default: return "夜深了"
+            CreatePalette()
+                .padding(.bottom, isCompact ? 14 : 20)
         }
     }
 
-    private var hero: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                GlassChip(text: NotesStore.folderTitle(""), systemImage: "books.vertical")
-                if sync.isConfigured {
-                    GlassChip(
-                        text: sync.isSyncing ? "同步中" : (sync.lastError == nil ? "已同步" : "同步失敗"),
-                        systemImage: sync.lastError == nil ? "checkmark.icloud" : "exclamationmark.icloud",
-                        tint: sync.lastError == nil ? Midnight.success : Midnight.warning
-                    )
-                }
-            }
-            Text(greeting)
-                .font(.system(size: isCompact ? 52 : 76, weight: .heavy, design: .rounded))
-                .tracking(-1.5)
-                .gradientForeground()
-                .glow(Midnight.violet, radius: 30, opacity: 0.35)
-            Text(subtitle)
-                .font(.system(isCompact ? .body : .title3, design: .rounded))
-                .foregroundStyle(Midnight.textSecondary)
-        }
-        .padding(.top, isCompact ? 8 : 18)
-        .background(alignment: .topTrailing) {
-            DotGrid(spacing: 20, opacity: 0.12)
-                .frame(width: 320, height: 200)
-                .mask(RadialGradient(colors: [.black, .clear], center: .topTrailing, startRadius: 0, endRadius: 260))
-                .offset(x: 20, y: -20)
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("我的筆記")
+                .font(.system(size: isCompact ? 26 : 28, weight: .semibold))
+                .foregroundStyle(DS.text)
+            Text(Date().formatted(.dateTime.month().day().weekday(.wide)))
+                .font(.subheadline)
+                .foregroundStyle(DS.textSecondary)
         }
     }
-
-    private var subtitle: String {
-        let date = Date().formatted(.dateTime.month().day().weekday(.wide))
-        let today = store.editedTodayCount
-        return today > 0 ? "\(date) · 今天編輯了 \(today) 則筆記" : "\(date) · 今天想寫點什麼？"
-    }
-
-    // MARK: - 快速動作
-
-    private var actions: some View {
-        FlowLayout(spacing: 10) {
-            Button {
-                workspace.newTextNote()
-            } label: {
-                Label("新增筆記", systemImage: "square.and.pencil")
-            }
-            .buttonStyle(MidnightButtonStyle(kind: .primary))
-            Button {
-                workspace.requestNewNotebook()
-            } label: {
-                Label("手寫筆記本", systemImage: "pencil.and.scribble")
-            }
-            .buttonStyle(MidnightButtonStyle(kind: .secondary))
-            Button {
-                workspace.open(.scan)
-            } label: {
-                Label("掃描文件", systemImage: "doc.viewfinder")
-            }
-            .buttonStyle(MidnightButtonStyle(kind: .secondary))
-            Button {
-                workspace.showsPalette = true
-            } label: {
-                HStack(spacing: 8) {
-                    Label("搜尋", systemImage: "magnifyingglass")
-                    if !isCompact {
-                        Text("⌘P")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(Midnight.textTertiary)
-                    }
-                }
-            }
-            .buttonStyle(MidnightButtonStyle(kind: .secondary))
-        }
-    }
-
-    // MARK: - 統計
-
-    private var stats: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompact ? 140 : 180), spacing: 14)], spacing: 14) {
-            GlowStat(value: store.notes.count, title: "筆記", systemImage: "doc.text")
-            GlowStat(value: store.notebookCount, title: "手寫筆記本", systemImage: "pencil.and.scribble")
-            GlowStat(value: store.editedTodayCount, title: "今天編輯", systemImage: "clock")
-            GlowStat(value: store.openTasks.count, title: "待辦", systemImage: "checklist")
-        }
-    }
-
-    // MARK: - 最近編輯
 
     private var recent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionLabel("最近編輯", trailing: store.notes.isEmpty ? nil : "\(min(store.notes.count, 12))")
+            HStack(alignment: .firstTextBaseline) {
+                Text("最近編輯")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(DS.text)
+                Spacer()
+                if !store.notes.isEmpty {
+                    Button("全部 \(store.notes.count)") { workspace.open(.folder("")) }
+                        .font(.footnote)
+                        .foregroundStyle(DS.textSecondary)
+                        .buttonStyle(.plain)
+                }
+            }
             if store.notes.isEmpty {
-                Text(sync.isConfigured ? "vault 裡還沒有筆記，按「新增筆記」開始。" : "配對後，整個 vault 的筆記都會出現在這裡。")
-                    .font(.callout)
-                    .foregroundStyle(Midnight.textTertiary)
+                Text(sync.isConfigured ? "vault 裡還沒有筆記，按下方的 T 新增一則。" : "配對後，整個 vault 的筆記都會出現在這裡。")
+                    .font(.subheadline)
+                    .foregroundStyle(DS.textTertiary)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 14) {
-                        ForEach(Array(store.notes.prefix(12))) { note in
-                            Button {
-                                workspace.openNote(note.path)
-                            } label: {
-                                RecentNoteCard(note: note)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: isCompact ? 280 : 210), spacing: 12)], alignment: .leading, spacing: 12) {
+                    ForEach(Array(store.notes.prefix(isCompact ? 8 : 15))) { note in
+                        Button {
+                            workspace.openNote(note.path)
+                        } label: {
+                            NoteCard(note: note, featured: note.path == featuredPath)
+                        }
+                        .buttonStyle(CardPressStyle())
+                        .contextMenu {
+                            if let url = NotesSettings.obsidianURL(for: note.path) {
+                                Link(destination: url) { Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app") }
                             }
-                            .buttonStyle(CardPressStyle())
-                            .hoverEffect(.lift)
+                            Button(role: .destructive) { workspace.pendingDelete = note } label: { Label("刪除", systemImage: "trash") }
                         }
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 2)
                 }
-                .scrollClipDisabled()
             }
         }
     }
 
-    // MARK: - 待辦與關聯圖
-
-    private var tasksCard: some View {
-        let tasks = Array(store.openTasks.prefix(7))
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                SectionLabel("待辦", trailing: "\(store.openTasks.count)")
-                Button {
-                    workspace.open(.tasks)
-                } label: {
-                    Image(systemName: "arrow.up.right")
-                }
-                .buttonStyle(GlassIconButtonStyle(size: 28))
-                .accessibilityLabel("所有待辦")
-            }
-            if tasks.isEmpty {
-                Text("沒有待辦事項。在筆記中寫「- [ ] 事項」就會出現在這裡。")
-                    .font(.callout)
-                    .foregroundStyle(Midnight.textTertiary)
-            } else {
-                ForEach(tasks) { task in
-                    TaskLine(task: task, onToggle: { store.toggle(task) }, onOpen: { workspace.openNote(task.notePath) })
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .glassCard(padding: 18)
-    }
-
-    private var graphCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel("關聯圖")
-                Button {
-                    workspace.open(.graph)
-                } label: {
-                    Image(systemName: "arrow.up.right")
-                }
-                .buttonStyle(GlassIconButtonStyle(size: 28))
-                .accessibilityLabel("開啟關聯圖")
-            }
-            GraphView(focus: nil)
-                .frame(height: 260)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .glassCard(padding: 18)
+    /// 最近的手寫筆記本以粉紫色大卡片顯示（「繼續書寫」）。
+    private var featuredPath: String? {
+        store.notes.prefix(15).first(where: \.isNotebook)?.path
     }
 
     private var pairingCard: some View {
-        HStack(alignment: .center, spacing: 16) {
-            GlowIcon(systemImage: "qrcode.viewfinder", size: 52)
+        HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("與 Obsidian 配對")
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundStyle(Midnight.text)
+                    .font(.headline)
+                    .foregroundStyle(DS.text)
                 Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」並掃描 QR Code，整個 vault 就會雙向同步。")
                     .font(.subheadline)
-                    .foregroundStyle(Midnight.textSecondary)
+                    .foregroundStyle(DS.onPastelSecondary)
             }
             Spacer(minLength: 0)
-            if !isCompact {
-                Button("開始配對") { workspace.showsPairing = true }
-                    .buttonStyle(MidnightButtonStyle(kind: .primary, compact: true))
-            }
+            Button("開始配對") { workspace.showsPairing = true }
+                .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
         }
-        .glassCard(padding: 18)
-        .overlay(RoundedRectangle(cornerRadius: Midnight.radiusL, style: .continuous).strokeBorder(Midnight.gradient, lineWidth: 1).opacity(0.5))
-        .onTapGesture { workspace.showsPairing = true }
+        .pastelCard(.sky, padding: 16)
     }
 }
 
-// MARK: - 元件
+/// 新增用的黑色浮動工具列：文字筆記、手寫筆記本、待辦清單、資料夾、掃描，最右邊是更多。
+struct CreatePalette: View {
+    @Environment(Workspace.self) private var workspace
+    @State private var folderName = ""
+    @State private var showsFolderPrompt = false
 
-/// 進場動畫：依序淡入上移。
-private extension View {
-    func reveal(_ appeared: Bool, index: Int, reduceMotion: Bool) -> some View {
-        opacity(appeared ? 1 : 0)
-            .offset(y: appeared || reduceMotion ? 0 : 18)
-            .animation(reduceMotion ? .none : .smooth(duration: 0.7).delay(Double(index) * 0.07), value: appeared)
+    var body: some View {
+        FloatingPalette {
+            PaletteButton(title: "新增筆記", glyph: "T", pastel: .lavender) { workspace.newTextNote() }
+            PaletteButton(title: "新增手寫筆記本", systemImage: "pencil", pastel: .sky) { workspace.requestNewNotebook() }
+            PaletteButton(title: "新增待辦清單", systemImage: "checkmark.square", pastel: .butter) { workspace.newTaskNote() }
+            PaletteButton(title: "新增資料夾", systemImage: "folder", pastel: .blush) {
+                folderName = ""
+                showsFolderPrompt = true
+            }
+            PaletteButton(title: "掃描文件", systemImage: "viewfinder", pastel: .mint) { workspace.open(.scan) }
+            Menu {
+                Button { workspace.showsCamera = true } label: { Label("相機連續拍照", systemImage: "camera") }
+                Button { workspace.open(.tasks) } label: { Label("所有待辦", systemImage: "checkmark.square") }
+                Button { workspace.open(.graph) } label: { Label("關聯圖", systemImage: WorkspaceTab.graph.systemImage) }
+                Button { Task { await VaultSyncCenter.shared.syncNow() } } label: { Label("立即同步", systemImage: "arrow.triangle.2.circlepath") }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(DS.inkRaised, in: Circle())
+            }
+            .accessibilityLabel("更多")
+        }
+        .alert("新增資料夾", isPresented: $showsFolderPrompt) {
+            TextField("名稱", text: $folderName)
+            Button("取消", role: .cancel) {}
+            Button("建立") { workspace.createFolder(named: folderName, in: workspace.currentFolder) }
+        } message: {
+            Text(workspace.currentFolder.isEmpty ? "建立在最上層" : "建立在「\(workspace.currentFolder)」中")
+        }
     }
 }
 
-/// 卡片按下時微微縮小。
+/// 卡片按下時稍微變淡。
 struct CardPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.snappy(duration: 0.2), value: configuration.isPressed)
+            .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
 
-/// 最近編輯的筆記卡：標題、摘要、時間、標籤與待辦進度；有圖片時顯示縮圖。
-struct RecentNoteCard: View {
+/// 筆記卡片：資料夾、右上角的圓形圖示、標題、摘要，下方是標籤或待辦進度與時間。
+/// `featured`：手寫筆記本的粉紫色大卡片。
+struct NoteCard: View {
     let note: NoteSummary
+    var featured = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: note.isNotebook ? "pencil.and.scribble" : "doc.text")
-                    .font(.caption.weight(.semibold))
-                    .gradientForeground()
-                Text(note.mtime.formatted(.relative(presentation: .named)))
-                    .font(.system(.caption, design: .rounded))
-                    .foregroundStyle(Midnight.textTertiary)
-                Spacer(minLength: 0)
-                if let embed = note.firstEmbed {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                Text(featured ? "手寫筆記本" : (note.folder.isEmpty ? "最上層" : note.folder))
+                    .font(.caption.weight(featured ? .medium : .regular))
+                    .foregroundStyle(featured ? DS.onPastelSecondary : DS.textTertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if let embed = note.firstEmbed, !note.isNotebook {
                     EmbedThumbnail(embed: embed)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 30, height: 30)
+                } else {
+                    CircleIcon(
+                        systemImage: note.isNotebook ? "pencil" : "doc.text",
+                        fill: featured ? DS.card : DS.Pastel.stable(for: note.path).color
+                    )
                 }
             }
             Text(note.title)
-                .font(.system(.headline, design: .rounded))
-                .foregroundStyle(Midnight.text)
+                .font(.system(size: featured ? 19 : 17, weight: .semibold))
+                .foregroundStyle(DS.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-            Text(note.snippet.isEmpty ? "沒有其他文字" : note.snippet)
-                .font(.subheadline)
-                .foregroundStyle(Midnight.textSecondary)
+            Text(note.snippet.isEmpty ? (note.isNotebook ? "手寫內容" : "沒有其他文字") : note.snippet)
+                .font(.system(size: 13))
+                .foregroundStyle(featured ? DS.onPastelSecondary : DS.textSecondary)
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                if let tag = note.tags.first {
-                    GlassChip(text: "#" + tag, tint: Midnight.hue(for: tag))
+            HStack(alignment: .center) {
+                if featured {
+                    Text("繼續書寫")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(DS.text)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(DS.card, in: Capsule())
+                } else if !note.tasks.isEmpty {
+                    Chip(text: "待辦 \(note.tasks.filter(\.done).count)/\(note.tasks.count)", pastel: .mint)
+                } else if let tag = note.tags.first {
+                    Chip(text: "#" + tag, pastel: DS.Pastel.stable(for: tag))
                 }
-                if !note.tasks.isEmpty {
-                    let done = note.tasks.filter(\.done).count
-                    GlassChip(text: "\(done)/\(note.tasks.count)", systemImage: "checklist", tint: done == note.tasks.count ? Midnight.success : Midnight.accent)
-                }
+                Spacer(minLength: 4)
+                Text(note.mtime.formatted(.relative(presentation: .named)))
+                    .font(.caption)
+                    .foregroundStyle(featured ? DS.onPastelSecondary : DS.textTertiary)
+                    .lineLimit(1)
             }
         }
-        .padding(16)
-        .frame(width: 236, height: 196, alignment: .topLeading)
-        .glass(cornerRadius: 22, shadow: false)
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .card(padding: 16, fill: featured ? DS.Pastel.lavender.color : DS.card, bordered: !featured)
+        .contentShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
     }
 }
 
@@ -321,9 +224,7 @@ struct TaskLine: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Button(action: onToggle) {
-                Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(task.done ? AnyShapeStyle(Midnight.gradient) : AnyShapeStyle(Midnight.textTertiary))
+                TaskCheckbox(done: task.done)
             }
             .buttonStyle(.plain)
             .sensoryFeedback(.success, trigger: task.done)
@@ -331,19 +232,39 @@ struct TaskLine: View {
             Button(action: onOpen) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(task.text)
-                        .font(.system(.subheadline, design: .rounded))
-                        .foregroundStyle(task.done ? Midnight.textTertiary : Midnight.text)
+                        .font(.subheadline)
+                        .foregroundStyle(task.done ? DS.textTertiary : DS.text)
                         .strikethrough(task.done)
                         .multilineTextAlignment(.leading)
                     Text(task.noteTitle)
-                        .font(.system(.caption2, design: .rounded))
-                        .foregroundStyle(Midnight.textTertiary)
+                        .font(.caption2)
+                        .foregroundStyle(DS.textTertiary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
+    }
+}
+
+/// 圓形核取方塊：完成時是黑底白勾。
+struct TaskCheckbox: View {
+    let done: Bool
+    var size: CGFloat = 18
+
+    var body: some View {
+        ZStack {
+            if done {
+                Circle().fill(DS.primary)
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.5, weight: .bold))
+                    .foregroundStyle(DS.onPrimary)
+            } else {
+                Circle().strokeBorder(DS.textTertiary, lineWidth: 1.5)
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -360,10 +281,10 @@ struct EmbedThumbnail: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Midnight.raised
+                DS.control
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .task(id: embed) {
             let center = VaultSyncCenter.shared
             let files = center.vault.allFiles()
