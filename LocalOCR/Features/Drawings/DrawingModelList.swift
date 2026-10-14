@@ -64,6 +64,7 @@ struct DrawingListFilter: Equatable {
     var includeUncatalogued = true
 
     /// 套用篩選與排序。
+    @MainActor
     func apply(to models: [DrawingModel], library: DrawingsLibrary) -> [DrawingModel] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = models.filter { model in
@@ -124,15 +125,12 @@ struct DrawingModelList: View {
         let visible = filter.apply(to: models, library: library)
         VStack(spacing: 0) {
             header(visible: visible.count)
-            Divider().overlay(DS.hairline)
             ScrollViewReader { reader in
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: 10) {
                         if visible.isEmpty {
-                            Text("沒有符合條件的機種")
-                                .font(.subheadline)
-                                .foregroundStyle(DS.textTertiary)
-                                .padding(.top, 40)
+                            EmptyStateView(title: "沒有符合條件的機種", message: models.isEmpty ? nil : "調整搜尋或篩選條件試試看。")
+                                .padding(.top, 30)
                         }
                         ForEach(visible) { model in
                             DrawingModelCard(
@@ -145,8 +143,10 @@ struct DrawingModelList: View {
                             .id(model.id)
                         }
                     }
-                    .padding(10)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 16)
                 }
+                .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: selectedID) { _, id in
                     guard let id else { return }
@@ -154,86 +154,60 @@ struct DrawingModelList: View {
                 }
             }
         }
-        .background(DS.sidebar)
     }
 
     private func header(visible: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            SearchField(placeholder: "搜尋機種、SID、SAP、原廠圖號、PO 號…", text: $filter.query)
+            ScrollView(.horizontal) {
                 HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(DS.textTertiary)
-                    TextField("搜尋機種 / SID / SAP / 原廠圖號 / PO 號 / 終端客戶…", text: $filter.query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.subheadline)
-                    if !filter.query.isEmpty {
-                        Button { filter.query = "" } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(DS.textTertiary)
+                    Menu {
+                        Button("全部") { filter.type = nil }
+                        ForEach(DrawingListFilter.types, id: \.self) { type in
+                            Button(type) { filter.type = type }
                         }
-                        .buttonStyle(.plain)
+                    } label: {
+                        FilterChip(title: filter.type ?? "型態", isActive: filter.type != nil)
                     }
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 34)
-                .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
-            }
-            HStack(spacing: 6) {
-                filterMenu(filter.type.map { "型態: \($0)" } ?? "型態: 全部", isActive: filter.type != nil) {
-                    Button("全部") { filter.type = nil }
-                    ForEach(DrawingListFilter.types, id: \.self) { type in
-                        Button(type) { filter.type = type }
-                    }
-                }
-                filterMenu(filter.size.rawValue, isActive: filter.size != .all) {
-                    ForEach(DrawingListFilter.SizeBucket.allCases) { bucket in
-                        Button(bucket.rawValue) { filter.size = bucket }
-                    }
-                }
-                filterMenu(filter.thickness.rawValue, isActive: filter.thickness != .all) {
-                    ForEach(DrawingListFilter.ThicknessBucket.allCases) { bucket in
-                        Button(bucket.rawValue) { filter.thickness = bucket }
-                    }
-                }
-                Spacer(minLength: 0)
-                Menu {
-                    Picker("排序", selection: $filter.sort) {
-                        ForEach(DrawingListFilter.Sort.allCases) { sort in
-                            Text(sort.rawValue).tag(sort)
+                    Menu {
+                        ForEach(DrawingListFilter.SizeBucket.allCases) { bucket in
+                            Button(bucket.rawValue) { filter.size = bucket }
                         }
+                    } label: {
+                        FilterChip(title: filter.size == .all ? "長寬" : filter.size.rawValue, isActive: filter.size != .all)
                     }
-                    Divider()
-                    Toggle("只顯示有圖面", isOn: $filter.onlyWithDrawings)
-                    Toggle("含未登錄機種", isOn: $filter.includeUncatalogued)
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 17))
-                        .foregroundStyle(DS.text)
+                    Menu {
+                        ForEach(DrawingListFilter.ThicknessBucket.allCases) { bucket in
+                            Button(bucket.rawValue) { filter.thickness = bucket }
+                        }
+                    } label: {
+                        FilterChip(title: filter.thickness == .all ? "厚度" : filter.thickness.rawValue, isActive: filter.thickness != .all)
+                    }
+                    Menu {
+                        Picker("排序", selection: $filter.sort) {
+                            ForEach(DrawingListFilter.Sort.allCases) { sort in
+                                Text(sort.rawValue).tag(sort)
+                            }
+                        }
+                        Divider()
+                        Toggle("只顯示有圖面", isOn: $filter.onlyWithDrawings)
+                        Toggle("含未登錄機種", isOn: $filter.includeUncatalogued)
+                    } label: {
+                        FilterChip(title: filter.sort.rawValue, systemImage: "arrow.up.arrow.down")
+                    }
                 }
-                .accessibilityLabel("排序與顯示")
             }
-            Text("\(visible)/\(models.count) 機種・\(models.reduce(0) { $0 + $1.drawings.count }) 張\(filter.sort == .drawings ? "" : "・\(filter.sort.rawValue)")")
-                .font(.caption)
+            .scrollIndicators(.hidden)
+            Text("\(visible)/\(models.count) 款 · \(models.reduce(0) { $0 + $1.drawings.count }) 張圖面")
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(DS.textTertiary)
         }
-        .padding(10)
-    }
-
-    private func filterMenu<Content: View>(_ title: String, isActive: Bool, @ViewBuilder content: () -> Content) -> some View {
-        Menu(content: content) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(isActive ? DS.onPrimary : DS.text)
-                .lineLimit(1)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(isActive ? DS.primary : DS.control, in: Capsule())
-        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
     }
 }
 
-/// 機種卡片：圖號、張數、終端客戶、型態，原廠圖號、SAP、尺寸、未結量與單價。
+/// 機種卡片：圖號、型態、終端客戶，原廠圖號、尺寸、未結量與單價。選取中的卡片是粉紫色（同首頁的手寫筆記卡）。
 struct DrawingModelCard: View {
     let model: DrawingModel
     let capacity: CapacityItem?
@@ -244,100 +218,79 @@ struct DrawingModelCard: View {
     var body: some View {
         let customerDwg = DrawingCustomers.customerDwg(of: model, capacity: capacity)
         let open = DrawingCapacity.openQty(model: model, capacity: capacity)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(model.dwg)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(DS.link)
-                tag("\(model.drawings.count) 張")
-                if !model.endUser.isEmpty {
-                    Text(model.endUser)
-                        .font(.system(size: 10, weight: .medium))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.dwg)
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(DS.text)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .overlay(Capsule().strokeBorder(DS.textTertiary, style: StrokeStyle(lineWidth: 1, dash: model.endUserGuessed ? [3, 2] : [])))
-                        .opacity(model.endUserGuessed ? 0.8 : 1)
+                    Text(customerDwg.value.isEmpty ? (model.sap.isEmpty ? "—" : "SAP \(model.sap)") : customerDwg.value)
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? DS.onPastelSecondary : DS.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Button(action: onSpec) {
+                    Image(systemName: "info")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .buttonStyle(CircleIconButtonStyle(size: 28))
+                .accessibilityLabel("規格與筆記")
+            }
+            HStack(spacing: 6) {
+                DrawingTypeBadge(type: model.type)
+                if !model.endUser.isEmpty {
+                    Chip(text: model.endUser + (model.endUserGuessed ? "?" : ""))
                         .help(model.endUserGuessed ? "catalog 沒登錄終端客戶，這是依客戶圖號字頭推定的（CV90 → Qualcomm）" : "")
                 }
-                DrawingTypeBadge(type: model.type)
-                Spacer(minLength: 0)
+                Chip(text: "\(model.drawings.count) 張")
             }
-            HStack {
-                Text("原廠：").foregroundStyle(DS.textTertiary)
-                    + Text(customerDwg.value.isEmpty ? "-" : customerDwg.value).fontWeight(.semibold).foregroundStyle(DS.text)
-                Spacer(minLength: 8)
-                Text("SAP: \(model.sap.isEmpty ? "-" : model.sap)")
-                    .foregroundStyle(DS.textSecondary)
-            }
-            .font(.caption)
-            .lineLimit(1)
-            Text("LWT: ").foregroundStyle(DS.textTertiary)
-                + Text("\(dash(model.spec.length)) × \(dash(model.spec.width)) × \(dash(model.spec.thickness))").foregroundStyle(DS.link)
-            HStack {
+            Text("\(dash(model.spec.length)) × \(dash(model.spec.width)) × \(dash(model.spec.thickness))")
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(DS.text)
+            HStack(alignment: .firstTextBaseline) {
                 if open.qty > 0 {
-                    (Text("未結：").foregroundStyle(DS.textTertiary) + Text(DrawingFormat.qty(open.qty)).fontWeight(.bold).foregroundStyle(DS.danger))
-                    if open.fromPoList { tag("PO") }
+                    Text("未結 \(DrawingFormat.qty(open.qty))")
+                        .font(.footnote.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(DS.danger)
                 } else {
                     Text(model.hasCatalog ? "已出清 / NPI" : "未登錄 catalog")
+                        .font(.footnote)
                         .foregroundStyle(model.hasCatalog ? DS.success : DS.textTertiary)
                 }
                 Spacer(minLength: 8)
-                Text(model.spec.unitPrice)
-                    .foregroundStyle(DS.danger)
-                    .lineLimit(1)
+                if !model.spec.unitPrice.isEmpty {
+                    Text(model.spec.unitPrice)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(isSelected ? DS.onPastelSecondary : DS.textSecondary)
+                        .lineLimit(1)
+                }
             }
-            .font(.caption)
-            HStack(spacing: 6) {
-                Button(isSelected ? "檢視中" : "開啟圖面", action: onSelect)
-                    .buttonStyle(PillButtonStyle(kind: isSelected ? .primary : .secondary, compact: true))
-                Button("規格", action: onSpec)
-                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
-            }
-            .font(.caption)
         }
-        .font(.caption)
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? DS.control : DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(isSelected ? DS.link : DS.cardBorder, lineWidth: isSelected ? 1.5 : 1))
+        .card(padding: 14, fill: isSelected ? DS.Pastel.lavender.color : DS.card, bordered: !isSelected)
         .contentShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
         .onTapGesture(perform: onSelect)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     private func dash(_ text: String) -> String { text.isEmpty ? "-" : text }
-
-    private func tag(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(DS.textSecondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(DS.control, in: Capsule())
-    }
 }
 
-/// 結構型態的色票（Hat 藍、FlatTop 綠、Ring 橘，未登錄灰）。
+/// 結構型態：粉彩膠囊（Hat 藍、FlatTop 綠、Ring 黃，未登錄只有框線）。
 struct DrawingTypeBadge: View {
     let type: String
 
     var body: some View {
-        let colors = Self.colors(for: type)
-        Text(type.isEmpty ? "未登錄" : type)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(colors.foreground)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(colors.background, in: Capsule())
-            .overlay(Capsule().strokeBorder(colors.border, lineWidth: 1))
+        Chip(text: type.isEmpty ? "未登錄" : type, pastel: Self.pastel(for: type))
     }
 
-    static func colors(for type: String) -> (background: Color, foreground: Color, border: Color) {
+    static func pastel(for type: String) -> DS.Pastel? {
         switch type {
-        case "Hat": return (Color(hex: 0x1E3A8A), Color(hex: 0x93C5FD), Color(hex: 0x3B82F6))
-        case "FlatTop": return (Color(hex: 0x064E3B), Color(hex: 0x6EE7B7), Color(hex: 0x10B981))
-        case "Ring": return (Color(hex: 0x78350F), Color(hex: 0xFCD34D), Color(hex: 0xF59E0B))
-        default: return (DS.control, DS.textSecondary, DS.cardBorder)
+        case "Hat": return .sky
+        case "FlatTop": return .mint
+        case "Ring": return .butter
+        default: return nil
         }
     }
 }

@@ -25,7 +25,6 @@ struct DrawingsPage: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            Divider().overlay(DS.hairline)
             content
         }
         .background(DS.pane)
@@ -43,8 +42,42 @@ struct DrawingsPage: View {
 
     // MARK: 上方
 
+    private var subtitle: String {
+        if library.isLoading { return library.loadedAt == nil ? "掃描中…" : "重新掃描中…" }
+        let models = library.models
+        guard !models.isEmpty else { return "" }
+        return "\(models.count) 款 · \(models.reduce(0) { $0 + $1.drawings.count }) 張圖面"
+    }
+
     private var topBar: some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
+            PageHeader("圖面", subtitle: isCompact ? nil : subtitle) {
+                if !isCompact { controls }
+            }
+            if isCompact {
+                HStack(spacing: 8) {
+                    controls
+                    Spacer(minLength: 0)
+                }
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(DS.textSecondary)
+                }
+            }
+            if let error = library.error, !library.isLoading {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(DS.warning)
+            }
+        }
+        .padding(.horizontal, isCompact ? 16 : 24)
+        .padding(.top, isCompact ? 14 : 18)
+        .padding(.bottom, 12)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 8) {
             scopeMenu
             Button {
                 Task {
@@ -54,34 +87,12 @@ struct DrawingsPage: View {
                 }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(DS.text)
-                    .frame(width: 32, height: 32)
-                    .background(DS.control, in: Circle())
             }
+            .buttonStyle(CircleIconButtonStyle())
             .disabled(library.isLoading)
             .accessibilityLabel("重新掃描")
-            if library.isLoading {
-                Text(library.loadedAt == nil ? "掃描中…" : "重新掃描中…")
-                    .font(.footnote)
-                    .foregroundStyle(DS.textSecondary)
-            } else if let error = library.error {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(DS.warning)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Picker("檢視", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 240)
+            SegmentedPills(options: Mode.allCases.map { (value: $0, title: $0.rawValue) }, selection: $mode)
         }
-        .padding(.horizontal, isCompact ? 12 : 16)
-        .padding(.vertical, 10)
     }
 
     private var scopeMenu: some View {
@@ -101,22 +112,10 @@ struct DrawingsPage: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
-                Text("客戶")
-                    .font(.caption)
-                    .foregroundStyle(DS.textTertiary)
-                Text(library.scopeLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(DS.text)
-                Image(systemName: "chevron.down")
-                    .font(.caption)
-                    .foregroundStyle(DS.textTertiary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(DS.control, in: Capsule())
+            FilterChip(title: library.scopeLabel, isActive: library.scope != "all", systemImage: "building.2")
         }
         .disabled(library.scopes.isEmpty)
+        .accessibilityLabel("客戶")
     }
 
     private func scopeButton(_ scope: DrawingScope) -> some View {
@@ -151,12 +150,16 @@ struct DrawingsPage: View {
     }
 
     private var regularBrowser: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 12) {
             DrawingModelList(models: library.models, selectedID: selectedID, filter: $filter, onSelect: select, onSpec: { specModel = $0 })
                 .frame(width: 340)
-            Divider().overlay(DS.hairline)
             DrawingViewer(model: selected) { specModel = $0 }
+                .clipShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
         }
+        .padding(.leading, 12)
+        .padding(.trailing, 24)
+        .padding(.bottom, 16)
     }
 
     private var compactBrowser: some View {

@@ -575,3 +575,223 @@ struct JSONBlock: View {
         .background(DS.sidebar, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
     }
 }
+
+// MARK: - 頁面共用元件（知識庫、待辦、圖面、產能清單、搜尋共用，讓各頁一致）
+
+/// 頁面標題：大標題、灰色的摘要，右側放這一頁的動作。
+struct PageHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String?
+    @ViewBuilder var trailing: () -> Trailing
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    init(_ title: String, subtitle: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.system(size: sizeClass == .compact ? 24 : 28, weight: .semibold))
+                .foregroundStyle(DS.text)
+                .lineLimit(1)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(DS.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension PageHeader where Trailing == EmptyView {
+    init(_ title: String, subtitle: String? = nil) {
+        self.init(title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
+/// 搜尋欄：白底細框，聚焦時框線變深，有清除鈕。
+struct SearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    var height: CGFloat = 36
+    var autofocus = false
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(DS.textTertiary)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(DS.text)
+                .focused($focused)
+                .submitLabel(.search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(DS.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: height)
+        .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous).strokeBorder(focused ? DS.textSecondary : DS.cardBorder, lineWidth: 1))
+        .onAppear { if autofocus { focused = true } }
+    }
+}
+
+/// 篩選膠囊：選單的標籤或開關，選中時黑底白字（同主要膠囊按鈕）。
+struct FilterChip: View {
+    let title: String
+    var isActive = false
+    var systemImage: String?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            Text(title)
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(isActive ? DS.onPrimary : DS.text)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .background(isActive ? DS.primary : DS.control, in: Capsule(style: .continuous))
+        .contentShape(Capsule())
+    }
+}
+
+/// 開關膠囊。
+struct ToggleChip: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            FilterChip(title: title, isActive: isOn, systemImage: isOn ? "checkmark" : nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// 分段切換：淺灰底，選中的那段黑底白字。
+struct SegmentedPills<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    @Binding var selection: Value
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                let isSelected = option.value == selection
+                Button {
+                    selection = option.value
+                } label: {
+                    Text(option.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(isSelected ? DS.onPrimary : DS.textSecondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(isSelected ? DS.primary : Color.clear, in: Capsule(style: .continuous))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(DS.control, in: Capsule(style: .continuous))
+    }
+}
+
+/// 粉彩數字卡：小標題、大數字、可選的說明。
+struct MetricTile: View {
+    let title: String
+    let value: String
+    var detail: String?
+    var pastel: DS.Pastel = .sky
+    var valueColor: Color = DS.text
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(DS.onPastelSecondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 19, weight: .bold).monospacedDigit())
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(DS.onPastelSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .pastelCard(pastel, padding: 12)
+    }
+}
+
+/// 一列「標籤 … 值」（規格、狀態等資訊卡片中）。
+struct InfoRow: View {
+    let label: String
+    let value: String
+    var valueColor: Color = DS.text
+    var emphasized = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(DS.textSecondary)
+            Spacer(minLength: 12)
+            Text(value.isEmpty ? "-" : value)
+                .font(.subheadline.weight(emphasized ? .semibold : .regular))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+/// 圓形圖示按鈕（淺灰底），頁面標題列上的次要動作。
+struct CircleIconButtonStyle: ButtonStyle {
+    var size: CGFloat = 34
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: size * 0.42, weight: .medium))
+            .foregroundStyle(DS.text)
+            .frame(width: size, height: size)
+            .background(DS.control, in: Circle())
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(Circle())
+    }
+}

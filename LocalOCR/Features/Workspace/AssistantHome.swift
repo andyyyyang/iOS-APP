@@ -80,14 +80,7 @@ struct AssistantHome: View {
     // MARK: 標題
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("知識庫")
-                .font(.system(size: isCompact ? 24 : 26, weight: .semibold))
-                .foregroundStyle(DS.text)
-            Text(Date().formatted(.dateTime.month().day().weekday(.wide)))
-                .font(.subheadline)
-                .foregroundStyle(DS.textSecondary)
-            Spacer(minLength: 8)
+        PageHeader("知識庫", subtitle: Date().formatted(.dateTime.month().day().weekday(.wide))) {
             if !assistant.sessions.isEmpty {
                 Menu {
                     ForEach(assistant.sessions.prefix(20)) { session in
@@ -99,7 +92,7 @@ struct AssistantHome: View {
                     }
                 } label: {
                     Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(DS.text)
                         .frame(width: 34, height: 34)
                         .background(DS.control, in: Circle())
@@ -121,7 +114,7 @@ struct AssistantHome: View {
             }
         }
         .padding(.horizontal, gutter)
-        .padding(.top, isCompact ? 16 : 20)
+        .padding(.top, isCompact ? 18 : 22)
         .padding(.bottom, 10)
     }
 

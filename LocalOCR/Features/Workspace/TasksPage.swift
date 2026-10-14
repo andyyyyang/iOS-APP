@@ -13,14 +13,7 @@ struct TasksPage: View {
         }
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("待辦")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(DS.text)
-                    Text("\(store.openTasks.count) 件未完成 · \(groups.count) 則筆記")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(DS.textSecondary)
-                }
+                PageHeader("待辦", subtitle: "\(store.openTasks.count) 件未完成 · \(groups.count) 則筆記")
                 if groups.isEmpty {
                     EmptyStateView(title: "沒有待辦事項", message: "在筆記中寫「- [ ] 事項」就會出現在這裡。")
                         .padding(.top, 40)

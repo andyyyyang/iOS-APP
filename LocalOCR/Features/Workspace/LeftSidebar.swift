@@ -291,36 +291,13 @@ struct SearchPanel: View {
     @State private var query = ""
     /// 伺服器的內文搜尋結果（包含還沒下載的筆記）。
     @State private var remoteHits: [VaultSearchHit] = []
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             PanelHeader(title: "搜尋", subtitle: "標題、標籤與內文") { EmptyView() }
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(DS.textTertiary)
-                TextField("搜尋整個 vault", text: $query)
-                    .textFieldStyle(.plain)
-                    .focused($focused)
-                    .submitLabel(.search)
-                    .autocorrectionDisabled()
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(DS.textTertiary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("清除")
-                }
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 10)
-            .frame(height: 36)
-            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous).strokeBorder(focused ? DS.textSecondary : DS.cardBorder, lineWidth: 1))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            SearchField(placeholder: "搜尋整個 vault", text: $query, autofocus: true)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
 
             let trimmed = query.trimmingCharacters(in: .whitespaces)
             ScrollView {
@@ -347,7 +324,6 @@ struct SearchPanel: View {
             }
             .scrollIndicators(.hidden)
         }
-        .onAppear { focused = true }
         .task(id: query) {
             // 伺服器上的內文搜尋（還沒下載的筆記也找得到），輸入停下來再查
             let trimmed = query.trimmingCharacters(in: .whitespaces)

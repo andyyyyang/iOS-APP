@@ -169,8 +169,8 @@ struct DrawingPDFCanvas: UIViewRepresentable {
         view.displayMode = .singlePage
         view.displayDirection = .vertical
         view.autoScales = true
-        view.pageShadowsEnabled = false
-        view.backgroundColor = UIColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        view.pageShadowsEnabled = true
+        view.backgroundColor = UIColor(DS.sidebar)
         view.onLayout = { [weak state] in state?.updateZoom() }
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped))
         doubleTap.numberOfTapsRequired = 2
@@ -217,7 +217,8 @@ struct DrawingPDFCanvas: UIViewRepresentable {
     }
 }
 
-/// 圖面檢視器：上方是版本與頁碼，右上是縮放、旋轉、規格與原生檢視。
+/// 圖面檢視器：圖面放在淺灰底上（像紙張），下方是黑色浮動工具列（同首頁與資料夾的工具列）：
+/// 版本、頁碼、適應、旋轉、規格筆記與更多（1:1、原生檢視、分享）。
 struct DrawingViewer: View {
     let model: DrawingModel?
     var onShowSpec: (DrawingModel) -> Void
@@ -234,10 +235,26 @@ struct DrawingViewer: View {
     private var isCompact: Bool { sizeClass == .compact }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color(red: 0.13, green: 0.13, blue: 0.13)
+        ZStack(alignment: .bottom) {
+            DS.sidebar
             canvas
-            toolbars
+            if model != nil {
+                palette
+                    .padding(.bottom, isCompact ? 12 : 18)
+                    .padding(.horizontal, 12)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if case .document = state.content, let zoom = state.zoomPercent {
+                Text("\(zoom)%")
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .foregroundStyle(DS.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(DS.card.opacity(0.9), in: Capsule())
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
         }
         .clipped()
         .task(id: loadKey) {
@@ -258,170 +275,125 @@ struct DrawingViewer: View {
     private var canvas: some View {
         switch state.content {
         case .idle:
-            placeholder(title: model == nil ? "沒有選取機種" : model!.dwg, detail: model == nil ? "" : "找不到圖面檔案", hint: "")
-        case .loading:
-            ProgressView()
-                .tint(.white)
+            EmptyStateView(title: model == nil ? "沒有選取機種" : "\(model!.dwg) 找不到圖面檔案", message: model == nil ? "從左邊的清單選一個機種。" : nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loading:
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("正在取得圖面…")
+                    .font(.footnote)
+                    .foregroundStyle(DS.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .document:
             DrawingPDFCanvas(state: state)
         case .failed(let title, let detail, let hint):
-            placeholder(title: title, detail: detail, hint: hint)
+            EmptyStateView(title: title, message: [detail, hint].filter { !$0.isEmpty }.joined(separator: "\n"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .cadOnly(let path):
-            VStack(spacing: 10) {
-                placeholder(title: "這一版是 CAD 原始檔", detail: DrawingPaths.baseName(path), hint: "沒有可預覽的格式")
-                    .frame(maxHeight: 140)
+            VStack(spacing: 14) {
+                EmptyStateView(title: "這一版是 CAD 原始檔", message: "\(DrawingPaths.baseName(path))\n沒有可預覽的格式")
                 Button {
                     Task { await share(path) }
                 } label: {
                     Label(isPreparingShare ? "準備中…" : "分享 CAD 檔", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                 .disabled(isPreparingShare)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private func placeholder(title: String, detail: String, hint: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.white)
-            if !detail.isEmpty {
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .multilineTextAlignment(.center)
-            }
-            if !hint.isEmpty {
-                Text(hint)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.5))
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     // MARK: 工具列
 
-    private var toolbars: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if model != nil {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        versionControls
-                        if state.pageCount >= 2 {
-                            pageControls
-                        }
-                    }
-                    .padding(6)
-                }
-                .scrollIndicators(.hidden)
-                .fixedSize(horizontal: !isCompact, vertical: true)
-                .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .environment(\.colorScheme, .dark)
-            }
-            Spacer(minLength: 0)
-            if model != nil {
-                viewControls
-                    .padding(6)
-                    .background(.ultraThinMaterial.opacity(0.9), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .environment(\.colorScheme, .dark)
-            }
-        }
-        .padding(10)
-    }
-
-    private var versionControls: some View {
-        HStack(spacing: 4) {
-            toolButton("chevron.left", label: "上一版") { step(-1) }
+    private var palette: some View {
+        FloatingPalette {
+            PaletteButton(title: "上一版", systemImage: "chevron.left", size: 36) { step(-1) }
                 .disabled(drawings.count < 2)
-            Menu {
-                ForEach(Array(drawings.enumerated()), id: \.offset) { index, drawing in
-                    Button {
-                        versionIndex = index
-                    } label: {
-                        Text("\(index + 1)/\(drawings.count) \(drawing.isViewable ? "" : "［CAD］")\(drawing.displayLabel)")
-                    }
-                }
-            } label: {
-                Text(drawings.isEmpty ? "此機種尚無圖面檔" : "\(versionIndex + 1)/\(drawings.count) \(current.map { ($0.isViewable ? "" : "［CAD］") + $0.displayLabel } ?? "")")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .frame(maxWidth: isCompact ? 150 : 260)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            .disabled(drawings.isEmpty)
-            toolButton("chevron.right", label: "下一版") { step(1) }
+                .opacity(drawings.count < 2 ? 0.4 : 1)
+            versionMenu
+            PaletteButton(title: "下一版", systemImage: "chevron.right", size: 36) { step(1) }
                 .disabled(drawings.count < 2)
-        }
-    }
-
-    private var pageControls: some View {
-        HStack(spacing: 4) {
-            toolButton("chevron.up", label: "上一頁") { state.previousPage() }
-            Text("\(state.pageIndex + 1)/\(state.pageCount)")
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(.white)
-            toolButton("chevron.down", label: "下一頁") { state.nextPage() }
-        }
-        .padding(.leading, 6)
-    }
-
-    private var viewControls: some View {
-        HStack(spacing: 4) {
-            if !isCompact {
-                Text(state.zoomPercent.map { "\($0)%" } ?? "—")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(minWidth: 44)
+                .opacity(drawings.count < 2 ? 0.4 : 1)
+            if state.pageCount >= 2 {
+                divider
+                PaletteButton(title: "上一頁", systemImage: "chevron.up", size: 36) { state.previousPage() }
+                Text("\(state.pageIndex + 1)/\(state.pageCount)")
+                    .font(.footnote.monospacedDigit().weight(.medium))
+                    .foregroundStyle(DS.onInk)
+                PaletteButton(title: "下一頁", systemImage: "chevron.down", size: 36) { state.nextPage() }
             }
-            Menu {
-                Button { state.fit() } label: { Label("適應畫面", systemImage: "arrow.down.right.and.arrow.up.left") }
-                Button { state.actualSize() } label: { Label("1:1（150dpi 實際大小）", systemImage: "1.magnifyingglass") }
-                Button { state.rotate() } label: { Label("旋轉 90°", systemImage: "rotate.right") }
-                Divider()
-                Button { previewURL = state.fileURL } label: { Label("原生檢視", systemImage: "doc.viewfinder") }
-                    .disabled(state.fileURL == nil)
-                Button { sharing = state.fileURL } label: { Label("分享這一版", systemImage: "square.and.arrow.up") }
-                    .disabled(state.fileURL == nil)
-            } label: {
-                toolIcon("ellipsis.circle")
-            }
+            divider
             if !isCompact {
-                toolButton("arrow.down.right.and.arrow.up.left", label: "適應") { state.fit() }
-                toolButton("rotate.right", label: "旋轉 90°") { state.rotate() }
+                PaletteButton(title: "適應畫面", systemImage: "arrow.down.right.and.arrow.up.left", size: 36) { state.fit() }
+                PaletteButton(title: "旋轉 90°", systemImage: "rotate.right", size: 36) { state.rotate() }
             }
             if let model {
-                Button { onShowSpec(model) } label: {
-                    Text("規格筆記")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
+                PaletteButton(title: "規格筆記", systemImage: "info", pastel: .lavender, size: 36) { onShowSpec(model) }
             }
+            moreMenu
         }
     }
 
-    private func toolButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { toolIcon(systemImage) }
-            .accessibilityLabel(label)
+    private var divider: some View {
+        Rectangle()
+            .fill(DS.onInkDim.opacity(0.4))
+            .frame(width: 1, height: 22)
+            .padding(.horizontal, 2)
     }
 
-    private func toolIcon(_ systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .contentShape(Rectangle())
+    private var versionMenu: some View {
+        Menu {
+            ForEach(Array(drawings.enumerated()), id: \.offset) { index, drawing in
+                Button {
+                    versionIndex = index
+                } label: {
+                    if index == versionIndex {
+                        Label("\(index + 1). \(drawing.isViewable ? "" : "［CAD］")\(drawing.displayLabel)", systemImage: "checkmark")
+                    } else {
+                        Text("\(index + 1). \(drawing.isViewable ? "" : "［CAD］")\(drawing.displayLabel)")
+                    }
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(drawings.isEmpty ? "沒有圖面" : (current.map { ($0.isViewable ? "" : "［CAD］") + $0.displayLabel } ?? ""))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(DS.onInk)
+                    .lineLimit(1)
+                if drawings.count > 1 {
+                    Text("第 \(versionIndex + 1) / \(drawings.count) 版")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(DS.onInkDim)
+                }
+            }
+            .frame(maxWidth: isCompact ? 120 : 220, alignment: .leading)
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .background(DS.inkRaised, in: Capsule())
+        }
+        .disabled(drawings.isEmpty)
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button { state.fit() } label: { Label("適應畫面", systemImage: "arrow.down.right.and.arrow.up.left") }
+            Button { state.actualSize() } label: { Label("1:1（150dpi 實際大小）", systemImage: "1.magnifyingglass") }
+            Button { state.rotate() } label: { Label("旋轉 90°", systemImage: "rotate.right") }
+            Divider()
+            Button { previewURL = state.fileURL } label: { Label("原生檢視", systemImage: "doc.viewfinder") }
+                .disabled(state.fileURL == nil)
+            Button { sharing = state.fileURL } label: { Label("分享這一版", systemImage: "square.and.arrow.up") }
+                .disabled(state.fileURL == nil)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(DS.onInk)
+                .frame(width: 36, height: 36)
+                .background(DS.inkRaised, in: Circle())
+        }
+        .accessibilityLabel("更多")
     }
 
     private func step(_ delta: Int) {

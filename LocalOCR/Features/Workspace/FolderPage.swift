@@ -102,15 +102,7 @@ struct FolderPage: View {
                 }
                 .font(.footnote)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(NotesStore.folderTitle(folder))
-                    .font(.system(size: isCompact ? 26 : 28, weight: .semibold))
-                    .foregroundStyle(DS.text)
-                    .lineLimit(2)
-                Text("\(store.fileCount(inFolder: folder)) 個檔案")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(DS.textSecondary)
-            }
+            PageHeader(NotesStore.folderTitle(folder), subtitle: "\(store.fileCount(inFolder: folder)) 個檔案")
         }
     }
 

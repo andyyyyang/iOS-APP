@@ -86,7 +86,6 @@ struct CapacityTableView: View {
         let visible = sorted(filtered(allRows, columns: columns), columns: columns)
         VStack(spacing: 0) {
             toolbar(all: allRows, visible: visible, columns: columns)
-            Divider().overlay(DS.hairline)
             if let notice {
                 Text(notice)
                     .font(.footnote)
@@ -95,6 +94,11 @@ struct CapacityTableView: View {
                     .onTapGesture { self.notice = nil }
             }
             table(rows: visible, allRows: allRows, columns: columns)
+                .background(DS.card)
+                .clipShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
         }
         .sheet(item: Binding(get: { exportURL.map(ExportFile.init) }, set: { exportURL = $0?.url })) { file in
             ShareSheet(items: [file.url])
@@ -257,34 +261,29 @@ struct CapacityTableView: View {
         if !onlyDiff && diffCount > 0 { extras.append("不一致 \(diffCount)") }
         if !showArchived && archivedCount > 0 { extras.append("歷史 \(archivedCount) 未顯示") }
 
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                (Text("在手未交 ").foregroundStyle(DS.textSecondary)
-                    + Text(DrawingFormat.qty(total)).font(.system(size: 15, weight: .bold)).foregroundStyle(DS.link)
-                    + Text(" pcs").foregroundStyle(DS.textSecondary))
-                Text("\(visible.count)/\(all.filter { showArchived || !$0.archived }.count) 款\(breakdown.isEmpty ? "" : "（\(breakdown)）")\(extras.isEmpty ? "" : "　" + extras.joined(separator: "・"))")
-                    .foregroundStyle(DS.textTertiary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                sourceLabel
-            }
-            .font(.footnote)
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(DS.textTertiary)
-                    TextField("搜尋圖號 / SID / SAP / PO 號 / 機台 / 站別產能…", text: $query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.subheadline)
+        return VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal) {
+                HStack(spacing: 10) {
+                    MetricTile(title: "在手未交", value: DrawingFormat.qty(total), detail: "pcs", pastel: .blush, valueColor: total > 0 ? DS.danger : DS.text)
+                        .frame(width: 150)
+                    MetricTile(title: "機種", value: "\(visible.count) / \(all.filter { showArchived || !$0.archived }.count)", detail: breakdown.isEmpty ? "款" : breakdown, pastel: .sky)
+                        .frame(width: 200)
+                    MetricTile(title: "與 catalog 不一致", value: "\(diffCount)", detail: extras.isEmpty ? "款" : extras.joined(separator: "・"), pastel: .butter, valueColor: diffCount > 0 ? DS.warning : DS.text)
+                        .frame(width: 180)
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
-                .frame(maxWidth: 360)
-                toggleChip("僅不一致", isOn: $onlyDiff)
-                toggleChip("歷史機種", isOn: $showArchived)
-                toggleChip("CNC 產能", isOn: $showCNC)
+            }
+            .scrollIndicators(.hidden)
+            HStack(spacing: 8) {
+                SearchField(placeholder: "搜尋圖號、SID、SAP、PO 號、機台、站別產能…", text: $query, height: 34)
+                    .frame(maxWidth: 380)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ToggleChip(title: "僅不一致", isOn: $onlyDiff)
+                        ToggleChip(title: "歷史機種", isOn: $showArchived)
+                        ToggleChip(title: "CNC 產能", isOn: $showCNC)
+                    }
+                }
+                .scrollIndicators(.hidden)
                 Spacer(minLength: 0)
                 Menu {
                     Button { export(visible, columns: columns, toVault: false) } label: { Label("分享 CSV（Excel 可開）", systemImage: "square.and.arrow.up") }
@@ -292,13 +291,13 @@ struct CapacityTableView: View {
                     Divider()
                     Text("「重新抽取」「寫回 catalog」要在電腦的 Obsidian 執行（需要 Python）")
                 } label: {
-                    Label("匯出", systemImage: "square.and.arrow.up")
-                        .font(.subheadline.weight(.medium))
+                    FilterChip(title: "匯出", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
             }
+            sourceLabel
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
     }
 
     @ViewBuilder
@@ -324,18 +323,6 @@ struct CapacityTableView: View {
         if meta.dedupRows > 0 { lines.append("已去重 \(meta.dedupRows) 筆重複訂單行") }
         if meta.hiddenTotalOpenQty > 0 { lines.append("隱藏分頁（結案）另有 \(DrawingFormat.qty(meta.hiddenTotalOpenQty)) pcs 未計入") }
         return lines.joined(separator: "\n")
-    }
-
-    private func toggleChip(_ title: String, isOn: Binding<Bool>) -> some View {
-        Button { isOn.wrappedValue.toggle() } label: {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(isOn.wrappedValue ? DS.onPrimary : DS.text)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(isOn.wrappedValue ? DS.primary : DS.control, in: Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: 表格
@@ -446,7 +433,7 @@ struct CapacityTableView: View {
                 HStack(spacing: 3) {
                     processBadge(row.process)
                     if row.trimming != nil {
-                        badge("外剪", color: Color(red: 0.94, green: 0.63, blue: 0.16))
+                        Chip(text: "外剪", pastel: .butter)
                             .help("有外剪站（\(row.trimming?.text ?? "")）——外剪較難，試作時間長，交期要留意")
                     }
                 }
@@ -601,14 +588,14 @@ struct CapacityTableView: View {
     }
 
     private func processBadge(_ process: String) -> some View {
-        let color: Color
+        let pastel: DS.Pastel?
         switch process {
-        case "沖壓": color = DS.link
-        case "蝕刻": color = DS.success
-        case "CNC": color = DS.danger
-        default: color = DS.textTertiary
+        case "沖壓": pastel = .sky
+        case "蝕刻": pastel = .mint
+        case "CNC": pastel = .blush
+        default: pastel = nil
         }
-        return badge(process.isEmpty ? "未定" : process, color: color)
+        return Chip(text: process.isEmpty ? "未定" : process, pastel: pastel)
     }
 
     private func badge(_ text: String, color: Color) -> some View {
