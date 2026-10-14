@@ -1,7 +1,9 @@
 name: Obsidian Plugin Release
 
 # Publishes each plugin version as the GitHub release "obsidian-plugin-<version>" with main.js and
-# manifest.json, which the plugin's online updater (obsidian-plugin/src/updater.ts) installs.
+# manifest.json, then asks the LocalOCR server on Railway to mirror it into its storage bucket right away
+# (it also mirrors every 30 minutes); the plugin's online updater (obsidian-plugin/src/updater.ts) installs
+# from the server, with these GitHub releases as fallback.
 # Runs when manifest.json changes (a version bump); a version that already has a release is skipped.
 
 on:
@@ -21,7 +23,7 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: obsidian-plugin
@@ -72,3 +74,31 @@ jobs:
             --title "LocalOCR Sync $VERSION" \
             --notes-file release-notes.md
           echo "已發佈 $TAG"
+      - name: Mirror into the Railway server (needs LOCALOCR_API_KEY secret)
+        # Never fails the release: the server mirrors on its own within 30 minutes anyway.
+        continue-on-error: true
+        timeout-minutes: 6
+        env:
+          BASE_URL: https://localocr-server-production.up.railway.app
+          API_KEY: ${{ secrets.LOCALOCR_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$API_KEY" ]; then
+            echo "::notice::未設定 LOCALOCR_API_KEY secret，略過；伺服器會在 30 分鐘內自動同步 $VERSION"
+            exit 0
+          fi
+          out="$RUNNER_TEMP/refresh.json"
+          # Railway may still be deploying a server change pushed together with this version: retry for a few minutes.
+          # The key goes to curl on stdin (-H @-), never on a command line or in the log.
+          for attempt in $(seq 1 6); do
+            code=$(printf 'Authorization: Bearer %s\n' "$API_KEY" \
+              | curl -sS -o "$out" -w "%{http_code}" --max-time 45 -X POST -H @- "$BASE_URL/v1/obsidian-plugin/refresh" || true)
+            echo "refresh 第 $attempt 次：HTTP $code $(head -c 500 "$out" 2>/dev/null)"
+            if [ "$code" = "200" ] && curl -fsS -o /dev/null "$BASE_URL/obsidian-plugin/releases/$VERSION/manifest.json"; then
+              echo "已同步到伺服器：$BASE_URL/obsidian-plugin/latest.json"
+              echo "- 伺服器已同步 $VERSION：$BASE_URL/obsidian-plugin/latest.json" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::warning::伺服器尚未同步 $VERSION（可能還在部署），它會在 30 分鐘內自動同步"

@@ -1,4 +1,15 @@
-import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template, TemplateRule } from "../types.js";
+import type {
+  Classification,
+  JsonObject,
+  JsonValue,
+  PluginFileInfo,
+  PluginFileName,
+  PluginRelease,
+  Scan,
+  ScanSource,
+  Template,
+  TemplateRule,
+} from "../types.js";
 
 // JSON columns are stored as TEXT (not jsonb) so object key order survives the round trip.
 
@@ -69,5 +80,37 @@ export function templateFromRow(row: TemplateRow): Template {
     rules: row.rules === null ? [] : (JSON.parse(row.rules) as TemplateRule[]),
     version: row.version,
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+export interface PluginReleaseRow {
+  version: string;
+  min_app_version: string;
+  notes: string;
+  published_at: Date;
+  /** Raw JSON text: {"main.js":{"sha256","size"},"manifest.json":{"sha256","size"}}. */
+  files: string;
+  mirrored_at: Date;
+}
+
+export function pluginReleaseToRow(release: PluginRelease): PluginReleaseRow {
+  return {
+    version: release.version,
+    min_app_version: release.minAppVersion,
+    notes: release.notes,
+    published_at: new Date(release.publishedAt),
+    files: JSON.stringify(release.files),
+    mirrored_at: new Date(release.mirroredAt),
+  };
+}
+
+export function pluginReleaseFromRow(row: PluginReleaseRow): PluginRelease {
+  return {
+    version: row.version,
+    minAppVersion: row.min_app_version,
+    notes: row.notes,
+    publishedAt: row.published_at.toISOString(),
+    files: JSON.parse(row.files) as Record<PluginFileName, PluginFileInfo>,
+    mirroredAt: row.mirrored_at.toISOString(),
   };
 }

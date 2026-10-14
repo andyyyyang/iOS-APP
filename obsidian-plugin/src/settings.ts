@@ -19,7 +19,7 @@ export interface LocalOcrSettings {
 	jsonPreserveFields: string;
 	/** Field that marks a JSON record as finished (never touched again). */
 	jsonDoneField: string;
-	/** Install new plugin versions from GitHub automatically (otherwise only notify). */
+	/** Install new plugin versions from the LocalOCR server (or GitHub) automatically (otherwise only notify). */
 	autoUpdate: boolean;
 }
 
@@ -166,7 +166,8 @@ export class LocalOcrSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("自動更新")
 			.setDesc(
-				"啟動 Obsidian 時（之後每 6 小時）檢查 GitHub 上的新版本，有新版本就自動下載、驗證並安裝，不必再手動複製檔案。關閉時只會通知。",
+				"啟動 Obsidian 時（之後每 6 小時）從你的 Railway 伺服器檢查新版本（未填伺服器網址或伺服器沒有可用版本時改用 GitHub），" +
+					"有新版本就自動下載、比對 SHA-256 並安裝，不必再手動複製檔案。關閉時只會通知。",
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(settings.autoUpdate).onChange(async (value) => {

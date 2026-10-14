@@ -3,6 +3,7 @@ import type { VaultConfig } from "../config.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { ClassifyService } from "./classify.js";
+import { ObsidianPluginService } from "./obsidian-plugin.js";
 import { PairingService } from "./pairing.js";
 import { ScanService } from "./scans.js";
 import { TemplateService } from "./templates.js";
@@ -18,6 +19,7 @@ export interface Services {
   validate: ValidateService;
   vault: VaultService;
   pairing: PairingService;
+  obsidianPlugin: ObsidianPluginService;
 }
 
 export function createServices({
@@ -25,6 +27,7 @@ export function createServices({
   classifier,
   vault = null,
   vaultConfig = null,
+  obsidianPlugin,
   now = Date.now,
 }: {
   store: Store;
@@ -33,6 +36,8 @@ export function createServices({
   vault?: VaultStore | null;
   /** Bucket credentials for GET /v1/vault/remotely-save; null answers 503 there. */
   vaultConfig?: VaultConfig | null;
+  /** Plugin release mirror (index.ts builds it to schedule mirroring); default: one over `store` and `vault` with fetch(). */
+  obsidianPlugin?: ObsidianPluginService;
   /** Clock in milliseconds (pairing code expiry). */
   now?: () => number;
 }): Services {
@@ -44,7 +49,8 @@ export function createServices({
     validate: new ValidateService(store),
     vault: new VaultService(vault, vaultConfig),
     pairing: new PairingService({ now }),
+    obsidianPlugin: obsidianPlugin ?? new ObsidianPluginService({ store, vault, now }),
   };
 }
 
-export { ClassifyService, PairingService, ScanService, TemplateService, ValidateService, VaultService };
+export { ClassifyService, ObsidianPluginService, PairingService, ScanService, TemplateService, ValidateService, VaultService };

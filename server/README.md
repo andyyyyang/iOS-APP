@@ -10,7 +10,7 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 
 ## 端點
 
-除了 `GET /health` 與 `POST /pair`，所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
+除了 `GET /health`、`POST /pair` 與 `GET /obsidian-plugin/*`，所有端點都需要 API 金鑰：`Authorization: Bearer <API_KEY>`，或查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在無法設定標頭時使用）。
 錯誤一律回傳 `{"error":{"code":"...","message":"..."}}`。
 
 | 方法與路徑 | 說明 |
@@ -35,6 +35,10 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `GET /v1/vault/remotely-save?vault=` | Remotely Save 的 S3 設定（含儲存桶金鑰）與匯入用的 `obsidian://remotely-save?…` 網址 `{"settings":{...},"uri":"..."}`；未設定 vault 時 503 `vault_not_configured` |
 | `POST /v1/pairing` | 建立配對碼（`XXXX-XXXX`，10 分鐘、只能用一次）：`{"vaultName"?,"notesFolder"?}` → 201 `{"code","expiresAt","pairUrl"}` |
 | `POST /pair` | **不需要金鑰**：`{"code":"XXXX-XXXX"}` → `{"apiKey","vaultName","notesFolder"}`；無效／過期／已用過 404 `invalid_code`；每個 IP 每 10 分鐘最多 10 次，超過 429 `rate_limited` |
+| `GET /obsidian-plugin/latest.json` | **不需要金鑰**：最新的 Obsidian 插件版本 `{"version","minAppVersion","notes","publishedAt","files":{"main.js":{"sha256","size","url"},"manifest.json":{...}}}`（`url` 為絕對網址）；還沒有同步任何版本 404 `not_found`，未設定 vault 503 `vault_not_configured` |
+| `GET /obsidian-plugin/releases/{version}/{file}` | **不需要金鑰**：插件檔案（`file` 為 `main.js` 或 `manifest.json`），`ETag` 為 SHA-256、可長期快取；儲存桶中的檔案與資料庫紀錄的 SHA-256 不符時 502 `integrity_error` |
+| `GET /obsidian-plugin/latest/{file}` | **不需要金鑰**：最新版本的插件檔案（第一次手動安裝的下載連結） |
+| `POST /v1/obsidian-plugin/refresh` | 立即從 GitHub Releases 同步插件新版本 → `{"latest","mirrored":[...],"repaired":[...],"failed":[{"version","error"}]}`；GitHub 失敗 502 `github_unavailable` |
 | `POST /mcp` | MCP Streamable HTTP（無狀態；`GET`／`DELETE /mcp` 回傳 405） |
 
 ### 增量同步（Obsidian 插件、harness）
@@ -50,6 +54,11 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 配對碼存在記憶體中（伺服器只有一個實例；重新啟動後未使用的配對碼失效），只會交出建立配對碼時所用的那把 API 金鑰。配對與 Remotely Save 設定的回應都帶 `Cache-Control: no-store`，金鑰不會寫入紀錄。
 
 Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../docs/API.md`](../docs/API.md) 的「Vault（Obsidian 筆記）」；裝置端的 Remotely Save 設定見 [`../docs/OBSIDIAN-SYNC.md`](../docs/OBSIDIAN-SYNC.md)。
+
+### Obsidian 插件更新
+
+插件（LocalOCR Sync）的線上更新來自本伺服器：有 vault 儲存桶時，伺服器在啟動 15 秒後、之後每 30 分鐘（以及 `POST /v1/obsidian-plugin/refresh`）讀取 GitHub Releases `obsidian-plugin-x.y.z`，把新版本的 `main.js`、`manifest.json` 驗證後（GitHub 的 SHA-256、`manifest.json` 的 `id` 與版本）存進儲存桶的隱藏資料夾 `.localocr/obsidian-plugin/<版本>/`，並把版本、更新內容與每個檔案的 SHA-256 寫進資料庫（資料表 `obsidian_plugin_releases`）。
+儲存桶金鑰在每台裝置的 Remotely Save 裡，所以送出檔案前一定重新計算 SHA-256，與資料庫不符就拒絕；最新版本的檔案會在下次同步時修復。細節見 [`../docs/API.md`](../docs/API.md) 的「Obsidian 插件更新」。
 
 ### MCP 工具
 
@@ -71,7 +80,8 @@ Vault 端點的完整規格（路徑規則、樂觀鎖、錯誤碼）見 [`../do
 | `VAULT_S3_REGION` | 否 | 預設 `auto` |
 | `VAULT_S3_FORCE_PATH_STYLE` | 否 | 預設 `false`（virtual-hosted URL）；只有儲存桶註明 path-style 時才設 `true` |
 | `VAULT_PREFIX` | 否 | 物件鍵前綴，需與 Remotely Save 的 Remote prefix 相同；預設空白，有值時必須以 `/` 結尾 |
-| `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl`；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
+| `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl` 與 `latest.json` 的檔案網址；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
+| `GITHUB_TOKEN` | 否 | 同步插件版本時讀取 GitHub 版本清單用的權杖（只用來提高 API 次數上限，公開儲存庫不需要任何權限）；未設定時使用未驗證的請求（每小時 60 次，每 30 分鐘同步一次綽綽有餘） |
 
 參考 [`.env.example`](.env.example)。
 
@@ -99,7 +109,7 @@ curl -H "Authorization: Bearer dev-key" localhost:3000/v1/templates
 2. 補上缺少的內建樣板（`receipt`、`business_card`、`event`、`document`）。已存在的樣板不會被覆寫；刪除的內建樣板會在下次啟動時補回。
 3. 同步 `templates/managed/*.json` 的受管理樣板（見下方「受管理的樣板」）。
 
-步驟 2、3 在全域鎖內執行，多個實例同時啟動也只會建立／更新一次。
+步驟 2、3 在全域鎖內執行，多個實例同時啟動也只會建立／更新一次。開始監聽後，有 vault 儲存桶時另外排程 Obsidian 插件版本的同步（15 秒後一次，之後每 30 分鐘；失敗只記錄）。
 
 ### 測試
 
@@ -232,7 +242,7 @@ src/
   validate.ts         依樣板 sample 檢查 JSON 結構
   cursor.ts           不透明分頁游標
   store/              Store 介面、PostgresStore（含 migrations.ts）、MemoryStore
-  services/           商業邏輯：scans、templates、classify、validate、vault、pairing（配對碼）
+  services/           商業邏輯：scans、templates、classify、validate、vault、pairing（配對碼）、obsidian-plugin（插件版本同步與提供）
   classifier/         Classifier 介面與 Jev 實作
   vault/              VaultStore 介面、S3VaultStore（@aws-sdk/client-s3）、MemoryVaultStore、路徑驗證、Remotely Save 設定
   templates/builtin.ts 內建樣板

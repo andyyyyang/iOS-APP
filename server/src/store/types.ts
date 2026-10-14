@@ -1,5 +1,14 @@
 import type { ScanCursor } from "../cursor.js";
-import type { Classification, JsonObject, JsonValue, Scan, ScanSource, Template, TemplateRule } from "../types.js";
+import type {
+  Classification,
+  JsonObject,
+  JsonValue,
+  PluginRelease,
+  Scan,
+  ScanSource,
+  Template,
+  TemplateRule,
+} from "../types.js";
 
 export interface ScanWrite {
   id: string;
@@ -74,6 +83,12 @@ export interface Store {
   /** Inserts only if no template with this id exists. Returns true if inserted. */
   insertTemplateIfMissing(template: TemplateWrite): Promise<boolean>;
   deleteTemplate(id: string): Promise<boolean>;
+
+  /** Mirrored Obsidian plugin releases, in no particular order. */
+  listPluginReleases(): Promise<PluginRelease[]>;
+  getPluginRelease(version: string): Promise<PluginRelease | null>;
+  /** Inserts only if this version is not recorded yet (a mirrored version never changes). Returns true if inserted. */
+  insertPluginRelease(release: PluginRelease): Promise<boolean>;
 
   /**
    * Runs `fn` while holding a store-wide startup lock, so concurrently starting instances

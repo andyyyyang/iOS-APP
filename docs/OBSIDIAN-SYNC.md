@@ -35,7 +35,7 @@ API 細節見 [API.md 的「Vault（Obsidian 筆記）」](API.md#vaultobsidian-
 ### Windows：vault 在 D: 槽時
 
 1. **先備份**：把整個 vault 資料夾（例如 `D:\Obsidian\andy-jentech`）複製或壓縮一份到別處。Railway 儲存桶沒有版本紀錄。
-2. **安裝 LocalOCR 插件**：從 [GitHub Releases](https://github.com/andyyyyang/iOS-APP/releases) 最新的 `obsidian-plugin-<版本>` 下載 `main.js` 與 `manifest.json`，放到 `D:\…\你的 vault\.obsidian\plugins\localocr-sync\`（`.obsidian` 是隱藏資料夾，檔案總管要開啟「顯示隱藏的項目」），重新啟動 Obsidian 後在「設定 → 第三方外掛」啟用 **LocalOCR Sync**，填入伺服器網址與 API 金鑰。1.2.0 起插件會自動線上更新，只需要手動安裝這一次。
+2. **安裝 LocalOCR 插件**：用瀏覽器從你的 Railway 伺服器下載 [`main.js`](https://localocr-server-production.up.railway.app/obsidian-plugin/latest/main.js)（`https://localocr-server-production.up.railway.app/obsidian-plugin/latest/main.js`）與 [`manifest.json`](https://localocr-server-production.up.railway.app/obsidian-plugin/latest/manifest.json)（`https://localocr-server-production.up.railway.app/obsidian-plugin/latest/manifest.json`），放到 `D:\…\你的 vault\.obsidian\plugins\localocr-sync\`（`.obsidian` 是隱藏資料夾，檔案總管要開啟「顯示隱藏的項目」），重新啟動 Obsidian 後在「設定 → 第三方外掛」啟用 **LocalOCR Sync**，填入伺服器網址與 API 金鑰。之後插件會自動從同一台伺服器線上更新，只需要手動安裝這一次（伺服器還沒有任何版本時，改從 [GitHub Releases](https://github.com/andyyyyang/iOS-APP/releases) 最新的 `obsidian-plugin-<版本>` 下載）。
 3. 依照上面的步驟 1～3：安裝 Remotely Save → 「設定 Remotely Save（同步 vault）」→「套用到這台裝置」→ 重新啟動 Obsidian → 按 Remotely Save 的同步按鈕。第一次會把整個 vault 上傳，檔案多時需要一些時間，Remotely Save 的狀態列會顯示進度。
 4. 到 Railway 專案 → `obsidian-vault` →「Files」確認筆記都已上傳。
 5. 如果這個 vault 同時用 OneDrive、Google 雲端硬碟、Obsidian Sync 或 git 等方式同步，建議只保留一種，避免兩套同步互相覆蓋。

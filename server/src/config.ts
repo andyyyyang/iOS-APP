@@ -10,6 +10,8 @@ export interface Config {
   vault: VaultConfig | null;
   /** Public base URL (PUBLIC_URL, no trailing slash) for pairing links; undefined = derived from each request. */
   publicUrl: string | undefined;
+  /** GITHUB_TOKEN: optional, only raises the GitHub API rate limit when mirroring plugin releases. Never logged. */
+  githubToken: string | undefined;
 }
 
 export interface VaultConfig {
@@ -114,5 +116,6 @@ export function loadConfig(
     jevModel: nonEmpty(env.JEV_MODEL) ?? "jev-latest",
     vault: parseVaultConfig(env, logger),
     publicUrl: parsePublicUrl(env.PUBLIC_URL),
+    githubToken: nonEmpty(env.GITHUB_TOKEN),
   };
 }

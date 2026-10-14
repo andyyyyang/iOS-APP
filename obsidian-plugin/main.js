@@ -2498,7 +2498,7 @@ var LocalOcrSettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     new import_obsidian.Setting(containerEl).setName("\u81EA\u52D5\u66F4\u65B0").setDesc(
-      "\u555F\u52D5 Obsidian \u6642\uFF08\u4E4B\u5F8C\u6BCF 6 \u5C0F\u6642\uFF09\u6AA2\u67E5 GitHub \u4E0A\u7684\u65B0\u7248\u672C\uFF0C\u6709\u65B0\u7248\u672C\u5C31\u81EA\u52D5\u4E0B\u8F09\u3001\u9A57\u8B49\u4E26\u5B89\u88DD\uFF0C\u4E0D\u5FC5\u518D\u624B\u52D5\u8907\u88FD\u6A94\u6848\u3002\u95DC\u9589\u6642\u53EA\u6703\u901A\u77E5\u3002"
+      "\u555F\u52D5 Obsidian \u6642\uFF08\u4E4B\u5F8C\u6BCF 6 \u5C0F\u6642\uFF09\u5F9E\u4F60\u7684 Railway \u4F3A\u670D\u5668\u6AA2\u67E5\u65B0\u7248\u672C\uFF08\u672A\u586B\u4F3A\u670D\u5668\u7DB2\u5740\u6216\u4F3A\u670D\u5668\u6C92\u6709\u53EF\u7528\u7248\u672C\u6642\u6539\u7528 GitHub\uFF09\uFF0C\u6709\u65B0\u7248\u672C\u5C31\u81EA\u52D5\u4E0B\u8F09\u3001\u6BD4\u5C0D SHA-256 \u4E26\u5B89\u88DD\uFF0C\u4E0D\u5FC5\u518D\u624B\u52D5\u8907\u88FD\u6A94\u6848\u3002\u95DC\u9589\u6642\u53EA\u6703\u901A\u77E5\u3002"
     ).addToggle(
       (toggle) => toggle.setValue(settings.autoUpdate).onChange(async (value) => {
         settings.autoUpdate = value;
@@ -3171,7 +3171,9 @@ var RemotelySaveModal = class extends import_obsidian2.Modal {
 var UPDATE_REPO = "andyyyyang/iOS-APP";
 var RELEASE_TAG_PREFIX = "obsidian-plugin-";
 var PLUGIN_ID = "localocr-sync";
+var SERVER_LATEST_PATH = "/obsidian-plugin/latest.json";
 var UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1e3;
+var SERVER_TIMEOUT_MS = 15e3;
 var UPDATE_FILES = ["styles.css", "main.js", "manifest.json"];
 var UpdateError = class extends Error {
 };
@@ -3225,29 +3227,112 @@ function parseReleases(json) {
       notes: str(release.body).trim(),
       publishedAt: str(release.published_at),
       pageUrl: str(release.html_url),
+      source: "github",
+      minAppVersion: null,
       assets
     });
   }
   return releases.sort((a, b) => compareVersions(b.version, a.version));
 }
-function describeStatus(status) {
-  if (status === 403 || status === 429) return "GitHub \u66AB\u6642\u9650\u5236\u67E5\u8A62\u6B21\u6578\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66";
+function parseServerRelease(json, serverUrl) {
+  const release = asRecord(json);
+  const files = asRecord(release == null ? void 0 : release.files);
+  const version = str(release == null ? void 0 : release.version);
+  if (!release || !files || !parseVersion(version)) throw new UpdateError("\u4F3A\u670D\u5668\u56DE\u50B3\u7684\u7248\u672C\u8CC7\u8A0A\u683C\u5F0F\u4E0D\u6B63\u78BA");
+  const assets = {};
+  for (const name of UPDATE_FILES) {
+    const file = asRecord(files[name]);
+    if (!file) continue;
+    const sha256 = str(file.sha256).toLowerCase();
+    let url = "";
+    try {
+      url = new URL(str(file.url), `${serverUrl}/`).href;
+    } catch (e) {
+    }
+    if (!/^[0-9a-f]{64}$/.test(sha256) || !str(file.url) || !url) {
+      throw new UpdateError(`\u4F3A\u670D\u5668\u56DE\u50B3\u7684 ${name} \u7F3A\u5C11\u4E0B\u8F09\u7DB2\u5740\u6216 SHA-256`);
+    }
+    assets[name] = { name, url, size: typeof file.size === "number" ? file.size : 0, digest: `sha256:${sha256}` };
+  }
+  if (!assets["main.js"] || !assets["manifest.json"]) throw new UpdateError("\u4F3A\u670D\u5668\u56DE\u50B3\u7684\u7248\u672C\u8CC7\u8A0A\u7F3A\u5C11 main.js \u6216 manifest.json");
+  return {
+    version,
+    tag: `${RELEASE_TAG_PREFIX}${version}`,
+    notes: str(release.notes).trim(),
+    publishedAt: str(release.publishedAt),
+    pageUrl: `${serverUrl}${SERVER_LATEST_PATH}`,
+    source: "server",
+    minAppVersion: str(release.minAppVersion),
+    assets
+  };
+}
+function describeSource(source) {
+  return source === "server" ? "\u4F60\u7684 Railway \u4F3A\u670D\u5668" : "GitHub";
+}
+function describeStatus(response, source) {
+  var _a, _b;
+  const { status } = response;
+  if (source === "github" && (status === 403 || status === 429)) return "GitHub \u66AB\u6642\u9650\u5236\u67E5\u8A62\u6B21\u6578\uFF0C\u8ACB\u7A0D\u5F8C\u518D\u8A66";
   if (status === 404) return "\u627E\u4E0D\u5230\u66F4\u65B0\u4F86\u6E90";
+  if (source === "server") {
+    let code = "";
+    try {
+      code = str((_b = asRecord((_a = asRecord(JSON.parse(response.text))) == null ? void 0 : _a.error)) == null ? void 0 : _b.code);
+    } catch (e) {
+    }
+    if (code === "integrity_error") return "\u4F3A\u670D\u5668\u4E0A\u7684\u66F4\u65B0\u6A94\u8207\u7D00\u9304\u7684 SHA-256 \u4E0D\u7B26\uFF0C\u5DF2\u505C\u6B62\u66F4\u65B0\uFF08\u4F3A\u670D\u5668\u6703\u5728\u4E0B\u6B21\u540C\u6B65\u6642\u4FEE\u5FA9\uFF09";
+    return `\u4F60\u7684 Railway \u4F3A\u670D\u5668\u56DE\u61C9 ${status}`;
+  }
   return `GitHub \u56DE\u61C9 ${status}`;
 }
-async function get(download, url, headers) {
+async function get(download, url, source, headers) {
   let response;
   try {
     response = await download({ url, headers });
   } catch (error) {
-    throw new UpdateError(`\u7121\u6CD5\u9023\u7DDA\u5230 GitHub\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    const target = source === "server" ? "\u4F60\u7684 Railway \u4F3A\u670D\u5668" : " GitHub";
+    throw new UpdateError(`\u7121\u6CD5\u9023\u7DDA\u5230${target}\uFF1A${error instanceof Error ? error.message : String(error)}`);
   }
-  if (response.status < 200 || response.status >= 300) throw new UpdateError(describeStatus(response.status));
+  if (response.status < 200 || response.status >= 300) throw new UpdateError(describeStatus(response, source));
   return response;
 }
-async function fetchLatestRelease(download, repo = UPDATE_REPO) {
+function withTimeout2(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`\u903E\u6642\uFF08${Math.round(ms / 1e3)} \u79D2\uFF09`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+var SERVER_FALLBACK_STATUSES = [404, 503];
+async function fetchServerRelease(download, serverUrl, timeoutMs = SERVER_TIMEOUT_MS) {
+  const base = serverUrl.trim().replace(/\/+$/, "");
+  let response;
+  try {
+    response = await withTimeout2(download({ url: `${base}${SERVER_LATEST_PATH}` }), timeoutMs);
+  } catch (e) {
+    return null;
+  }
+  if (SERVER_FALLBACK_STATUSES.includes(response.status)) return null;
+  if (response.status < 200 || response.status >= 300) throw new UpdateError(describeStatus(response, "server"));
+  let json;
+  try {
+    json = JSON.parse(response.text);
+  } catch (e) {
+    throw new UpdateError("\u4F3A\u670D\u5668\u56DE\u50B3\u7684\u7248\u672C\u8CC7\u8A0A\u4E0D\u662F\u6709\u6548\u7684 JSON");
+  }
+  return parseServerRelease(json, base);
+}
+async function fetchGitHubRelease(download, repo = UPDATE_REPO) {
   var _a;
-  const response = await get(download, `https://api.github.com/repos/${repo}/releases?per_page=50`, GITHUB_HEADERS);
+  const response = await get(download, `https://api.github.com/repos/${repo}/releases?per_page=50`, "github", GITHUB_HEADERS);
   let json;
   try {
     json = JSON.parse(response.text);
@@ -3255,6 +3340,13 @@ async function fetchLatestRelease(download, repo = UPDATE_REPO) {
     throw new UpdateError("GitHub \u56DE\u50B3\u7684\u7248\u672C\u6E05\u55AE\u4E0D\u662F\u6709\u6548\u7684 JSON");
   }
   return (_a = parseReleases(json)[0]) != null ? _a : null;
+}
+async function fetchLatestRelease(download, { serverUrl = "", repo = UPDATE_REPO } = {}) {
+  if (serverUrl.trim()) {
+    const release = await fetchServerRelease(download, serverUrl);
+    if (release) return release;
+  }
+  return fetchGitHubRelease(download, repo);
 }
 function parseReleaseManifest(text, release) {
   let json;
@@ -3271,15 +3363,13 @@ function parseReleaseManifest(text, release) {
   }
   return manifest;
 }
-async function checkForUpdate(download, currentVersion, supportsApp, repo = UPDATE_REPO) {
-  const latest = await fetchLatestRelease(download, repo);
+async function checkForUpdate(download, currentVersion, supportsApp, options = {}) {
+  var _a;
+  const latest = await fetchLatestRelease(download, options);
   if (!latest || compareVersions(latest.version, currentVersion) <= 0) return { status: "up-to-date", latest };
-  const manifest = parseReleaseManifest(
-    (await get(download, latest.assets["manifest.json"].url)).text,
-    latest
-  );
-  if (manifest.minAppVersion && !supportsApp(manifest.minAppVersion)) {
-    return { status: "needs-newer-obsidian", release: latest, minAppVersion: manifest.minAppVersion };
+  const minAppVersion = (_a = latest.minAppVersion) != null ? _a : parseReleaseManifest((await get(download, latest.assets["manifest.json"].url, latest.source)).text, latest).minAppVersion;
+  if (minAppVersion && !supportsApp(minAppVersion)) {
+    return { status: "needs-newer-obsidian", release: latest, minAppVersion };
   }
   return { status: "available", release: latest };
 }
@@ -3295,7 +3385,7 @@ async function downloadRelease(download, release, hash = sha256Hex) {
   for (const name of UPDATE_FILES) {
     const asset = release.assets[name];
     if (!asset) continue;
-    const response = await get(download, asset.url);
+    const response = await get(download, asset.url, release.source);
     if ((_a = asset.digest) == null ? void 0 : _a.startsWith("sha256:")) {
       const expected = asset.digest.slice("sha256:".length).toLowerCase();
       if (await hash(response.bytes) !== expected) throw new UpdateError(`${name} \u4E0B\u8F09\u4E0D\u5B8C\u6574\u6216\u5DF2\u88AB\u4FEE\u6539\uFF0C\u5DF2\u505C\u6B62\u66F4\u65B0`);
@@ -3527,17 +3617,19 @@ ${describeError(error)}`, 1e4);
     }
   }
   // -------------------------------------------------------------------------
-  // Online updates (GitHub releases, see updater.ts)
+  // Online updates (from the LocalOCR server's mirror of the GitHub releases; GitHub as fallback; see updater.ts)
   /**
-   * Checks GitHub for a newer version. Manual checks (command, settings button) install it right away;
-   * automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
+   * Checks the LocalOCR server (or GitHub) for a newer version. Manual checks (command, settings button) install it
+   * right away; automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
    */
   async checkForUpdates(opts) {
     if (this.updating) return;
     if (!opts.manual && !isCheckDue(this.updateMeta.lastCheckAt, Date.now())) return;
     let result;
     try {
-      result = await checkForUpdate(obsidianDownload, this.manifest.version, (version2) => (0, import_obsidian3.requireApiVersion)(version2));
+      result = await checkForUpdate(obsidianDownload, this.manifest.version, (version2) => (0, import_obsidian3.requireApiVersion)(version2), {
+        serverUrl: normalizeServerUrl(this.settings.serverUrl)
+      });
     } catch (error) {
       if (opts.manual) new import_obsidian3.Notice(`LocalOCR\uFF1A\u7121\u6CD5\u6AA2\u67E5\u66F4\u65B0
 ${describeUpdateError(error)}`, 1e4);
@@ -3571,12 +3663,13 @@ ${describeUpdateError(error)}`, 1e4);
   updateStatusText() {
     const check = this.lastUpdateCheck;
     const checkedAt = this.updateMeta.lastCheckAt ? `\u4E0A\u6B21\u6AA2\u67E5\uFF1A${formatDateTime(this.updateMeta.lastCheckAt)}\u3002` : "";
-    if ((check == null ? void 0 : check.status) === "available") return `\u6709\u65B0\u7248\u672C ${check.release.version}\u3002${checkedAt}`;
+    const from = (release) => release ? `\uFF08\u4F86\u6E90\uFF1A${describeSource(release.source)}\uFF09` : "";
+    if ((check == null ? void 0 : check.status) === "available") return `\u6709\u65B0\u7248\u672C ${check.release.version}${from(check.release)}\u3002${checkedAt}`;
     if ((check == null ? void 0 : check.status) === "needs-newer-obsidian") {
       return `\u65B0\u7248\u672C ${check.release.version} \u9700\u8981 Obsidian ${check.minAppVersion} \u4EE5\u4E0A\u3002${checkedAt}`;
     }
-    if ((check == null ? void 0 : check.status) === "up-to-date") return `\u5DF2\u662F\u6700\u65B0\u7248\u672C\u3002${checkedAt}`;
-    return checkedAt || "\u5F9E GitHub \u6AA2\u67E5\u65B0\u7248\u672C\u3002";
+    if ((check == null ? void 0 : check.status) === "up-to-date") return `\u5DF2\u662F\u6700\u65B0\u7248\u672C${from(check.latest)}\u3002${checkedAt}`;
+    return checkedAt || "\u5F9E\u4F60\u7684 Railway \u4F3A\u670D\u5668\u6AA2\u67E5\u65B0\u7248\u672C\uFF08\u672A\u586B\u4F3A\u670D\u5668\u7DB2\u5740\u6216\u4F3A\u670D\u5668\u6C92\u6709\u53EF\u7528\u7248\u672C\u6642\u6539\u7528 GitHub\uFF09\u3002";
   }
   /** Downloads, verifies and installs a release, then reloads the plugin so the new version runs. */
   async installUpdate(release) {

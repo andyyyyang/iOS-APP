@@ -14,7 +14,8 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
    ├── Obsidian 插件：增量同步成筆記
    ├── Claude Code 插件／任何 MCP 客戶端：MCP 工具
    ├── 自建 harness：REST + OpenAPI（/v1/openapi.json）
-   └── Vault（/v1/vault、vault_* 工具）⇄ Railway Storage Bucket ⇄ Remotely Save ⇄ 各裝置的 Obsidian
+   ├── Vault（/v1/vault、vault_* 工具）⇄ Railway Storage Bucket ⇄ Remotely Save ⇄ 各裝置的 Obsidian
+   └── Obsidian 插件更新（/obsidian-plugin）：GitHub Releases → 同一個 Bucket 的 .localocr/ → 插件
 ```
 
 ## 驗證
@@ -22,7 +23,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 - 所有 `/v1/*` 與 `/mcp` 端點都需要 API 金鑰。
 - 標頭：`Authorization: Bearer <API_KEY>`。無法自訂標頭的客戶端可改用查詢參數 `?api_key=<API_KEY>`（網址可能被記錄，僅在必要時使用）。
 - 伺服器環境變數 `API_KEYS` 可放多把金鑰，以逗號分隔（方便替換與分發給不同裝置）。
-- `GET /health` 與 `POST /pair`（以配對碼換取金鑰，見「配對」）不需要驗證。
+- `GET /health`、`POST /pair`（以配對碼換取金鑰，見「配對」）與 `GET /obsidian-plugin/*`（插件更新檔，見「Obsidian 插件更新」）不需要驗證。
 
 ## 資料格式
 
@@ -149,6 +150,7 @@ Railway 伺服器（/v1 REST、/mcp MCP、Postgres）
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
 | `/v1/vault/*` | Obsidian 筆記檔案，見下方「Vault（Obsidian 筆記）」 |
 | `POST /v1/pairing`、`POST /pair` | 新裝置配對，見下方「配對」 |
+| `GET /obsidian-plugin/*`、`POST /v1/obsidian-plugin/refresh` | Obsidian 插件的線上更新，見下方「Obsidian 插件更新」 |
 
 `nextCursor` 是不透明字串，客戶端原樣帶回即可。
 
@@ -235,6 +237,7 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 - 伺服器未設定 `VAULT_S3_*` 時，除了 `GET /v1/vault/status` 之外的端點與 `vault_*` 工具都回傳 503 `vault_not_configured`。
 - Remotely Save **不可**開啟端對端加密，否則儲存桶裡只有加密檔，App 與 Claude 無法讀取。
 - 儲存桶沒有版本控制，覆寫與刪除都無法復原。
+- 伺服器把 Obsidian 插件的發佈檔存在 `.localocr/obsidian-plugin/`（見「Obsidian 插件更新」）。以 `.` 開頭的資料夾 Remotely Save 與 App 都會略過、搜尋也會略過；`GET /v1/vault/files` 在根目錄會列出 `.localocr/`，與 `.obsidian` 等程式資料夾相同。
 
 ### 路徑
 
@@ -380,6 +383,83 @@ Streamable HTTP 傳輸，無狀態（方便水平擴充）。工具：
 | `VAULT_S3_SECRET_ACCESS_KEY` | — | `${{obsidian-vault.SECRET_ACCESS_KEY}}` |
 | `VAULT_S3_FORCE_PATH_STYLE` | `false` | 只有儲存桶 Credentials 分頁註明使用 path-style 時才設為 `true` |
 | `VAULT_PREFIX` | 空白 | 與 Remotely Save 的 Remote prefix 相同；有值時必須以 `/` 結尾（例如 `vault/`），否則伺服器拒絕啟動 |
+
+## Obsidian 插件更新（`/obsidian-plugin`）
+
+LocalOCR Sync（Obsidian 插件）的線上更新由伺服器提供，不直接連 GitHub：CI 把每個版本發佈為 GitHub Release `obsidian-plugin-<版本>`（附 `main.js`、`manifest.json`），伺服器把它們同步到 Vault 的儲存桶（使用者的 Railway 空間），插件再從伺服器下載。
+
+### 同步
+
+- 時機：伺服器啟動 15 秒後、之後每 30 分鐘，以及 `POST /v1/obsidian-plugin/refresh`（CI 發佈 Release 後會呼叫）。只在設定了 `VAULT_S3_*` 時執行；失敗只記錄，不影響伺服器。
+- 讀取 `https://api.github.com/repos/andyyyyang/iOS-APP/releases?per_page=50`（有 `GITHUB_TOKEN` 時帶上，只用來提高 GitHub API 的次數上限，只送給 `api.github.com`），取非草稿、非預覽、標籤為 `obsidian-plugin-x.y.z` 且附有 `main.js` 與 `manifest.json` 的 Release。
+- 每個還沒同步的版本：下載兩個檔案 → 比對 GitHub 提供的 `digest`（SHA-256，有提供時）→ 確認 `manifest.json` 的 `id` 是 `localocr-sync`、`version` 等於標籤的版本 → 存進儲存桶 `<VAULT_PREFIX>.localocr/obsidian-plugin/<版本>/main.js`、`manifest.json` → 最後把版本、`minAppVersion`、更新內容（Release 說明）、發佈時間與每個檔案的 SHA-256 和大小寫進資料庫（Postgres 資料表 `obsidian_plugin_releases`，遷移 3）。任何一步失敗就略過該版本，列在 `failed`。
+- 已同步的版本不會再改變。**最新版本**在儲存桶中的檔案若被改過或刪除，下次同步會從 GitHub 重新下載並寫回（仍須符合資料庫中的 SHA-256）。
+
+### 信任模型
+
+儲存桶的金鑰會交給每台裝置的 Remotely Save，所以儲存桶的內容本身不可信：版本資訊與 SHA-256 存在**資料庫**；每次送出檔案前，伺服器重新計算儲存桶中檔案的 SHA-256 與大小，與紀錄不符（或檔案不見）時回傳 502 `integrity_error`，不送出檔案。插件再以 `latest.json` 中的 SHA-256 檢查下載的每個檔案。
+
+### 端點
+
+三個 `GET` 端點**不需要 API 金鑰**：插件程式碼本來就公開，第一次安裝時也要能直接用瀏覽器下載。
+
+| 方法與路徑 | 說明 |
+| --- | --- |
+| `GET /obsidian-plugin/latest.json` | 最新版本（見下方），`Cache-Control: no-cache`。還沒有同步任何版本時 404 `not_found`；未設定 `VAULT_S3_*` 時 503 `vault_not_configured` |
+| `GET /obsidian-plugin/releases/{version}/{file}` | 指定版本的檔案（原始位元組）。`file` 為 `main.js`（`text/javascript; charset=utf-8`）或 `manifest.json`（`application/json`）。`ETag` 為檔案的 SHA-256（含引號；帶相同的 `If-None-Match` 時回 304）、`Cache-Control: public, max-age=31536000, immutable`、`Content-Disposition: attachment; filename="<file>"`。版本或檔名不存在時 404 `not_found` |
+| `GET /obsidian-plugin/latest/{file}` | 最新版本的檔案，第一次手動安裝用的連結（例如 `https://localocr-server-production.up.railway.app/obsidian-plugin/latest/main.js`）。標頭同上，但 `Cache-Control: no-cache` |
+| `POST /v1/obsidian-plugin/refresh` | **需要 API 金鑰**：立即同步，回傳 `{"latest":"1.3.0","mirrored":["1.3.0"],"repaired":[],"failed":[]}` |
+
+`GET /obsidian-plugin/latest.json`：
+
+```json
+{
+  "version": "1.3.0",
+  "minAppVersion": "1.5.0",
+  "notes": "- 線上更新改由你的 Railway 伺服器提供…",
+  "publishedAt": "2026-10-14T00:00:00.000Z",
+  "files": {
+    "main.js": {
+      "sha256": "9f2c…（64 個十六進位字元）",
+      "size": 48213,
+      "url": "https://localocr-server-production.up.railway.app/obsidian-plugin/releases/1.3.0/main.js"
+    },
+    "manifest.json": {
+      "sha256": "41ab…",
+      "size": 362,
+      "url": "https://localocr-server-production.up.railway.app/obsidian-plugin/releases/1.3.0/manifest.json"
+    }
+  }
+}
+```
+
+- `url` 是絕對網址：取環境變數 `PUBLIC_URL`，未設定時用請求的 `X-Forwarded-Proto` + `Host`。
+- `minAppVersion` 取自同步時驗證過的 `manifest.json`（沒有時為空字串）；`notes` 是 Release 說明（即 `CHANGELOG.md` 中該版本的段落）。
+
+`POST /v1/obsidian-plugin/refresh` 的回應：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `latest` | 這次同步後的最新版本；沒有任何版本時為 `null` |
+| `mirrored` | 這次新同步的版本 |
+| `repaired` | 儲存桶檔案與紀錄不符、這次重新寫回的版本 |
+| `failed` | `[{"version","error"}]`：沒有通過檢查或下載失敗的版本與原因（例如 `main.js does not match GitHub's SHA-256 digest`），其他版本照常同步 |
+
+### 錯誤碼
+
+| HTTP | `code` | 說明 |
+| --- | --- | --- |
+| 401 | `unauthorized` | `POST /v1/obsidian-plugin/refresh` 缺少或錯誤的 API 金鑰 |
+| 404 | `not_found` | 還沒有同步任何版本，或版本／檔名不存在 |
+| 502 | `integrity_error` | 儲存桶中的檔案不見或與資料庫的 SHA-256 不符，不送出檔案（最新版本會在下次同步時修復） |
+| 502 | `github_unavailable` | refresh 讀不到 GitHub 的版本清單（網路、次數上限） |
+| 502 | `vault_storage_error` | 儲存桶請求失敗 |
+| 503 | `vault_not_configured` | 伺服器未設定 `VAULT_S3_*` |
+
+### 插件端
+
+插件（1.3.0 起）讀取 `<插件設定的伺服器網址>/obsidian-plugin/latest.json`（不帶 API 金鑰），版本較新、且 `minAppVersion` 符合這台裝置的 Obsidian 時，下載 `files` 中的網址並逐一比對 SHA-256，再確認 `manifest.json` 的 `id`、`version` 與 `main.js` 是插件程式後才安裝。
+未填伺服器網址、伺服器回應 404 或 503、連不上或 15 秒沒有回應時，改用 GitHub Releases（比對 GitHub 的 SHA-256）；其他錯誤（例如 500、格式不正確）直接回報，不改用 GitHub。
 
 ## Jev 分類
 

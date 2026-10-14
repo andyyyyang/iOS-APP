@@ -1,7 +1,7 @@
 {
 	"id": "localocr-sync",
 	"name": "LocalOCR Sync",
-	"version": "1.2.0",
+	"version": "1.3.0",
 	"minAppVersion": "1.5.0",
 	"description": "Pair the LocalOCR iPhone/iPad app, set up Remotely Save in one tap, and sync scans from your LocalOCR server into your vault as Markdown notes.",
 	"author": "andyyyyang",

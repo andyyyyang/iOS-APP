@@ -271,9 +271,11 @@ export function createMcpServer(services: Services): McpServer {
       description:
         "列出使用者 Obsidian 筆記庫（vault）的檔案。筆記是 Markdown（.md），由 Obsidian 的 Remotely Save 插件同步到 S3 儲存桶，" +
         "iPad App 與 Claude 讀寫的是同一份檔案。預設只列出該資料夾這一層（folders 為子資料夾）；recursive=true 列出底下全部檔案。" +
+        "以 . 開頭的資料夾（例如 .obsidian、.localocr）是程式資料，不是筆記。" +
         "回傳 { items: [{ path, size, mtime（毫秒）, etag }], folders }。\n" +
         "List files in the user's Obsidian vault: Markdown notes synced by the Remotely Save plugin to an S3 bucket that the iPad app and Claude share. " +
         "Lists one folder level by default (folders = child folders); recursive=true lists every file below prefix. " +
+        "Dot folders (e.g. .obsidian, .localocr) hold app data, not notes. " +
         "Returns { items: [{ path, size, mtime (ms), etag }], folders }.",
       inputSchema: {
         prefix: vaultPrefix.optional(),

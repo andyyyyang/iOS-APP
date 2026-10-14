@@ -1,6 +1,12 @@
 # LocalOCR Sync 更新紀錄
 
-每個版本由 CI 發佈為 GitHub Release「obsidian-plugin-<版本>」；插件從這裡讀取更新內容（`## <版本>` 下的文字）。
+每個版本由 CI 發佈為 GitHub Release「obsidian-plugin-<版本>」，再由 LocalOCR 伺服器同步到 Railway 儲存空間；插件從這裡讀取更新內容（`## <版本>` 下的文字）。
+
+## 1.3.0
+
+- 線上更新改由你的 Railway 伺服器提供：伺服器把每個新版本存進自己的儲存空間，插件先讀取 `<伺服器網址>/obsidian-plugin/latest.json`，下載後逐一比對 SHA-256
+- 未填伺服器網址、伺服器還沒有可用版本或連不上時，自動改從 GitHub 更新
+- 第一次手動安裝可以直接從伺服器下載 `main.js` 與 `manifest.json`
 
 ## 1.2.0
 

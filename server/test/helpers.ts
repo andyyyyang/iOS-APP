@@ -5,6 +5,7 @@ import { bootstrapStore } from "../src/bootstrap.js";
 import type { ClassificationCandidate, Classifier, ClassifierResult } from "../src/classifier/types.js";
 import type { VaultConfig } from "../src/config.js";
 import { createApp } from "../src/http/app.js";
+import { ObsidianPluginService, type FetchFn } from "../src/services/obsidian-plugin.js";
 import { MemoryStore } from "../src/store/memory.js";
 import { PostgresStore } from "../src/store/postgres.js";
 import type { Store } from "../src/store/types.js";
@@ -20,7 +21,7 @@ export function trackStore<T extends Store>(store: T): T {
   return store;
 }
 
-export const silentLogger = { info() {}, error() {} };
+export const silentLogger = { info() {}, warn() {}, error() {} };
 
 afterEach(async () => {
   await Promise.all(openStores.splice(0).map((store) => store.close()));
@@ -30,7 +31,7 @@ async function createTestStore(): Promise<Store> {
   if (!TEST_DATABASE_URL) return new MemoryStore();
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
-  await client.query("DROP TABLE IF EXISTS scans, templates, write_clock, schema_migrations");
+  await client.query("DROP TABLE IF EXISTS scans, templates, write_clock, obsidian_plugin_releases, schema_migrations");
   await client.end();
   return trackStore(new PostgresStore(TEST_DATABASE_URL));
 }
@@ -62,8 +63,10 @@ export async function setup(
     /** Bucket credentials for /v1/vault/remotely-save; default null = not configured. */
     vaultConfig?: VaultConfig | null;
     publicUrl?: string;
-    /** Clock in milliseconds (pairing expiry, /pair rate limit). */
+    /** Clock in milliseconds (pairing expiry, /pair rate limit, plugin mirror timestamps). */
     now?: () => number;
+    /** Fake GitHub (plus token and logger) for the plugin release mirror; default: real fetch (never called) and a silent logger. */
+    pluginMirror?: { fetch?: FetchFn; githubToken?: string; logger?: Pick<Console, "info" | "warn" | "error"> };
   } = {},
 ): Promise<{
   app: Express;
@@ -72,13 +75,16 @@ export async function setup(
   const store = await createTestStore();
   // Repo-managed templates are off by default so tests see only the four built-ins.
   await bootstrapStore(store, { logger: silentLogger, managedTemplatesDir: options.managedTemplatesDir ?? null });
+  const vault = options.vault ?? null;
+  const obsidianPlugin = new ObsidianPluginService({ store, vault, now: options.now, logger: silentLogger, ...options.pluginMirror });
   const app = createApp({
     store,
     classifier: options.classifier ?? null,
     apiKeys: options.apiKeys ?? [API_KEY],
-    vault: options.vault ?? null,
+    vault,
     vaultConfig: options.vaultConfig ?? null,
     publicUrl: options.publicUrl,
+    obsidianPlugin,
     now: options.now,
   });
   return { app, store };

@@ -63,6 +63,22 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE templates ADD COLUMN IF NOT EXISTS rules TEXT;
     `,
   },
+  {
+    version: 3,
+    name: "obsidian_plugin_releases",
+    sql: `
+      -- LocalOCR Sync releases mirrored into the vault bucket (.localocr/obsidian-plugin/<version>/).
+      -- Every device's Remotely Save can write the bucket, so files are served only when they match these hashes.
+      CREATE TABLE IF NOT EXISTS obsidian_plugin_releases (
+        version         TEXT COLLATE "C" PRIMARY KEY,
+        min_app_version TEXT NOT NULL,
+        notes           TEXT NOT NULL,
+        published_at    TIMESTAMPTZ NOT NULL,
+        files           TEXT NOT NULL,           -- raw JSON: {"main.js":{"sha256","size"},"manifest.json":{...}}
+        mirrored_at     TIMESTAMPTZ NOT NULL
+      );
+    `,
+  },
 ];
 
 // Arbitrary constant advisory-lock keys so concurrently starting instances take turns.

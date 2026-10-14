@@ -36,6 +36,7 @@ import {
 	UPDATE_CHECK_INTERVAL_MS,
 	UPDATE_FILES,
 	checkForUpdate,
+	describeSource,
 	describeUpdateError,
 	downloadRelease,
 	isCheckDue,
@@ -307,18 +308,20 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	}
 
 	// -------------------------------------------------------------------------
-	// Online updates (GitHub releases, see updater.ts)
+	// Online updates (from the LocalOCR server's mirror of the GitHub releases; GitHub as fallback; see updater.ts)
 
 	/**
-	 * Checks GitHub for a newer version. Manual checks (command, settings button) install it right away;
-	 * automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
+	 * Checks the LocalOCR server (or GitHub) for a newer version. Manual checks (command, settings button) install it
+	 * right away; automatic checks run at most every 6 hours and install it when 自動更新 is on, otherwise notify once.
 	 */
 	async checkForUpdates(opts: { manual: boolean }): Promise<void> {
 		if (this.updating) return;
 		if (!opts.manual && !isCheckDue(this.updateMeta.lastCheckAt, Date.now())) return;
 		let result: UpdateCheck;
 		try {
-			result = await checkForUpdate(obsidianDownload, this.manifest.version, (version) => requireApiVersion(version));
+			result = await checkForUpdate(obsidianDownload, this.manifest.version, (version) => requireApiVersion(version), {
+				serverUrl: normalizeServerUrl(this.settings.serverUrl),
+			});
 		} catch (error) {
 			if (opts.manual) new Notice(`LocalOCR：無法檢查更新\n${describeUpdateError(error)}`, 10_000);
 			else console.warn(LOG_PREFIX, "檢查更新失敗：", describeUpdateError(error));
@@ -353,12 +356,13 @@ export default class LocalOcrSyncPlugin extends Plugin {
 	updateStatusText(): string {
 		const check = this.lastUpdateCheck;
 		const checkedAt = this.updateMeta.lastCheckAt ? `上次檢查：${formatDateTime(this.updateMeta.lastCheckAt)}。` : "";
-		if (check?.status === "available") return `有新版本 ${check.release.version}。${checkedAt}`;
+		const from = (release: PluginRelease | null) => (release ? `（來源：${describeSource(release.source)}）` : "");
+		if (check?.status === "available") return `有新版本 ${check.release.version}${from(check.release)}。${checkedAt}`;
 		if (check?.status === "needs-newer-obsidian") {
 			return `新版本 ${check.release.version} 需要 Obsidian ${check.minAppVersion} 以上。${checkedAt}`;
 		}
-		if (check?.status === "up-to-date") return `已是最新版本。${checkedAt}`;
-		return checkedAt || "從 GitHub 檢查新版本。";
+		if (check?.status === "up-to-date") return `已是最新版本${from(check.latest)}。${checkedAt}`;
+		return checkedAt || "從你的 Railway 伺服器檢查新版本（未填伺服器網址或伺服器沒有可用版本時改用 GitHub）。";
 	}
 
 	/** Downloads, verifies and installs a release, then reloads the plugin so the new version runs. */

@@ -6,8 +6,10 @@ import {
 	compareVersions,
 	downloadRelease,
 	fetchLatestRelease,
+	fetchServerRelease,
 	isCheckDue,
 	parseReleases,
+	parseServerRelease,
 	parseVersion,
 	sha256Hex,
 	type DownloadFn,
@@ -61,6 +63,71 @@ function fakeGitHub(releases: ReturnType<typeof release>[], contents: Record<str
 		return { status: 200, text, bytes: new TextEncoder().encode(text).buffer as ArrayBuffer };
 	};
 	return { download, requests };
+}
+
+const SERVER = "https://ocr.example.com";
+const LATEST_URL = `${SERVER}/obsidian-plugin/latest.json`;
+const hex = (text: string) => createHash("sha256").update(text).digest("hex");
+const toBytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
+
+/** The server's latest.json for `files` (each file's SHA-256 is of the text given here). */
+function latestJson(
+	version: string,
+	files: Record<string, string> = { "main.js": MAIN_JS, "manifest.json": manifestFor(version) },
+	extra: Record<string, unknown> = {},
+) {
+	return {
+		version,
+		minAppVersion: "1.5.0",
+		notes: "- 伺服器上的新版本\n",
+		publishedAt: "2026-10-14T00:00:00.000Z",
+		files: Object.fromEntries(
+			Object.entries(files).map(([name, text]) => [
+				name,
+				{ sha256: hex(text), size: text.length, url: `${SERVER}/obsidian-plugin/releases/${version}/${name}` },
+			]),
+		),
+		...extra,
+	};
+}
+
+/**
+ * Fake LocalOCR server in front of a fake GitHub: latest.json (with `status`, or a network failure / no answer)
+ * and its files by URL (the texts latest.json was built from, overridden by `contents`).
+ */
+function fakeServer(
+	latest: ReturnType<typeof latestJson> | null,
+	opts: {
+		status?: number;
+		body?: string;
+		contents?: Record<string, { status: number; text: string }>;
+		github?: ReturnType<typeof fakeGitHub>;
+		network?: "down" | "hang";
+	} = {},
+) {
+	const github = opts.github ?? fakeGitHub([release("1.3.0")]);
+	const files = new Map<string, { status: number; text: string }>();
+	if (latest) {
+		for (const [name, file] of Object.entries(latest.files)) {
+			const version = latest.version;
+			files.set(file.url, { status: 200, text: name === "main.js" ? MAIN_JS : manifestFor(version) });
+		}
+	}
+	for (const [url, response] of Object.entries(opts.contents ?? {})) files.set(url, response);
+	const requests: { url: string; headers?: Record<string, string> }[] = [];
+	const download: DownloadFn = async (request) => {
+		if (!request.url.startsWith(SERVER)) return github.download(request);
+		requests.push(request);
+		if (opts.network === "down") throw new Error("net::ERR_NAME_NOT_RESOLVED");
+		if (opts.network === "hang") return new Promise<never>(() => {});
+		if (request.url === LATEST_URL) {
+			const text = opts.body ?? (latest ? JSON.stringify(latest) : '{"error":{"code":"not_found","message":"x"}}');
+			return { status: opts.status ?? (latest ? 200 : 404), text, bytes: toBytes(text) };
+		}
+		const file = files.get(request.url) ?? { status: 404, text: '{"error":{"code":"not_found"}}' };
+		return { ...file, bytes: toBytes(file.text) };
+	};
+	return { download, requests, github };
 }
 
 describe("versions", () => {
@@ -169,5 +236,146 @@ describe("helpers", () => {
 		expect(isCheckDue("2026-10-14T05:59:00Z", now)).toBe(true);
 		expect(isCheckDue("2026-10-15T00:00:00Z", now), "a clock moved backwards does not block checks").toBe(true);
 		expect(isCheckDue("not a date", now)).toBe(true);
+	});
+});
+
+describe("updates from the LocalOCR server", () => {
+	const supports = () => true;
+	const fromServer = { serverUrl: SERVER };
+
+	it("reads the server's latest.json first and installs from it without asking GitHub", async () => {
+		const server = fakeServer(latestJson("1.3.0"), { github: fakeGitHub([release("1.2.0")]) });
+		const result = await checkForUpdate(server.download, "1.2.0", supports, fromServer);
+		expect(result.status).toBe("available");
+		if (result.status !== "available") return;
+		expect(result.release).toMatchObject({ version: "1.3.0", source: "server", minAppVersion: "1.5.0", notes: "- 伺服器上的新版本" });
+		// minAppVersion came with latest.json: no manifest download for the check, no API key header
+		expect(server.requests).toEqual([{ url: LATEST_URL }]);
+
+		const files = await downloadRelease(server.download, result.release);
+		expect(files["main.js"]).toBe(MAIN_JS);
+		expect(JSON.parse(files["manifest.json"] ?? "{}").version).toBe("1.3.0");
+		expect(server.requests.map((r) => r.url)).toEqual([
+			LATEST_URL,
+			`${SERVER}/obsidian-plugin/releases/1.3.0/main.js`,
+			`${SERVER}/obsidian-plugin/releases/1.3.0/manifest.json`,
+		]);
+		expect(server.github.requests).toEqual([]);
+	});
+
+	it("reports up to date from the server and accepts a trailing slash in the server URL", async () => {
+		const server = fakeServer(latestJson("1.3.0"));
+		const result = await checkForUpdate(server.download, "1.3.0", supports, { serverUrl: `${SERVER}/` });
+		expect(result).toMatchObject({ status: "up-to-date", latest: { version: "1.3.0", source: "server" } });
+		expect(server.requests.map((r) => r.url)).toEqual([LATEST_URL]);
+	});
+
+	it("holds back a server release that needs a newer Obsidian (minAppVersion from latest.json)", async () => {
+		const server = fakeServer(latestJson("1.3.0", undefined, { minAppVersion: "9.0.0" }));
+		const result = await checkForUpdate(server.download, "1.2.0", (min) => min === "1.5.0", fromServer);
+		expect(result).toMatchObject({ status: "needs-newer-obsidian", minAppVersion: "9.0.0" });
+	});
+
+	it("stops when a downloaded file does not match latest.json's SHA-256", async () => {
+		const server = fakeServer(latestJson("1.3.0"), {
+			contents: { [`${SERVER}/obsidian-plugin/releases/1.3.0/main.js`]: { status: 200, text: MAIN_JS.replace("var x", "var y") } },
+		});
+		const latest = (await fetchLatestRelease(server.download, fromServer)) as PluginRelease;
+		await expect(downloadRelease(server.download, latest)).rejects.toThrow("main.js 下載不完整或已被修改");
+	});
+
+	it("keeps the manifest and main.js checks for server releases", async () => {
+		const cases: [Record<string, string>, string][] = [
+			[{ "main.js": MAIN_JS, "manifest.json": manifestFor("1.3.0", { id: "other-plugin" }) }, "插件代碼不符"],
+			[{ "main.js": MAIN_JS, "manifest.json": manifestFor("1.2.9") }, "與發佈版本 1.3.0 不符"],
+			[{ "main.js": "<html>error</html>", "manifest.json": manifestFor("1.3.0") }, "不是插件程式"],
+		];
+		for (const [files, message] of cases) {
+			const latest = latestJson("1.3.0", files);
+			const contents = Object.fromEntries(
+				Object.entries(files).map(([name, text]) => [`${SERVER}/obsidian-plugin/releases/1.3.0/${name}`, { status: 200, text }]),
+			);
+			const server = fakeServer(latest, { contents });
+			const release = (await fetchLatestRelease(server.download, fromServer)) as PluginRelease;
+			await expect(downloadRelease(server.download, release)).rejects.toThrow(message);
+		}
+	});
+
+	it("explains a file the server refuses because its storage copy was changed", async () => {
+		const server = fakeServer(latestJson("1.3.0"), {
+			contents: {
+				[`${SERVER}/obsidian-plugin/releases/1.3.0/main.js`]: {
+					status: 502,
+					text: '{"error":{"code":"integrity_error","message":"main.js of 1.3.0 in storage does not match its recorded SHA-256"}}',
+				},
+			},
+		});
+		const latest = (await fetchLatestRelease(server.download, fromServer)) as PluginRelease;
+		await expect(downloadRelease(server.download, latest)).rejects.toThrow("伺服器上的更新檔與紀錄的 SHA-256 不符");
+	});
+
+	it("falls back to GitHub when the server has nothing to offer (404, 503, unreachable, no answer)", async () => {
+		const servers = [
+			fakeServer(null), // 404: nothing mirrored yet, or a server without this endpoint
+			fakeServer(null, { status: 503, body: '{"error":{"code":"vault_not_configured","message":"x"}}' }),
+			fakeServer(latestJson("1.4.0"), { network: "down" }),
+		];
+		for (const server of servers) {
+			const latest = await fetchLatestRelease(server.download, fromServer);
+			expect(latest).toMatchObject({ version: "1.3.0", source: "github", minAppVersion: null });
+			expect(server.requests.map((r) => r.url)).toEqual([LATEST_URL]);
+			expect(server.github.requests).toEqual(["https://api.github.com/repos/andyyyyang/iOS-APP/releases?per_page=50"]);
+		}
+		const hanging = fakeServer(latestJson("1.4.0"), { network: "hang" });
+		expect(await fetchServerRelease(hanging.download, SERVER, 10)).toBeNull();
+	});
+
+	it("checks a GitHub fallback release through its manifest, as before", async () => {
+		const server = fakeServer(null);
+		const result = await checkForUpdate(server.download, "1.2.0", supports, fromServer);
+		expect(result).toMatchObject({ status: "available", release: { version: "1.3.0", source: "github" } });
+		expect(server.github.requests).toContain("https://github.com/andyyyyang/iOS-APP/releases/download/obsidian-plugin-1.3.0/manifest.json");
+	});
+
+	it("asks only GitHub without a server URL", async () => {
+		const server = fakeServer(latestJson("1.4.0"));
+		const latest = await fetchLatestRelease(server.download, { serverUrl: "  " });
+		expect(latest).toMatchObject({ version: "1.3.0", source: "github" });
+		expect(server.requests).toEqual([]);
+	});
+
+	it("reports other server failures instead of falling back", async () => {
+		const cases: [ReturnType<typeof fakeServer>, string][] = [
+			[fakeServer(latestJson("1.3.0"), { status: 500, body: "{}" }), "你的 Railway 伺服器回應 500"],
+			[fakeServer(latestJson("1.3.0"), { body: "<html>" }), "不是有效的 JSON"],
+			[fakeServer(latestJson("1.3.0"), { body: JSON.stringify({ version: "1.3" }) }), "格式不正確"],
+			[
+				fakeServer(latestJson("1.3.0"), {
+					body: JSON.stringify({ ...latestJson("1.3.0"), files: { "main.js": { url: "/x" }, "manifest.json": { url: "/y" } } }),
+				}),
+				"main.js 缺少下載網址或 SHA-256",
+			],
+			[
+				fakeServer(latestJson("1.3.0"), { body: JSON.stringify(latestJson("1.3.0", { "main.js": MAIN_JS })) }),
+				"缺少 main.js 或 manifest.json",
+			],
+		];
+		for (const [server, message] of cases) {
+			await expect(fetchLatestRelease(server.download, fromServer)).rejects.toThrow(message);
+			expect(server.github.requests).toEqual([]);
+		}
+	});
+
+	it("resolves relative file URLs against the server", () => {
+		const latest = latestJson("1.3.0");
+		latest.files["main.js"].url = "/obsidian-plugin/releases/1.3.0/main.js";
+		const release = parseServerRelease(latest, SERVER);
+		expect(release.assets["main.js"]).toEqual({
+			name: "main.js",
+			url: `${SERVER}/obsidian-plugin/releases/1.3.0/main.js`,
+			size: MAIN_JS.length,
+			digest: `sha256:${hex(MAIN_JS)}`,
+		});
+		expect(release.pageUrl).toBe(LATEST_URL);
 	});
 });

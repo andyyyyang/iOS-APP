@@ -17,7 +17,7 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 - **自動同步**：預設每 15 分鐘一次，也可以用指令、左側功能區圖示或點狀態列手動同步。
 - **一鍵配對 iPhone／iPad**：產生配對碼與 QR Code，LocalOCR App 掃描後就取得伺服器網址與 API 金鑰，不必手動輸入。
 - **一鍵設定 Remotely Save**：從伺服器取得 Obsidian 儲存桶的設定，套用到這台裝置的 Remotely Save，或用 QR Code 套用到 iPhone／iPad 的 Obsidian。
-- **線上更新**：自動從 GitHub 下載、驗證並安裝新版本，不必手動複製檔案。
+- **線上更新**：自動從你的 Railway 伺服器下載新版本、比對 SHA-256 後安裝（伺服器沒有可用版本時改用 GitHub），不必手動複製檔案。
 - 使用 Obsidian 的 `requestUrl` 連線，沒有 CORS 問題，**桌面版與行動版（iOS／Android）都能用**。
 
 ## 安裝
@@ -25,19 +25,28 @@ API 規格見 [`../docs/API.md`](../docs/API.md)。
 ### 手動安裝（只需要一次）
 
 1. 在保險庫中建立資料夾 `<保險庫>/.obsidian/plugins/localocr-sync/`（`.obsidian` 是隱藏資料夾）。
-2. 從 [GitHub Releases](https://github.com/andyyyyang/iOS-APP/releases)（`obsidian-plugin-<版本>`）下載 **`main.js`** 與 **`manifest.json`** 放進去（本資料夾中的 `main.js` 也是建置好的同一份）。
+2. 用瀏覽器從你的 Railway 伺服器下載最新版的兩個檔案（不需要 API 金鑰），放進這個資料夾：
+   - [`https://localocr-server-production.up.railway.app/obsidian-plugin/latest/main.js`](https://localocr-server-production.up.railway.app/obsidian-plugin/latest/main.js)
+   - [`https://localocr-server-production.up.railway.app/obsidian-plugin/latest/manifest.json`](https://localocr-server-production.up.railway.app/obsidian-plugin/latest/manifest.json)
+
+   自架的伺服器把網址換成你的伺服器網址。伺服器還沒有同步到任何版本（回應 404）時，改從 [GitHub Releases](https://github.com/andyyyyang/iOS-APP/releases)（`obsidian-plugin-<版本>`）下載；本資料夾中的 `main.js` 也是建置好的同一份。
 3. 開啟 Obsidian →「設定」→「第三方外掛」（社群外掛），關閉「限制模式」，按重新整理後啟用 **LocalOCR Sync**。
 4. 到插件設定填入伺服器網址與 API 金鑰，按「測試連線」。
 
-安裝 1.2.0 以後的版本後，之後的更新都會自動完成（見下方「線上更新」）。
+安裝 1.2.0 以後的版本後，之後的更新都會自動完成（見下方「線上更新」）；1.2.0 會先從 GitHub 更新到 1.3.0，之後改由你的 Railway 伺服器提供。
 
 ### 線上更新
 
-- 每次版本號（`manifest.json` 的 `version`）改變並推送後，CI（`.github/workflows/obsidian-plugin-release.yml`）會測試、建置，並發佈 GitHub Release `obsidian-plugin-<版本>`，附上 `main.js` 與 `manifest.json`，更新內容取自 [`CHANGELOG.md`](CHANGELOG.md)。
-- 插件在 Obsidian 啟動 20 秒後（之後每 6 小時）查詢這些 Release；有新版本時下載檔案，比對 GitHub 提供的 SHA-256、確認 `manifest.json` 的插件代碼與版本、確認 `main.js` 是插件程式，再寫入插件資料夾（先 `main.js`、最後 `manifest.json`，寫入失敗時還原舊檔），然後重新載入插件並顯示更新內容。
+更新來自**你的 Railway 伺服器**，不是直接來自 GitHub：
+
+- 每次版本號（`manifest.json` 的 `version`）改變並推送後，CI（`.github/workflows/obsidian-plugin-release.yml`）會測試、建置，並發佈 GitHub Release `obsidian-plugin-<版本>`，附上 `main.js` 與 `manifest.json`，更新內容取自 [`CHANGELOG.md`](CHANGELOG.md)；接著呼叫伺服器的 `POST /v1/obsidian-plugin/refresh`（需要 GitHub secret `LOCALOCR_API_KEY`，沒有時略過）。
+- 伺服器在啟動後、每 30 分鐘與收到 refresh 時同步這些 Release：下載檔案、比對 GitHub 提供的 SHA-256、確認 `manifest.json` 的插件代碼與版本，存進 Railway 儲存空間（Vault 儲存桶）的隱藏資料夾 `.localocr/obsidian-plugin/<版本>/`（Remotely Save 與 App 都會略過，不會出現在 vault 中），並把版本、更新內容與每個檔案的 SHA-256 記在伺服器資料庫。
+- 插件在 Obsidian 啟動 20 秒後（之後每 6 小時）讀取 `<伺服器網址>/obsidian-plugin/latest.json`（不帶 API 金鑰）；有新版本時下載檔案，逐一比對 `latest.json` 的 SHA-256、確認 `manifest.json` 的插件代碼與版本、確認 `main.js` 是插件程式，再寫入插件資料夾（先 `main.js`、最後 `manifest.json`，寫入失敗時還原舊檔），然後重新載入插件並顯示更新內容。
+- 未填伺服器網址、伺服器回應 404（還沒有同步到任何版本，或伺服器是舊版）、503（伺服器沒有設定儲存空間）或連不上（15 秒沒有回應）時，改從 GitHub Releases 更新（比對 GitHub 提供的 SHA-256）。伺服器的其他錯誤會直接顯示，不改用 GitHub。
+- 儲存空間的金鑰在每台裝置的 Remotely Save 裡，所以伺服器不單憑儲存空間的內容提供檔案：每次送出前都重新計算 SHA-256，與資料庫的紀錄不符就拒絕（502）；最新版本的檔案會在下次同步時從 GitHub 修復。
 - 新版本需要較新的 Obsidian（`minAppVersion`）時不會安裝，只會提示更新 Obsidian。
 - 同步進行中不會更新，等同步結束才安裝。
-- 插件設定的「更新」區塊：目前版本、上次檢查結果、「檢查並更新」按鈕與「自動更新」開關（關閉時只通知）。也可以執行指令「**檢查並更新插件**」。
+- 插件設定的「更新」區塊：目前版本、上次檢查結果與來源（你的 Railway 伺服器或 GitHub）、「檢查並更新」按鈕與「自動更新」開關（關閉時只通知）。也可以執行指令「**檢查並更新插件**」。
 
 ### 用 BRAT 安裝
 
@@ -256,6 +265,7 @@ tags: [localocr, localocr/receipt]
 | JSON 紀錄沒有更新 | 該紀錄的「已完成欄位」為真（例如 `done: true`），或情境代碼與對應不符（情境代碼即樣板 id，例如 `fv60_air`） |
 | 筆記重複 | 請確認沒有手動複製筆記（兩則筆記有相同的 `localocr_id`）；刪掉多餘的那則即可 |
 | 「無法產生配對碼」／「無法取得 Remotely Save 設定」＋「伺服器可能是舊版」 | 伺服器還沒有 `/v1/pairing`、`/v1/vault/remotely-save`，請更新並重新部署 LocalOCR 伺服器 |
+| 「伺服器上的更新檔與紀錄的 SHA-256 不符」 | 儲存空間中的插件檔案被改過或刪除，伺服器拒絕提供。伺服器 30 分鐘內會自動從 GitHub 修復；也可以重新部署伺服器（啟動後會同步）再按「檢查並更新」 |
 | 「伺服器尚未設定 Obsidian 儲存桶」 | 在伺服器設定 `VAULT_S3_*` 變數後重新部署（見 `docs/OBSIDIAN-SYNC.md`） |
 | 按「套用到這台裝置」沒有反應 | 確認 Remotely Save 已安裝並啟用；Remotely Save 若顯示「the target vault is …」，表示保險庫名稱不同 |
 | 套用後沒有自動同步 | 重新啟動 Obsidian（Remotely Save 只在啟動時建立同步排程） |
@@ -275,7 +285,7 @@ API 金鑰以明文存在 `<保險庫>/.obsidian/plugins/localocr-sync/data.json
 ```bash
 cd obsidian-plugin
 npm install
-npm test            # vitest 單元測試（純邏輯：src/format.ts、src/sync-core.ts、src/json-export.ts、src/device-setup.ts）
+npm test            # vitest 單元測試（純邏輯：src/format.ts、src/sync-core.ts、src/json-export.ts、src/device-setup.ts、src/updater.ts）
 npx tsc --noEmit    # 型別檢查
 npm run build       # 型別檢查 + 以 esbuild 打包成 main.js
 npm run dev         # 監看模式（含 inline source map；提交前請改跑 npm run build）
@@ -289,6 +299,7 @@ npm run dev         # 監看模式（含 inline source map；提交前請改跑 
 | `src/format.ts` | 標題、檔名、路徑、筆記產生與保留使用者內容的合併（不依賴 Obsidian） |
 | `src/json-export.ts` | JSON 陣列輸出：解析、依 id 新增／更新、保留欄位、輸出（不依賴 Obsidian） |
 | `src/device-setup.ts` | 配對碼與 Remotely Save 設定的請求、回應檢查、倒數格式、錯誤訊息（不依賴 Obsidian） |
+| `src/updater.ts` | 線上更新：讀取伺服器的 `latest.json`（或 GitHub Releases）、下載並驗證新版本（不依賴 Obsidian） |
 | `src/setup-modals.ts` | 「配對 iPhone／iPad」與「設定 Remotely Save」對話框（QR Code 由 `qrcode` 產生，打包進 `main.js`） |
 | `src/types.ts` | API 資料型別 |
 | `test/` | vitest 測試 |

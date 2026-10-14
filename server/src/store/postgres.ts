@@ -1,7 +1,17 @@
 import pg from "pg";
-import type { Scan, Template } from "../types.js";
+import type { PluginRelease, Scan, Template } from "../types.js";
 import { STARTUP_LOCK_KEY, runMigrations } from "./migrations.js";
-import { rulesToText, scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
+import {
+  pluginReleaseFromRow,
+  pluginReleaseToRow,
+  rulesToText,
+  scanFromRow,
+  templateFromRow,
+  toJsonText,
+  type PluginReleaseRow,
+  type ScanRow,
+  type TemplateRow,
+} from "./rows.js";
 import type {
   ScanFieldsPatch,
   ScanListOptions,
@@ -15,6 +25,7 @@ const SCAN_COLUMNS =
   "id, created_at, updated_at, source, text, template_id, classification, data, line_count, average_confidence, page_count, device";
 const TEMPLATE_COLUMNS =
   "id, name, description, keywords, sample, instructions, rules, version, created_at, updated_at";
+const PLUGIN_RELEASE_COLUMNS = "version, min_app_version, notes, published_at, files, mirrored_at";
 
 /** Escapes LIKE wildcards so user input is matched literally (used with ESCAPE '\'). */
 const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, "\\$&")}%`;
@@ -215,6 +226,32 @@ export class PostgresStore implements Store {
 
   async deleteTemplate(id: string): Promise<boolean> {
     const result = await this.pool.query("DELETE FROM templates WHERE id = $1", [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async listPluginReleases(): Promise<PluginRelease[]> {
+    const { rows } = await this.pool.query<PluginReleaseRow>(
+      `SELECT ${PLUGIN_RELEASE_COLUMNS} FROM obsidian_plugin_releases`,
+    );
+    return rows.map(pluginReleaseFromRow);
+  }
+
+  async getPluginRelease(version: string): Promise<PluginRelease | null> {
+    const { rows } = await this.pool.query<PluginReleaseRow>(
+      `SELECT ${PLUGIN_RELEASE_COLUMNS} FROM obsidian_plugin_releases WHERE version = $1`,
+      [version],
+    );
+    return rows[0] ? pluginReleaseFromRow(rows[0]) : null;
+  }
+
+  async insertPluginRelease(release: PluginRelease): Promise<boolean> {
+    const row = pluginReleaseToRow(release);
+    const result = await this.pool.query(
+      `INSERT INTO obsidian_plugin_releases (${PLUGIN_RELEASE_COLUMNS})
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (version) DO NOTHING`,
+      [row.version, row.min_app_version, row.notes, row.published_at, row.files, row.mirrored_at],
+    );
     return (result.rowCount ?? 0) > 0;
   }
 

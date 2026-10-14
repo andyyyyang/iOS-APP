@@ -12,13 +12,14 @@ describe("migrations", () => {
   it("are numbered sequentially from 1", () => {
     expect(MIGRATIONS.map((m) => m.version)).toEqual(MIGRATIONS.map((_, i) => i + 1));
     expect(MIGRATIONS.find((m) => m.version === 2)?.sql).toMatch(/ADD COLUMN IF NOT EXISTS rules TEXT/);
+    expect(MIGRATIONS.find((m) => m.version === 3)?.sql).toMatch(/CREATE TABLE IF NOT EXISTS obsidian_plugin_releases/);
   });
 
   describe.skipIf(!TEST_DATABASE_URL)("on Postgres", () => {
     it("adds rules to an existing database whose templates have none", async () => {
       const pool = new pg.Pool({ connectionString: TEST_DATABASE_URL });
       try {
-        await pool.query("DROP TABLE IF EXISTS scans, templates, write_clock, schema_migrations");
+        await pool.query("DROP TABLE IF EXISTS scans, templates, write_clock, obsidian_plugin_releases, schema_migrations");
         // A database deployed before rules existed: only migration 1, plus a stored template.
         await runMigrations(pool, MIGRATIONS.filter((m) => m.version === 1), silentLogger);
         await pool.query(
@@ -55,7 +56,7 @@ describe("migrations", () => {
 
     it("lets concurrently starting instances seed and sync templates exactly once", async () => {
       const pool = new pg.Pool({ connectionString: TEST_DATABASE_URL });
-      await pool.query("DROP TABLE IF EXISTS scans, templates, write_clock, schema_migrations");
+      await pool.query("DROP TABLE IF EXISTS scans, templates, write_clock, obsidian_plugin_releases, schema_migrations");
       await pool.end();
       const managedTemplatesDir = fileURLToPath(new URL("./fixtures/managed/", import.meta.url));
       const stores = [1, 2, 3].map(() => trackStore(new PostgresStore(TEST_DATABASE_URL!)));

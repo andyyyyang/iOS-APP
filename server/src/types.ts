@@ -65,3 +65,29 @@ export interface ValidationResult {
   valid: boolean;
   issues: ValidationIssue[];
 }
+
+/** The LocalOCR Sync (Obsidian plugin) release files the server mirrors from GitHub into the vault bucket. */
+export const PLUGIN_FILES = ["main.js", "manifest.json"] as const;
+export type PluginFileName = (typeof PLUGIN_FILES)[number];
+
+export interface PluginFileInfo {
+  /** Lowercase hex SHA-256 of the file's bytes. */
+  sha256: string;
+  size: number;
+}
+
+/**
+ * A mirrored LocalOCR Sync release. Kept in the database, not the bucket: every device's Remotely Save
+ * holds the bucket keys, so the bucket copies are only served when they still hash to `files`.
+ */
+export interface PluginRelease {
+  /** x.y.z, from the GitHub tag obsidian-plugin-<version> (equal to manifest.json's version). */
+  version: string;
+  /** manifest.json's minAppVersion ("" when the manifest has none). */
+  minAppVersion: string;
+  /** The GitHub release body (the CHANGELOG.md section). */
+  notes: string;
+  publishedAt: string;
+  files: Record<PluginFileName, PluginFileInfo>;
+  mirroredAt: string;
+}

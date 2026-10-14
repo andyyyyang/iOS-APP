@@ -2,6 +2,7 @@ import { bootstrapStore } from "./bootstrap.js";
 import { createClassifier } from "./classifier/index.js";
 import { loadConfig } from "./config.js";
 import { createApp } from "./http/app.js";
+import { ObsidianPluginService, schedulePluginMirror } from "./services/obsidian-plugin.js";
 import { createStore } from "./store/index.js";
 import { createVaultStore } from "./vault/index.js";
 import { VERSION } from "./version.js";
@@ -16,6 +17,7 @@ async function main() {
 
   const classifier = createClassifier(config);
   const vault = createVaultStore(config.vault);
+  const obsidianPlugin = new ObsidianPluginService({ store, vault, githubToken: config.githubToken });
   const app = createApp({
     store,
     classifier,
@@ -23,7 +25,10 @@ async function main() {
     vault,
     vaultConfig: config.vault,
     publicUrl: config.publicUrl,
+    obsidianPlugin,
   });
+  // Mirrors the Obsidian plugin's GitHub releases into the bucket: shortly after startup, then every 30 minutes
+  const stopPluginMirror = vault ? schedulePluginMirror(obsidianPlugin) : () => {};
 
   const server = app.listen(config.port, "0.0.0.0", () => {
     console.info(
@@ -37,6 +42,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[shutdown] ${signal} received; closing`);
+    stopPluginMirror();
     const force = setTimeout(() => process.exit(1), 10_000);
     force.unref();
     server.close(async () => {

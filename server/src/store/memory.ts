@@ -1,5 +1,15 @@
-import type { Scan, Template } from "../types.js";
-import { rulesToText, scanFromRow, templateFromRow, toJsonText, type ScanRow, type TemplateRow } from "./rows.js";
+import type { PluginRelease, Scan, Template } from "../types.js";
+import {
+  pluginReleaseFromRow,
+  pluginReleaseToRow,
+  rulesToText,
+  scanFromRow,
+  templateFromRow,
+  toJsonText,
+  type PluginReleaseRow,
+  type ScanRow,
+  type TemplateRow,
+} from "./rows.js";
 import type {
   ScanFieldsPatch,
   ScanListOptions,
@@ -14,6 +24,7 @@ export class MemoryStore implements Store {
   readonly kind = "memory" as const;
   private readonly scans = new Map<string, ScanRow>();
   private readonly templates = new Map<string, TemplateRow>();
+  private readonly pluginReleases = new Map<string, PluginReleaseRow>();
   private lastWrite = 0;
 
   async init(): Promise<void> {}
@@ -124,6 +135,21 @@ export class MemoryStore implements Store {
 
   async deleteTemplate(id: string): Promise<boolean> {
     return this.templates.delete(id);
+  }
+
+  async listPluginReleases(): Promise<PluginRelease[]> {
+    return [...this.pluginReleases.values()].map(pluginReleaseFromRow);
+  }
+
+  async getPluginRelease(version: string): Promise<PluginRelease | null> {
+    const row = this.pluginReleases.get(version);
+    return row ? pluginReleaseFromRow(row) : null;
+  }
+
+  async insertPluginRelease(release: PluginRelease): Promise<boolean> {
+    if (this.pluginReleases.has(release.version)) return false;
+    this.pluginReleases.set(release.version, pluginReleaseToRow(release));
+    return true;
   }
 
   async runExclusive<T>(fn: () => Promise<T>): Promise<T> {

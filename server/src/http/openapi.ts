@@ -1,5 +1,6 @@
 import { MAX_TEMPLATE_RULES, MAX_VAULT_SEARCH_LIMIT, RULE_TARGET_PATTERN } from "../schemas.js";
-import { CLASSIFICATION_PROVIDERS, SCAN_SOURCES } from "../types.js";
+import { PLUGIN_CONTENT_TYPES, PLUGIN_FOLDER } from "../services/obsidian-plugin.js";
+import { CLASSIFICATION_PROVIDERS, PLUGIN_FILES, SCAN_SOURCES } from "../types.js";
 import { MAX_PATH_BYTES } from "../vault/paths.js";
 import {
   REMOTELY_SAVE_AUTO_RUN_MS,
@@ -60,6 +61,24 @@ const preconditionFailed = response(ref("PreconditionFailed"), "Precondition fai
 const noStoreHeader = { "Cache-Control": { description: "no-store", schema: { type: "string", const: "no-store" } } };
 const pairingCode = { type: "string", pattern: "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$", examples: ["K7QM-3XPA"] };
 
+const pluginFileParam = { name: "file", in: "path", required: true, schema: { type: "string", enum: [...PLUGIN_FILES] } };
+const pluginFileResponse = (cacheControl: string) => ({
+  description: "The file's bytes, verified against the SHA-256 recorded in the database",
+  headers: {
+    ETag: { description: "The file's SHA-256 in quotes (If-None-Match answers 304)", schema: { type: "string" } },
+    "Cache-Control": { schema: { type: "string", const: cacheControl } },
+    "Content-Disposition": { schema: { type: "string", examples: ['attachment; filename="main.js"'] } },
+  },
+  content: Object.fromEntries(PLUGIN_FILES.map((name) => [PLUGIN_CONTENT_TYPES[name].split(";")[0], { schema: binary }])),
+});
+const pluginErrors = {
+  "404": errorResponse("Unknown version or file, or nothing mirrored yet (not_found)"),
+  "502": errorResponse(
+    "The bucket copy is missing or does not match its recorded SHA-256 (integrity_error), or the bucket failed (vault_storage_error)",
+  ),
+  "503": errorResponse("Vault storage is not configured (vault_not_configured)"),
+};
+
 /** Hand-written OpenAPI 3.1 description of the REST API. */
 export function buildOpenApi(serverUrl?: string) {
   return {
@@ -71,7 +90,8 @@ export function buildOpenApi(serverUrl?: string) {
         "Scans from the LocalOCR iOS app, scenario templates, server-side classification, and the user's Obsidian vault " +
         "(plain files in an S3-compatible bucket synced by Remotely Save). " +
         "MCP (Streamable HTTP, stateless) is served at /mcp with the same API keys. " +
-        "New devices pair with POST /v1/pairing (creates a code) and POST /pair (redeems it for the API key).",
+        "New devices pair with POST /v1/pairing (creates a code) and POST /pair (redeems it for the API key). " +
+        "The Obsidian plugin's releases, mirrored into the vault bucket, are served without auth under /obsidian-plugin.",
     },
     ...(serverUrl ? { servers: [{ url: serverUrl }] } : {}),
     security: [{ bearerAuth: [] }, { apiKeyQuery: [] }],
@@ -334,6 +354,65 @@ export function buildOpenApi(serverUrl?: string) {
             "200": { description: "OK", headers: noStoreHeader, ...json(ref("RemotelySaveSetup")) },
             ...commonErrors,
             "503": errorResponse("Vault storage is not configured (vault_not_configured)"),
+          },
+        },
+      },
+      "/obsidian-plugin/latest.json": {
+        get: {
+          operationId: "getLatestPluginRelease",
+          summary: "Newest LocalOCR Sync (Obsidian plugin) release mirrored by this server (no auth)",
+          description:
+            "The plugin's online updater reads this first. The server mirrors GitHub releases obsidian-plugin-<version> into the vault " +
+            `bucket (${PLUGIN_FOLDER}<version>/, a dot folder that Remotely Save and the app skip) on startup, every 30 minutes and on ` +
+            "POST /v1/obsidian-plugin/refresh. Version, notes and each file's SHA-256 and size come from the database. " +
+            "File URLs are absolute (PUBLIC_URL when set, else this request's host).",
+          security: [],
+          responses: {
+            "200": {
+              description: "OK",
+              headers: { "Cache-Control": { schema: { type: "string", const: "no-cache" } } },
+              ...json(ref("PluginRelease")),
+            },
+            "404": errorResponse("Nothing mirrored yet (not_found)"),
+            "503": pluginErrors["503"],
+          },
+        },
+      },
+      "/obsidian-plugin/latest/{file}": {
+        get: {
+          operationId: "getLatestPluginFile",
+          summary: "A file of the newest mirrored plugin release (no auth; the manual first-install link)",
+          security: [],
+          parameters: [pluginFileParam],
+          responses: { "200": pluginFileResponse("no-cache"), ...pluginErrors },
+        },
+      },
+      "/obsidian-plugin/releases/{version}/{file}": {
+        get: {
+          operationId: "getPluginFile",
+          summary: "A file of a mirrored plugin release (no auth)",
+          description: "Refused with 502 integrity_error when the bucket copy no longer matches the SHA-256 recorded when it was mirrored.",
+          security: [],
+          parameters: [
+            { name: "version", in: "path", required: true, schema: { type: "string", pattern: "^\\d+\\.\\d+\\.\\d+$", examples: ["1.3.0"] } },
+            pluginFileParam,
+          ],
+          responses: { "200": pluginFileResponse("public, max-age=31536000, immutable"), ...pluginErrors },
+        },
+      },
+      "/v1/obsidian-plugin/refresh": {
+        post: {
+          operationId: "refreshPluginMirror",
+          summary: "Mirror new plugin releases from GitHub now",
+          description:
+            "Downloads every published release obsidian-plugin-x.y.z not mirrored yet, checks GitHub's SHA-256 digest and that " +
+            "manifest.json has id localocr-sync and the tag's version, stores the files in the bucket and records them. " +
+            "Also restores the newest release's bucket files when they no longer match. Per-version failures are listed in failed.",
+          responses: {
+            "200": response(ref("PluginMirrorResult")),
+            "401": commonErrors["401"],
+            "502": errorResponse("The GitHub releases listing failed (github_unavailable)"),
+            "503": pluginErrors["503"],
           },
         },
       },
@@ -676,6 +755,51 @@ export function buildOpenApi(serverUrl?: string) {
             },
             syncOnSaveAfterMilliseconds: { type: "integer", const: REMOTELY_SAVE_SYNC_ON_SAVE_MS, description: "Sync On Save: enabled" },
             agreeToUseSyncV3: { type: "boolean", const: true },
+          },
+        },
+        PluginRelease: {
+          type: "object",
+          required: ["version", "minAppVersion", "notes", "publishedAt", "files"],
+          properties: {
+            version: { type: "string", examples: ["1.3.0"] },
+            minAppVersion: { type: "string", description: "manifest.json's minAppVersion (empty when it has none)", examples: ["1.5.0"] },
+            notes: { type: "string", description: "Release notes (the CHANGELOG.md section)" },
+            publishedAt: { type: "string", format: "date-time" },
+            files: {
+              type: "object",
+              required: [...PLUGIN_FILES],
+              properties: Object.fromEntries(
+                PLUGIN_FILES.map((name) => [
+                  name,
+                  {
+                    type: "object",
+                    required: ["sha256", "size", "url"],
+                    properties: {
+                      sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+                      size: { type: "integer", minimum: 0 },
+                      url: { type: "string", format: "uri", description: "GET /obsidian-plugin/releases/{version}/{file}" },
+                    },
+                  },
+                ]),
+              ),
+            },
+          },
+        },
+        PluginMirrorResult: {
+          type: "object",
+          required: ["latest", "mirrored", "repaired", "failed"],
+          properties: {
+            latest: { type: ["string", "null"], description: "Newest mirrored version after this run" },
+            mirrored: { type: "array", items: { type: "string" } },
+            repaired: { type: "array", items: { type: "string" }, description: "Versions whose bucket files were restored" },
+            failed: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["version", "error"],
+                properties: { version: { type: "string" }, error: { type: "string" } },
+              },
+            },
           },
         },
         ValidationResult: {

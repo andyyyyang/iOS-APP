@@ -4,6 +4,7 @@ import type { Classifier } from "../classifier/types.js";
 import type { VaultConfig } from "../config.js";
 import { mcpRouter } from "../mcp/route.js";
 import { createServices } from "../services/index.js";
+import type { ObsidianPluginService } from "../services/obsidian-plugin.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { VERSION } from "../version.js";
@@ -12,6 +13,7 @@ import { errorHandler, notFoundHandler } from "./errors.js";
 import { buildOpenApi } from "./openapi.js";
 import { rateLimit } from "./rate-limit.js";
 import { classifyRouter } from "./routes/classify.js";
+import { obsidianPluginAdminRouter, obsidianPluginRouter } from "./routes/obsidian-plugin.js";
 import { pairRouter, pairingRouter, publicBaseUrl } from "./routes/pairing.js";
 import { scansRouter } from "./routes/scans.js";
 import { templatesRouter } from "./routes/templates.js";
@@ -26,8 +28,10 @@ export interface AppOptions {
   vault?: VaultStore | null;
   /** The bucket credentials behind `vault`, for GET /v1/vault/remotely-save (503 when null or omitted). */
   vaultConfig?: VaultConfig | null;
-  /** PUBLIC_URL (no trailing slash) for pairing links; omitted = the request's scheme and host. */
+  /** PUBLIC_URL (no trailing slash) for pairing links and plugin file URLs; omitted = the request's scheme and host. */
   publicUrl?: string;
+  /** Mirror of the Obsidian plugin's releases (index.ts passes the one it schedules); omitted = built over store and vault. */
+  obsidianPlugin?: ObsidianPluginService;
   /** Clock in milliseconds for pairing code expiry and the /pair rate limit (injectable for tests). */
   now?: () => number;
 }
@@ -43,9 +47,10 @@ export function createApp({
   vault = null,
   vaultConfig = null,
   publicUrl,
+  obsidianPlugin,
   now = Date.now,
 }: AppOptions): Express {
-  const services = createServices({ store, classifier, vault, vaultConfig, now });
+  const services = createServices({ store, classifier, vault, vaultConfig, obsidianPlugin, now });
   const auth = requireApiKey(apiKeys);
   const app = express();
 
@@ -63,12 +68,16 @@ export function createApp({
   // No auth: this is how a new device obtains the key. After the JSON parser, rate-limited per IP.
   app.use("/pair", pairRouter(services, { limiter: rateLimit({ ...PAIR_RATE_LIMIT, now }) }));
 
+  // No auth: plugin updates and first-install downloads (public code; files are checked against the database first).
+  app.use("/obsidian-plugin", obsidianPluginRouter(services, { publicUrl }));
+
   const v1 = express.Router();
   v1.use(auth);
   v1.get("/openapi.json", (req, res) => {
     res.json(buildOpenApi(publicBaseUrl(req, publicUrl)));
   });
   v1.use("/pairing", pairingRouter(services, { publicUrl }));
+  v1.use("/obsidian-plugin", obsidianPluginAdminRouter(services));
   v1.use("/scans", scansRouter(services));
   v1.use("/templates", templatesRouter(services));
   v1.use(classifyRouter(services));
