@@ -246,8 +246,9 @@ private struct CompactWorkspace: View {
     }
 
     private func drawer<Content: View>(edge: HorizontalEdge, @ViewBuilder content: () -> Content) -> some View {
-        GeometryReader { proxy in
-            content()
+        let panel = content()
+        return GeometryReader { proxy in
+            panel
                 .frame(width: min(proxy.size.width * 0.86, 360))
                 .frame(maxHeight: .infinity)
                 .glass(cornerRadius: 0)

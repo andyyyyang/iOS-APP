@@ -197,8 +197,9 @@ final class Workspace {
     private let defaults: UserDefaults
     private let store: NotesStore
 
-    init(defaults: UserDefaults = .standard, store: NotesStore = .shared) {
+    init(defaults: UserDefaults = .standard, store: NotesStore? = nil) {
         self.defaults = defaults
+        let store = store ?? .shared
         self.store = store
         if defaults.object(forKey: Key.leftOpen) != nil { isLeftOpen = defaults.bool(forKey: Key.leftOpen) }
         if defaults.object(forKey: Key.rightOpen) != nil { isRightOpen = defaults.bool(forKey: Key.rightOpen) }
