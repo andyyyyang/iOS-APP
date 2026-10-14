@@ -281,6 +281,13 @@ final class NotesTests: XCTestCase {
         XCTAssertLessThanOrEqual(wideTable?.size.width ?? 999, 600)
         XCTAssertGreaterThan(wideTable?.rowHeights.last ?? 0, 40, "放不下的儲存格換行")
 
+        // 儲存格裡的連結點得到
+        let linked = styled("| 筆記 |\n| --- |\n| [[專案]] |")
+        let linkTable = linked.attribute(.mdTable, at: 0, effectiveRange: nil) as? MarkdownTableInfo
+        let bodyTop = (linkTable?.rowHeights.first ?? 0) + MarkdownTableInfo.verticalPadding
+        XCTAssertEqual(linkTable?.link(at: CGPoint(x: MarkdownTableInfo.horizontalPadding + 4, y: bodyTop + 6)), .wikiLink("專案"))
+        XCTAssertNil(linkTable?.link(at: CGPoint(x: 4, y: 4)), "標題列沒有連結")
+
         // 「a | b」下一行只有 ---：不是表格（GFM 要有直線），是 Setext 標題
         let notTable = styled("a | b\n---")
         XCTAssertNil(notTable.attribute(.mdTable, at: 0, effectiveRange: nil))

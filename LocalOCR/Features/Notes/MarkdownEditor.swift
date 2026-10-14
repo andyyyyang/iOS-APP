@@ -221,6 +221,11 @@ final class NoteTextView: UITextView {
         if let info = storage.attribute(.mdImage, at: index, effectiveRange: nil) as? MarkdownImageInfo {
             return .image(info.name)
         }
+        // 畫成格線表的表格：點到儲存格裡的連結就開啟，其他地方照常移動游標（顯示原始文字）
+        if let table = storage.attribute(.mdTable, at: index, effectiveRange: nil) as? MarkdownTableInfo {
+            let spacing = (storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0
+            return table.link(at: CGPoint(x: inContainer.x - line.minX, y: inContainer.y - line.minY - spacing))
+        }
         guard !isEditingLine(containing: index) else { return nil }
         if let target = storage.attribute(.mdWikiLink, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) as? String, hitRect(range, slop: 4) {
             return .wikiLink(target)

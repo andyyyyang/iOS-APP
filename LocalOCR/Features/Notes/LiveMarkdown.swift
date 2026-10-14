@@ -131,6 +131,52 @@ final class MarkdownTableInfo: NSObject {
         return copy
     }
 
+    /// 表格裡某一點（相對於表格左上角）的連結：點 [[連結]] 或網址時開啟，不進入編輯。
+    func link(at point: CGPoint) -> MarkdownTapTarget? {
+        var top: CGFloat = 0
+        var row: Int?
+        for (index, height) in rowHeights.enumerated() {
+            if point.y >= top, point.y < top + height {
+                row = index
+                break
+            }
+            top += height
+        }
+        var left: CGFloat = 0
+        var column: Int?
+        for (index, width) in columnWidths.enumerated() {
+            if point.x >= left, point.x < left + width {
+                column = index
+                break
+            }
+            left += width
+        }
+        guard let row, let column, column < cells[row].count, cells[row][column].length > 0 else { return nil }
+        let storage = NSTextStorage(attributedString: cells[row][column])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: max(columnWidths[column] - Self.horizontalPadding * 2, 1), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        let local = CGPoint(x: point.x - left - Self.horizontalPadding, y: point.y - top - Self.verticalPadding)
+        var result: MarkdownTapTarget?
+        storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { attributes, range, stop in
+            var target: MarkdownTapTarget?
+            if let wiki = attributes[.mdWikiLink] as? String {
+                target = .wikiLink(wiki)
+            } else if let url = attributes[.mdLink] as? String {
+                target = .link(url)
+            }
+            guard let target else { return }
+            let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            if layout.boundingRect(forGlyphRange: glyphs, in: container).insetBy(dx: -4, dy: -4).contains(local) {
+                result = target
+                stop.pointee = true
+            }
+        }
+        return result
+    }
+
     /// 畫在文字欄中（圓角外框、標題列底色、格線、儲存格文字）。
     func draw(in frame: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
