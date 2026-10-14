@@ -42,7 +42,7 @@ export interface VaultRules {
 
 const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
-/** The rules file at the vault root by name, else the first root .md whose name contains 規則 or "rule"; null if none. */
+/** The rules file at the vault root by name, else the first root .md whose name contains 規則, 規範 or "rule"; null if none. */
 export async function findRulesPath(vault: VaultService): Promise<string | null> {
   const { items } = await vault.list({});
   const root = items.filter((entry) => !entry.path.includes("/") && !entry.path.startsWith("."));
@@ -51,7 +51,7 @@ export async function findRulesPath(vault: VaultService): Promise<string | null>
     if (found) return found.path;
   }
   return (
-    root.find((entry) => /\.md$/i.test(entry.path) && /規則|rule/i.test(basename(entry.path).normalize("NFC")))?.path ?? null
+    root.find((entry) => /\.md$/i.test(entry.path) && /規則|規範|rule/i.test(basename(entry.path).normalize("NFC")))?.path ?? null
   );
 }
 

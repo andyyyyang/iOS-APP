@@ -144,7 +144,7 @@ final class KnowledgeAssistant {
             path = chosen
         case .none:
             path = rootNotes.first { Self.rulesCandidates.contains($0.lowercased()) }
-                ?? rootNotes.first { $0.contains("規則") || $0.lowercased().contains("rule") }
+                ?? rootNotes.first { $0.contains("規則") || $0.contains("規範") || $0.lowercased().contains("rule") }
         }
         guard let path, let note = try? await mcp.read(path) else {
             rulesPath = nil

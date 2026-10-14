@@ -632,6 +632,7 @@ describe("assistant runs", () => {
     expect(await contexts(rules, { rulesPath: null })).not.toContain("vault_rules");
     expect(await contexts(rules, { rulesPath: "docs/rules.md" })).toContain("自訂規則");
     expect(await contexts({ "我的寫作規則.md": "備用規則", "Other.md": "x" }, {})).toContain('<vault_rules path="我的寫作規則.md">');
+    expect(await contexts({ "_VAULT 規範.md": "命名規範", "Other.md": "x" }, {})).toContain('<vault_rules path="_VAULT 規範.md">');
     const long = await contexts({ "rules.md": "規".repeat(25_000) }, {});
     expect(long).toContain("只列出前面的部分");
     expect(long.match(/規/g)!.length).toBeGreaterThanOrEqual(20_000);

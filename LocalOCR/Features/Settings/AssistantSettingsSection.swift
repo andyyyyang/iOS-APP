@@ -59,7 +59,7 @@ struct AssistantSettingsSection: View {
         } header: {
             Text("知識庫 AI")
         } footer: {
-            Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。「自動」時由伺服器的 Jev 判斷：查詢與小修改用裝置端的 Apple Intelligence，需要多個步驟或處理多個檔案的整理工作交給伺服器上的雲端 AI（Claude，能像操作電腦一樣整理檔案、在沙盒中執行程式；要在 Railway 的伺服器設定 ANTHROPIC_API_KEY 才能使用）。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md 等的筆記。")
+            Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。「自動」時由伺服器的 Jev 判斷：查詢與小修改用裝置端的 Apple Intelligence，需要多個步驟或處理多個檔案的整理工作交給伺服器上的雲端 AI（Claude，能像操作電腦一樣整理檔案、在沙盒中執行程式；要在 Railway 的伺服器設定 ANTHROPIC_API_KEY 才能使用）。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
         }
         .task {
             await assistant.loadRules()
