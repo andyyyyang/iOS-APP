@@ -67,7 +67,7 @@ final class MarkdownEditorController {
     }
 
     func focus() {
-        textView?.becomeFirstResponder()
+        _ = textView?.becomeFirstResponder()
     }
 
     /// 捲動到第 `line` 行並把游標放在那裡（右側大綱、[[筆記#標題]] 跳轉）。

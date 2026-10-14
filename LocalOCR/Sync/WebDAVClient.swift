@@ -332,14 +332,16 @@ enum WebDAVMultistatus {
             case "getcontentlength":
                 pending.contentLength = value
             case "propstat":
+                guard var response = current else { break }
                 if propstatOK {
-                    current?.isCollection = current?.isCollection == true || pending.isCollection
-                    if let etag = pending.etag { current?.etag = etag }
-                    if let modified = pending.lastModified { current?.lastModified = modified }
-                    if let length = pending.contentLength { current?.contentLength = length }
+                    response.isCollection = response.isCollection || pending.isCollection
+                    if let etag = pending.etag { response.etag = etag }
+                    if let modified = pending.lastModified { response.lastModified = modified }
+                    if let length = pending.contentLength { response.contentLength = length }
                 } else if pending.isCollection {
-                    current?.isCollection = true
+                    response.isCollection = true
                 }
+                current = response
             case "response":
                 if let current { responses.append(current) }
                 current = nil
