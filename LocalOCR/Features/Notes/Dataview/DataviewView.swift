@@ -34,6 +34,7 @@ final class DataviewView: UIView {
         webView.scrollView.bounces = false
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.uiDelegate = self
         if #available(iOS 16.4, *) { webView.isInspectable = true }
         addSubview(webView)
         if showsHeader { buildHeader() }
@@ -135,8 +136,59 @@ final class DataviewView: UIView {
         case "height":
             if let value = (body["value"] as? NSNumber)?.doubleValue { onHeight?(CGFloat(value)) }
             return nil
+        case "copy":
+            UIPasteboard.general.string = body["text"] as? String ?? ""
+            return nil
+        case "paste":
+            return UIPasteboard.general.string ?? ""
         default:
             throw DataviewError.message("不支援的操作：\(op)")
+        }
+    }
+}
+
+// MARK: - alert／confirm／prompt
+
+extension DataviewView: WKUIDelegate {
+    private var presenter: UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if var controller = current as? UIViewController {
+                while let presented = controller.presentedViewController { controller = presented }
+                return controller
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
+        guard let presenter else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "好", style: .default) { _ in continuation.resume() })
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        guard let presenter else { return false }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in continuation.resume(returning: false) })
+            alert.addAction(UIAlertAction(title: "確定", style: .default) { _ in continuation.resume(returning: true) })
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
+        guard let presenter else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+            alert.addTextField { $0.text = defaultText }
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in continuation.resume(returning: nil) })
+            alert.addAction(UIAlertAction(title: "確定", style: .default) { [weak alert] _ in continuation.resume(returning: alert?.textFields?.first?.text ?? "") })
+            presenter.present(alert, animated: true)
         }
     }
 }

@@ -586,6 +586,14 @@ enum DataviewShim {
       }
       window.Notice = Notice;
 
+      // 剪貼簿：網頁的 navigator.clipboard 在 App 裡不能用，改由 App 複製與貼上
+      try {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: (text) => bridge("copy", { text: String(text) }), readText: () => bridge("paste") },
+        });
+      } catch (e) {}
+
       // ---------- 互動與高度 ----------
       document.addEventListener("click", (event) => {
         const a = event.target.closest && event.target.closest("a");

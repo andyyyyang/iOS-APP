@@ -25,6 +25,7 @@ struct NoteView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var toast: String?
     @State private var header = NoteHeaderState()
+    @State private var showsProperties = false
     @FocusState private var titleFocused: Bool
     private let sync = VaultSyncCenter.shared
     private let store = NotesStore.shared
@@ -144,9 +145,27 @@ struct NoteView: View {
         .lineLimit(1)
     }
 
-    /// 上方一列的右邊：AI 與更多。
+    /// 上方一列的右邊：屬性、AI 與更多。
     private var headerActions: some View {
         HStack(spacing: 8) {
+            let properties = NoteProperties.parse(text)
+            if !properties.isEmpty {
+                Button { showsProperties = true } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DS.text)
+                        .frame(width: 32, height: 32)
+                        .background(DS.control, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .accessibilityLabel("屬性")
+                .popover(isPresented: $showsProperties) {
+                    NotePropertiesPopover(items: properties) {
+                        showsProperties = false
+                        editProperties()
+                    }
+                    .presentationCompactAdaptation(.popover)
+                }
+            }
             Button("AI") { startAIEdit() }
                 .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
                 .accessibilityLabel("請 AI 修改")
@@ -233,6 +252,12 @@ struct NoteView: View {
         } else {
             workspace.openLink(decoded, from: path)
         }
+    }
+
+    /// 編輯屬性：游標移到屬性的第一行（屬性改回顯示原始 YAML）。
+    private func editProperties() {
+        controller.focus()
+        controller.reveal(line: 1)
     }
 
     /// 有選取文字時修改選取的部分，否則修改整則筆記的內文（不含屬性）。
@@ -450,6 +475,95 @@ struct NoteTitleHeader<Meta: View, Actions: View, Title: View>: View {
             .frame(height: Self.fadeHeight)
             .offset(y: Self.fadeHeight)
             .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - 屬性
+
+/// 筆記開頭的屬性（frontmatter）：只讀開頭那一段，打字時不必解析整則筆記。
+enum NoteProperties {
+    static func parse(_ text: String) -> [(key: String, value: String)] {
+        guard text.hasPrefix("---") else { return [] }
+        let ns = text as NSString
+        let firstLine = ns.lineRange(for: NSRange(location: 0, length: 0))
+        guard ns.substring(with: firstLine).trimmingCharacters(in: .whitespacesAndNewlines) == "---" else { return [] }
+        var location = NSMaxRange(firstLine)
+        while location < ns.length {
+            let line = ns.lineRange(for: NSRange(location: location, length: 0))
+            if ns.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines) == "---" {
+                if case .properties(let items)? = MarkdownParser.blocks(from: ns.substring(to: NSMaxRange(line))).first { return items }
+                return []
+            }
+            location = NSMaxRange(line)
+        }
+        return []
+    }
+
+    /// 清單型的值（tags: [a, b]、YAML 清單）拆成一個一個。
+    static func values(_ value: String) -> [String] {
+        var raw = value.trimmingCharacters(in: .whitespaces)
+        if raw.hasPrefix("["), raw.hasSuffix("]") { raw = String(raw.dropFirst().dropLast()) }
+        return raw.split(separator: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \"'")) }.filter { !$0.isEmpty }
+    }
+}
+
+/// 屬性按鈕的 popover：每個屬性的名稱與值（清單用膠囊顯示），右上角「編輯」打開原始 YAML。
+struct NotePropertiesPopover: View {
+    let items: [(key: String, value: String)]
+    var onEdit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("屬性")
+                    .font(.headline)
+                    .foregroundStyle(DS.text)
+                Spacer()
+                Button("編輯", action: onEdit)
+                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.key)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(DS.textSecondary)
+                            value(item)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
+        }
+        .frame(width: 320)
+        .frame(maxHeight: 460)
+        .background(DS.card)
+    }
+
+    @ViewBuilder
+    private func value(_ item: (key: String, value: String)) -> some View {
+        let parts = NoteProperties.values(item.value)
+        let isTags = ["tags", "tag"].contains(item.key.lowercased())
+        if item.value.trimmingCharacters(in: .whitespaces).isEmpty {
+            Text("—").foregroundStyle(DS.textTertiary)
+        } else if isTags || ["aliases", "alias"].contains(item.key.lowercased()) || item.value.hasPrefix("[") {
+            FlowLayout(spacing: 6) {
+                ForEach(parts, id: \.self) { part in
+                    Chip(text: isTags ? "#" + part.trimmingCharacters(in: CharacterSet(charactersIn: "#")) : part, pastel: isTags ? .sky : nil)
+                }
+            }
+        } else {
+            Text(item.value)
+                .font(.subheadline)
+                .foregroundStyle(DS.text)
+                .textSelection(.enabled)
         }
     }
 }

@@ -579,7 +579,8 @@ struct MarkdownEditor: UIViewRepresentable {
                 images: images,
                 resolvesLink: parent.resolvesLink,
                 dataviewHeights: DataviewBlockInfo.heights,
-                rendersDataview: true
+                rendersDataview: true,
+                collapsesProperties: true
             ))
             textView.typingAttributes = LiveMarkdown.Theme.bodyAttributes
             textView.refreshDataviewBlocks()

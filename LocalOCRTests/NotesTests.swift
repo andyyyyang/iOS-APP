@@ -383,6 +383,25 @@ final class NotesTests: XCTestCase {
         XCTAssertTrue(html.contains("<\\/script><b>"))
     }
 
+    func testPropertiesCollapseUnlessEditing() {
+        let text = "---\ntags: [a, b]\nstatus: open\n---\n# 標題"
+        let ns = text as NSString
+        let collapsed = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: collapsed, options: LiveMarkdown.Options(selection: nil, width: 600, collapsesProperties: true))
+        XCTAssertTrue(isHidden(collapsed, at: ns.range(of: "status").location), "屬性收起來，從上方的按鈕查看")
+        XCTAssertFalse(isHidden(collapsed, at: ns.range(of: "標題").location))
+
+        let editing = NSTextStorage(string: text)
+        LiveMarkdown.apply(to: editing, options: LiveMarkdown.Options(selection: NSRange(location: ns.range(of: "status").location, length: 0), width: 600, collapsesProperties: true))
+        XCTAssertFalse(isHidden(editing, at: ns.range(of: "status").location), "游標在屬性裡：顯示原始 YAML")
+        XCTAssertFalse(isHidden(styled(text), at: ns.range(of: "status").location))
+
+        XCTAssertEqual(NoteProperties.parse(text).map { $0.key }, ["tags", "status"])
+        XCTAssertEqual(NoteProperties.values("[a, b]"), ["a", "b"])
+        XCTAssertEqual(NoteProperties.values("x, y"), ["x", "y"])
+        XCTAssertTrue(NoteProperties.parse("# 沒有屬性\n---\na: b\n---").isEmpty)
+    }
+
     func testAssistantTableText() {
         let table = MarkdownTableText(rows: ["| 機種 | 數量 |", "|:---:|---:|", "| **K3** | 1 \\| 2 |", "| A<br>B |"])
         XCTAssertTrue(table.hasHeader)

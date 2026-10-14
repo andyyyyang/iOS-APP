@@ -350,6 +350,8 @@ enum LiveMarkdown {
         var dataviewHeights: [String: CGFloat] = [:]
         /// 執行 ```dataviewjs 區塊（編輯器有疊上執行畫面時才開啟）。
         var rendersDataview = false
+        /// 屬性（frontmatter）沒在編輯時整段收起來（編輯器上方有屬性按鈕）。
+        var collapsesProperties = false
     }
 
     // MARK: 樣式
@@ -687,6 +689,20 @@ enum LiveMarkdown {
         }
 
         func styleFrontmatter(_ indices: ClosedRange<Int>) {
+            // 收起來：不佔空間，從上方的屬性按鈕查看；游標移進來（編輯屬性）才顯示原始 YAML
+            if options.collapsesProperties, !isActive(lines: indices) {
+                let start = lines[indices.lowerBound].location
+                let end = NSMaxRange(paragraph(lines[indices.upperBound]))
+                storage.addAttributes(Theme.hidden, range: NSRange(location: start, length: end - start))
+                setParagraphStyle(Theme.paragraphStyle {
+                    $0.minimumLineHeight = 0
+                    $0.maximumLineHeight = 0.1
+                    $0.lineSpacing = 0
+                    $0.paragraphSpacing = 0
+                    $0.paragraphSpacingBefore = 0
+                }, lines: indices)
+                return
+            }
             let start = lines[indices.lowerBound].location
             let end = NSMaxRange(lines[indices.upperBound])
             let range = NSRange(location: start, length: end - start)
