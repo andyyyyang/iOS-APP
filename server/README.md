@@ -122,6 +122,7 @@ Claude 把 vault 當成電腦的檔案系統操作：`list_files`、`read_file`�
 | `PUBLIC_URL` | 否 | 伺服器的公開網址（例如 `https://xxx.up.railway.app`，結尾的 `/` 會移除），用於配對連結 `pairUrl` 與 `latest.json` 的檔案網址；未設定時取請求的網址（`X-Forwarded-Proto` + `Host`） |
 | `GITHUB_TOKEN` | 否 | 同步插件版本時讀取 GitHub 版本清單用的權杖（只用來提高 API 次數上限，公開儲存庫不需要任何權限）；未設定時使用未驗證的請求（每小時 60 次，每 30 分鐘同步一次綽綽有餘） |
 | `ANTHROPIC_API_KEY` | 否 | 雲端 AI（`/v1/assistant/runs`）用的 Anthropic API 金鑰；未設定時該功能關閉（503 `assistant_not_configured`，`/health` 的 `assistant` 為 `false`） |
+| `ANTHROPIC_WORKSPACE_ID` | 否 | API key 不屬於任何 workspace（組織層級的 key）時必填：Anthropic Console → Settings → Workspaces 中的 workspace ID，伺服器會帶上 `anthropic-workspace-id`。`GET /health` 的 `assistantIssue` 會顯示 key 的問題 |
 | `ASSISTANT_MODEL` | 否 | 雲端 AI 的模型。預設 `latest`：自動使用最新的 Opus（每 6 小時查一次開源模型目錄 [models.dev](https://github.com/sst/models.dev) 與 Anthropic Models API，只選這把金鑰叫得到、支援工具的模型；查不到時用 `claude-opus-5-5`）。`latest-sonnet`、`latest-haiku`、`latest-fable` 改用該系列的最新模型；填模型 ID（例如 `claude-opus-5-5`）則固定使用。目前使用的模型見 `GET /health` 的 `assistantModel`（各級見 `assistantModels`） |
 | `ASSISTANT_MODEL_MEDIUM` | 否 | 中級雲端模型，預設 `latest-sonnet`（寫法同 `ASSISTANT_MODEL`） |
 | `ASSISTANT_MODEL_SMALL` | 否 | 最便宜的雲端模型，預設 `latest-haiku`（寫法同 `ASSISTANT_MODEL`） |

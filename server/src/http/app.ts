@@ -85,7 +85,7 @@ export function createApp({
       jev: services.classify.available,
       assistant: services.assistant.available,
       assistantModel: services.assistant.available ? services.assistant.modelName : null,
-      ...(services.assistant.available ? { assistantModels: services.assistant.tierModels } : {}),
+      ...(services.assistant.available ? { assistantModels: services.assistant.tierModels, assistantIssue: services.assistant.issue } : {}),
     });
   });
 

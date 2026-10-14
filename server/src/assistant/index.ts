@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { Config } from "../config.js";
 import { LatestModel, fetchModelsDev, listAnthropicModels, shared } from "./catalog.js";
-import { AnthropicAssistantModel } from "./model.js";
+import { AnthropicAssistantModel, describeApiError } from "./model.js";
 import type { AssistantOptions } from "./service.js";
 
 export { AnthropicAssistantModel, AssistantModelError } from "./model.js";
@@ -21,6 +21,7 @@ export function createAssistantOptions(
   config: Pick<
     Config,
     | "anthropicApiKey"
+    | "anthropicWorkspaceId"
     | "assistantModel"
     | "assistantModelMedium"
     | "assistantModelSmall"
@@ -32,9 +33,25 @@ export function createAssistantOptions(
   >,
 ): AssistantOptions {
   let model: AnthropicAssistantModel | null = null;
+  let issue: string | null = null;
   if (config.anthropicApiKey) {
-    const client = new Anthropic({ apiKey: config.anthropicApiKey });
-    const sources = { fetchCatalog: shared(() => fetchModelsDev()), listAvailable: shared(() => listAnthropicModels(client)) };
+    const client = new Anthropic({
+      apiKey: config.anthropicApiKey,
+      // an organization-level key must name the workspace each request belongs to
+      ...(config.anthropicWorkspaceId ? { defaultHeaders: { "anthropic-workspace-id": config.anthropicWorkspaceId } } : {}),
+    });
+    // the Models API call doubles as a key check: its error (e.g. "needs a workspace id") is shown on /health
+    const listAvailable = shared(async () => {
+      try {
+        const models = await listAnthropicModels(client);
+        issue = null;
+        return models;
+      } catch (error) {
+        if (error instanceof Anthropic.APIError && error.status !== undefined && error.status < 500) issue = describeApiError(error.message);
+        throw error;
+      }
+    });
+    const sources = { fetchCatalog: shared(() => fetchModelsDev()), listAvailable };
     const large = new LatestModel(config.assistantModel, sources);
     const medium = new LatestModel(config.assistantModelMedium, sources);
     const small = new LatestModel(config.assistantModelSmall, sources);
@@ -43,6 +60,7 @@ export function createAssistantOptions(
   }
   return {
     model,
+    issue: () => issue,
     jev: config.jevApiKey ? new TypeSafeClient({ apiKey: config.jevApiKey, defaultModel: config.jevModel }) : null,
     jevModel: config.jevModel,
     maxTurns: config.assistantMaxTurns,

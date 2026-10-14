@@ -51,6 +51,24 @@ export interface AssistantModel {
   downloadFile(fileId: string, options?: { signal?: AbortSignal }): Promise<{ filename: string; body: Buffer }>;
 }
 
+/**
+ * A readable message for an API error: the SDK's message is "400 {json}", so take the inner error message, and
+ * explain the errors the user fixes in Railway's variables.
+ */
+export function describeApiError(message: string): string {
+  if (/anthropic-workspace-id|not scoped to a workspace/i.test(message)) {
+    return "這把 API key 沒有指定 workspace。請在 Railway 的伺服器變數加上 ANTHROPIC_WORKSPACE_ID（Anthropic Console → Settings → Workspaces 中的 workspace ID），或改用在某個 workspace 裡建立的 API key。";
+  }
+  if (/invalid x-api-key|authentication_error/i.test(message)) {
+    return "API key 無效或已被撤銷。請在 Railway 更新 ANTHROPIC_API_KEY。";
+  }
+  if (/credit balance is too low|billing/i.test(message)) {
+    return "Anthropic 帳戶的額度不足，請到 Anthropic Console → Billing 加值。";
+  }
+  const inner = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(message);
+  return inner ? inner[1]!.replace(/\\"/g, '"') : message;
+}
+
 /** An API failure; `status` is the HTTP status when there was a response. Messages never contain the API key. */
 export class AssistantModelError extends Error {
   constructor(

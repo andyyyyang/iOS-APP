@@ -10,7 +10,7 @@ import type { VaultService } from "../services/vault.js";
 import { extractAllLinks } from "../vault/markdown.js";
 import { vaultPath } from "../vault/paths.js";
 import type { VaultFile } from "../vault/types.js";
-import { AssistantModelError, type AssistantModel, type ModelMessage, type ModelResponse } from "./model.js";
+import { AssistantModelError, describeApiError, type AssistantModel, type ModelMessage, type ModelResponse } from "./model.js";
 import { SYSTEM_PROMPT, buildRunContext, loadVaultRules } from "./prompt.js";
 import { RequestRouter } from "./routing.js";
 import type { Effort } from "./tiers.js";
@@ -47,6 +47,8 @@ export interface AssistantOptions {
   maxTurns?: number;
   codeExecution?: boolean;
   webSearch?: boolean;
+  /** A problem with the API key found by the last Models API call (shown on /health), null when fine or unknown. */
+  issue?: () => string | null;
 }
 
 class RunFailure extends Error {
@@ -176,6 +178,7 @@ export class AssistantService {
   private readonly maxTurns: number;
   private readonly codeExecution: boolean;
   private readonly webSearch: boolean;
+  private readonly issueSource: () => string | null;
 
   constructor(
     private readonly deps: { vault: VaultService; vaultIndex: VaultIndexService; now?: () => number },
@@ -186,16 +189,21 @@ export class AssistantService {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.codeExecution = options.codeExecution ?? true;
     this.webSearch = options.webSearch ?? false;
+    this.issueSource = options.issue ?? (() => null);
   }
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
   }
 
-  /** An API key is configured and the vault is there: cloud runs can start. */
   /** The model a new run would use (null when cloud runs are off). */
   get modelName(): string | null {
     return this.model?.model ?? null;
+  }
+
+  /** A problem with the API key (e.g. it needs a workspace id), null when none is known. */
+  get issue(): string | null {
+    return this.model ? this.issueSource() : null;
   }
 
   /** The model behind each cloud tier right now. */
@@ -206,6 +214,7 @@ export class AssistantService {
     return { small: of("small"), medium: of("medium"), large: of("large") };
   }
 
+  /** An API key is configured and the vault is there: cloud runs can start. */
   get available(): boolean {
     return this.model !== null && this.deps.vault.status().configured;
   }
@@ -436,7 +445,10 @@ export class AssistantService {
     let failure: RunError;
     if (error instanceof RunFailure) failure = { code: error.code, message: error.message };
     else if (error instanceof AssistantModelError) {
-      failure = { code: "model_error", message: `雲端 AI 呼叫失敗${error.status ? `（HTTP ${error.status}）` : ""}：${truncateText(error.message, 300)}` };
+      failure = {
+        code: "model_error",
+        message: `雲端 AI 呼叫失敗${error.status ? `（HTTP ${error.status}）` : ""}：${truncateText(describeApiError(error.message), 300)}`,
+      };
     } else if (error instanceof AppError) failure = { code: error.code, message: error.message };
     else {
       console.error("[assistant] run failed", error);

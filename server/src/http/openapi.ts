@@ -576,6 +576,10 @@ export function buildOpenApi(serverUrl?: string) {
               description: "The model behind each cloud tier (present when cloud runs are available)",
               properties: { small: { type: "string" }, medium: { type: "string" }, large: { type: "string" } },
             },
+            assistantIssue: {
+              type: ["string", "null"],
+              description: "A problem with the Anthropic API key found by the last model lookup (e.g. it needs ANTHROPIC_WORKSPACE_ID); null when none",
+            },
           },
         },
         Classification: {

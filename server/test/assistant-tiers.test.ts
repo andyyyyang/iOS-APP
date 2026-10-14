@@ -201,3 +201,33 @@ describe("budget tiers", () => {
     expect(await load()).toBe(3);
   });
 });
+
+describe("API key problems", () => {
+  it("explains errors the user fixes in Railway and unwraps the API's JSON", async () => {
+    const { describeApiError } = await import("../src/assistant/model.js");
+    const workspace =
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header"}}';
+    expect(describeApiError(workspace)).toContain("ANTHROPIC_WORKSPACE_ID");
+    expect(describeApiError('401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}')).toContain("ANTHROPIC_API_KEY");
+    expect(describeApiError('400 {"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too \\"big\\""}}')).toBe('max_tokens: too "big"');
+    expect(describeApiError("socket hang up")).toBe("socket hang up");
+  });
+
+  it("sends the workspace id header when ANTHROPIC_WORKSPACE_ID is set", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    expect(loadConfig({ NODE_ENV: "test", ANTHROPIC_WORKSPACE_ID: " wrkspc_123 " }, { warn() {} })).toMatchObject({ anthropicWorkspaceId: "wrkspc_123" });
+    const headers: (string | null)[] = [];
+    const client = new Anthropic({
+      apiKey: "test-key",
+      maxRetries: 0,
+      defaultHeaders: { "anthropic-workspace-id": "wrkspc_123" },
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        headers.push(new Headers(init?.headers).get("anthropic-workspace-id"));
+        return new Response(JSON.stringify({ data: [], has_more: false, first_id: null, last_id: null }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    });
+    const { listAnthropicModels } = await import("../src/assistant/catalog.js");
+    expect(await listAnthropicModels(client)).toEqual([]);
+    expect(headers).toEqual(["wrkspc_123"]);
+  });
+});

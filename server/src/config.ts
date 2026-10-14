@@ -14,6 +14,8 @@ export interface Config {
   githubToken: string | undefined;
   /** ANTHROPIC_API_KEY: enables cloud AI runs (/v1/assistant/runs). Never logged. */
   anthropicApiKey: string | undefined;
+  /** ANTHROPIC_WORKSPACE_ID: needed when the API key is not scoped to a workspace (sent as anthropic-workspace-id). */
+  anthropicWorkspaceId: string | undefined;
   /** ASSISTANT_MODEL: the large tier. "latest" (default, newest Opus), "latest-sonnet" etc., or a fixed model id. */
   assistantModel: string;
   /** ASSISTANT_MODEL_MEDIUM: the medium tier (default latest-sonnet). */
@@ -143,6 +145,7 @@ export function loadConfig(
     publicUrl: parsePublicUrl(env.PUBLIC_URL),
     githubToken: nonEmpty(env.GITHUB_TOKEN),
     anthropicApiKey: nonEmpty(env.ANTHROPIC_API_KEY),
+    anthropicWorkspaceId: nonEmpty(env.ANTHROPIC_WORKSPACE_ID),
     assistantModel: nonEmpty(env.ASSISTANT_MODEL) ?? "latest",
     assistantModelMedium: nonEmpty(env.ASSISTANT_MODEL_MEDIUM) ?? "latest-sonnet",
     assistantModelSmall: nonEmpty(env.ASSISTANT_MODEL_SMALL) ?? "latest-haiku",
