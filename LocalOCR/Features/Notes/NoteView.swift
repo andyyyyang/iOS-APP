@@ -71,7 +71,8 @@ struct NoteView: View {
             .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
             .toast($toast)
             .task { load() }
-            .task { await watchRemoteChanges() }
+            // 打開時先取得最新版本；之後其他裝置的修改由伺服器即時推送
+            .task { await sync.refreshOpenFile(initialPath) }
             .onDisappear(perform: flushSave)
     }
 
@@ -293,20 +294,6 @@ struct NoteView: View {
             savedText = text
         } catch {
             toast = "儲存失敗：\(error.localizedDescription)"
-        }
-    }
-
-    /// 編輯當下同步：打開時先檢查遠端（Obsidian）有沒有新版本，之後開著的期間每 5 秒檢查一次；
-    /// 有新版本且這裡沒有未儲存的修改時下載，畫面經由 `sync.revision` 更新。
-    private func watchRemoteChanges() async {
-        var first = true
-        while !Task.isCancelled {
-            if !first {
-                try? await Task.sleep(for: .seconds(5))
-            }
-            first = false
-            guard didLoad, text == savedText, !Task.isCancelled else { continue }
-            await sync.refreshOpenFile(path)
         }
     }
 

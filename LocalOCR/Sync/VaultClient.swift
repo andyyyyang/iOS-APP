@@ -162,17 +162,29 @@ struct VaultClient {
         _ = try await send("DELETE", "/v1/vault/file", query: [URLQueryItem(name: "path", value: path)], headers: headers)
     }
 
-    /// 等待其他裝置的變動（長輪詢）：沒有 `since` 時立即回傳目前的位置；否則最多等 `wait` 秒。
-    func changes(since cursor: String?, wait: Int) async throws -> VaultChanges {
-        var query = [URLQueryItem(name: "wait", value: String(cursor == nil ? 0 : min(max(wait, 0), 25)))]
-        if let cursor { query.append(URLQueryItem(name: "since", value: cursor)) }
-        let (data, _) = try await send("GET", "/v1/vault/changes", query: query)
-        let value = try JSONValue.parse(String(decoding: data, as: UTF8.self))
+    /// 通知伺服器這台裝置在別的空間（WebDAV）改了檔案：電腦的 Obsidian 會立即同步。
+    func reportChanges(paths: [String]) async throws {
+        var body: [String: Any] = [:]
+        if !paths.isEmpty { body["paths"] = Array(paths.prefix(100)) }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await send("POST", "/v1/vault/changes", headers: ["Content-Type": "application/json"], body: data)
+    }
+
+    /// 推送的 changes 訊息：`{cursor, reset, changes}`。
+    static func changes(from value: JSONValue, previousCursor: String?) -> VaultChanges {
         var changes: [VaultChanges.Change] = []
         if case .array(let items)? = value["changes"] {
             changes = items.map { VaultChanges.Change(path: $0["path"]?.stringValue, op: $0["op"]?.stringValue ?? "write") }
         }
-        return VaultChanges(cursor: value["cursor"]?.stringValue ?? cursor ?? "", reset: value["reset"] == JSONValue.bool(true), changes: changes)
+        return VaultChanges(cursor: value["cursor"]?.stringValue ?? previousCursor ?? "", reset: value["reset"] == JSONValue.bool(true), changes: changes)
+    }
+
+    /// 即時推送的 WebSocket 位址（wss://…/v1/vault/stream）。
+    var streamURL: URL? {
+        guard let url = Self.url(baseURL: baseURL, path: "/v1/vault/stream", query: []),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = components.scheme == "http" ? "ws" : "wss"
+        return components.url
     }
 
     func search(_ query: String, prefix: String = "", limit: Int = 30) async throws -> [VaultSearchHit] {

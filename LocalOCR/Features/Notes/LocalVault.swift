@@ -70,6 +70,14 @@ struct LocalVault: Sendable {
         }
     }
 
+    /// 清掉這台裝置上的所有 vault 檔案（切換同步空間時；檔案仍在原本的空間）。
+    func removeAll() {
+        let contents = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for url in contents {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     func createFolder(_ path: String) throws {
         try FileManager.default.createDirectory(at: root.appending(path: Self.normalize(path), directoryHint: .isDirectory), withIntermediateDirectories: true)
     }

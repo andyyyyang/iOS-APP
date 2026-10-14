@@ -17,8 +17,8 @@ struct ContentView: View {
             .task { await refreshServerTemplates() }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {
-                case .active: VaultSyncCenter.shared.startPeriodicSync()
-                case .background: VaultSyncCenter.shared.stopPeriodicSync()
+                case .active: VaultSyncCenter.shared.startLiveSync()
+                case .background: VaultSyncCenter.shared.stopLiveSync()
                 default: break
                 }
             }

@@ -225,7 +225,7 @@ enum NotebookFiles {
         let path = archivePath(notePath: notePath, id: id)
         if vault.exists(path) {
             VaultSyncCenter.shared.touch(path)
-        } else if let client = VaultClient.configured() {
+        } else if let client = VaultBackend.current() {
             _ = try? await VaultSyncCenter.shared.engine.ensureLocal(path, remote: client)
         }
         guard let data = try? vault.read(path), var archive = try? NotebookArchive.decoder.decode(NotebookArchive.self, from: data) else { return nil }

@@ -299,6 +299,34 @@ final class NotesTests: XCTestCase {
         XCTAssertEqual(renamed, "見 [[新計畫]]、[[新計畫#目標|目標]]、![[工作/新計畫]] 與 [[別的]]")
     }
 
+    // MARK: - WebDAV
+
+    func testWebDAVMultistatusParsing() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <D:multistatus xmlns:D="DAV:">
+          <D:response><D:href>/My%20Vault/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Tue, 14 Oct 2026 08:00:00 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+          <D:response><D:href>/My%20Vault/%E5%B7%A5%E4%BD%9C/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+          <D:response><D:href>https://dav.example.com/My%20Vault/%E5%B7%A5%E4%BD%9C/%E6%9C%83%E8%AD%B0.md</D:href><D:propstat><D:prop><D:resourcetype/><D:getetag>"abc123"</D:getetag><D:getcontentlength>42</D:getcontentlength><D:getlastmodified>Tue, 14 Oct 2026 08:00:00 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat><D:propstat><D:prop><D:quota/></D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat></D:response>
+          <D:response><D:href>/My%20Vault/a.png</D:href><D:propstat><D:prop><D:resourcetype/><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Tue, 14 Oct 2026 08:00:00 GMT</D:getlastmodified></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+        </D:multistatus>
+        """
+        let items = try XCTUnwrap(WebDAVMultistatus.parse(Data(xml.utf8), basePath: "/My Vault/"))
+        XCTAssertEqual(items.map(\.path), ["", "工作", "工作/會議.md", "a.png"])
+        let note = try XCTUnwrap(items.first { $0.path == "工作/會議.md" })
+        XCTAssertEqual(note.etag, "\"abc123\"")
+        XCTAssertEqual(note.size, 42)
+        XCTAssertFalse(note.isFolder)
+        XCTAssertTrue(items[1].isFolder)
+        XCTAssertEqual(items[3].etag, WebDAVClient.syntheticETag(mtime: WebDAVClient.parseDate("Tue, 14 Oct 2026 08:00:00 GMT"), size: 7), "沒有 ETag 時用修改時間與大小")
+
+        XCTAssertEqual(WebDAVSettings.vaultURL(server: "webdav-x.up.railway.app/", folder: "My Vault")?.absoluteString, "https://webdav-x.up.railway.app/My%20Vault/")
+        XCTAssertNil(WebDAVSettings.vaultURL(server: "", folder: ""))
+        let client = WebDAVClient(baseURL: try XCTUnwrap(URL(string: "https://dav.example.com/My%20Vault/")), username: "u", password: "p")
+        XCTAssertEqual(client.url(for: "工作/會議 1.md").absoluteString, "https://dav.example.com/My%20Vault/%E5%B7%A5%E4%BD%9C/%E6%9C%83%E8%AD%B0%201.md")
+        XCTAssertEqual(client.url(for: "工作/", folder: true).absoluteString, "https://dav.example.com/My%20Vault/%E5%B7%A5%E4%BD%9C/")
+    }
+
     // MARK: - 配對
 
     func testPairingLinkAndCode() throws {

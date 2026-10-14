@@ -292,7 +292,8 @@ final class NotesStore {
     func updateLinks(renamedFrom oldPath: String, to newPath: String, previousIndex: [String: String]) async -> Int {
         let oldTitle = ((oldPath as NSString).lastPathComponent as NSString).deletingPathExtension
         var candidates = Set(notes.filter { $0.isLocal && $0.path != newPath && $0.links.contains { NoteLinks.resolve($0, in: previousIndex) == oldPath } }.map(\.path))
-        if let client = VaultClient.configured(), let hits = try? await client.search("[[\(oldTitle)", limit: 50) {
+        // 伺服器搜尋只涵蓋 LocalOCR 伺服器上的 vault；存在 WebDAV 時只更新這台裝置上的筆記
+        if VaultBackend.storage == .server, let client = VaultClient.configured(), let hits = try? await client.search("[[\(oldTitle)", limit: 50) {
             candidates.formUnion(hits.map { LocalVault.normalize($0.path) }.filter { $0.lowercased().hasSuffix(".md") && $0 != newPath })
         }
         var updated = 0

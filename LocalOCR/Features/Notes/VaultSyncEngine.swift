@@ -367,6 +367,24 @@ actor VaultSyncEngine {
         saveState()
     }
 
+    // MARK: - 切換同步空間
+
+    /// 這台裝置上有沒有還沒上傳的修改（新檔案或改過的檔案）。
+    func hasUnsyncedChanges() -> Bool {
+        vault.allFiles().contains { file in
+            guard let base = state[file.path] else { return true }
+            return hasLocalChanges(file, since: base)
+        }
+    }
+
+    /// 清掉同步紀錄與遠端清單（切換到另一個同步空間時）。
+    func resetAll() {
+        state = [:]
+        remoteFiles = [:]
+        saveState()
+        saveIndex()
+    }
+
     // MARK: - 按需模式的空間
 
     /// 移除這台裝置上最近沒打開、也沒有未上傳修改的檔案（`keeping` 中的除外）。只刪本機，遠端不受影響，之後打開時重新下載。
@@ -545,12 +563,14 @@ final class VaultSyncCenter {
     var revision = 0
     /// 工作區中開著的筆記：按需模式移除檔案時不會移除。
     var openPaths: Set<String> = []
+    /// 與伺服器的即時推送連線中。
+    private(set) var isLive = false
 
     let vault: LocalVault
     let engine: VaultSyncEngine
     private var scheduled: Task<Void, Never>?
-    private var periodic: Task<Void, Never>?
     private var live: Task<Void, Never>?
+    private var pushCursor: String?
     private var pushes: [String: Task<Void, Never>] = [:]
 
     init(vault: LocalVault = .shared) {
@@ -562,7 +582,8 @@ final class VaultSyncCenter {
         try? FileManager.default.createDirectory(at: vault.root, withIntermediateDirectories: true)
     }
 
-    var isConfigured: Bool { VaultClient.configured() != nil }
+    /// 目前的同步空間（LocalOCR 伺服器或 WebDAV）已設定。
+    var isConfigured: Bool { VaultBackend.current() != nil }
 
     /// 啟動時先用上次記下的遠端清單列出檔案（按需模式下大部分檔案不在這台裝置上），不必等同步完成。
     func prepare() async {
@@ -570,7 +591,7 @@ final class VaultSyncCenter {
     }
 
     func syncNow(allowMassDeletion: Bool = false) async {
-        guard !isSyncing, let client = VaultClient.configured() else { return }
+        guard !isSyncing, let client = VaultBackend.current() else { return }
         isSyncing = true
         defer {
             isSyncing = false
@@ -591,6 +612,7 @@ final class VaultSyncCenter {
             var changed = report.changedLocalFiles
             if policy == .onDemand, await engine.evictUnused(keeping: openPaths) > 0 { changed = true }
             if changed { revision += 1 }
+            if report.uploaded + report.deleted > 0 { reportToServer([]) }
         } catch {
             lastError = error.localizedDescription
         }
@@ -611,7 +633,7 @@ final class VaultSyncCenter {
             touch(path)
             return vault.url(for: path)
         }
-        guard let client = VaultClient.configured() else { throw VaultError.notConfigured }
+        guard let client = VaultBackend.current() else { throw VaultError.notConfigured }
         let url = try await engine.ensureLocal(path, remote: client)
         pendingFiles.removeAll { $0.path == LocalVault.normalize(path) }
         revision += 1
@@ -631,10 +653,12 @@ final class VaultSyncCenter {
         pushes[path]?.cancel()
         pushes[path] = Task {
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, let client = VaultClient.configured() else { return }
+            guard !Task.isCancelled, let client = VaultBackend.current() else { return }
             pushes[path] = nil
             do {
-                try await engine.push([path], remote: client)
+                if try await engine.push([path], remote: client) > 0 {
+                    reportToServer([path])
+                }
             } catch {
                 // 網路中斷等：下次完整同步會再上傳
                 scheduleSync(after: 30)
@@ -644,7 +668,7 @@ final class VaultSyncCenter {
 
     /// 打開中的筆記：遠端（Obsidian）改過、這台裝置沒有未上傳的修改時，下載新版本並更新畫面。
     func refreshOpenFile(_ path: String) async {
-        guard !isSyncing, let client = VaultClient.configured() else { return }
+        guard !isSyncing, let client = VaultBackend.current() else { return }
         if (try? await engine.refresh(path, remote: client)) == true {
             revision += 1
         }
@@ -693,56 +717,96 @@ final class VaultSyncCenter {
         }
     }
 
-    /// App 在前景時：等待伺服器的變動通知（iPad 以外的裝置修改後幾秒內同步），並每分鐘完整同步一次以防漏掉。
-    func startPeriodicSync() {
-        periodic?.cancel()
-        periodic = Task {
-            while !Task.isCancelled {
-                await syncNow()
-                try? await Task.sleep(for: .seconds(60))
-            }
-        }
+    /// App 在前景時：同步一次，並與伺服器保持即時推送的連線（其他裝置修改後立即同步，不輪詢）。
+    func startLiveSync() {
+        Task { await syncNow() }
         startLiveUpdates()
     }
 
-    func stopPeriodicSync() {
-        periodic?.cancel()
-        periodic = nil
-        live?.cancel()
-        live = nil
+    /// vault 存在 WebDAV 時，自己上傳或刪除了檔案就通知 LocalOCR 伺服器（有配對時），電腦的 Obsidian 會立即同步。
+    /// 存在 LocalOCR 伺服器時不必：伺服器自己知道。
+    private func reportToServer(_ paths: [String]) {
+        guard VaultBackend.storage == .webdav, let client = VaultClient.configured() else { return }
+        Task { try? await client.reportChanges(paths: paths) }
     }
 
-    /// 長輪詢 /v1/vault/changes：其他裝置（Obsidian、MCP）透過伺服器修改、或 Obsidian 插件通知它用 Remotely Save 上傳了檔案時立即反應。
+    /// 換到另一個同步空間：先把這台裝置上的修改上傳到原本的空間，再清掉快取與同步紀錄，從新的空間重新取得（兩個空間的檔案不會混在一起）。
+    /// 回傳錯誤訊息；成功時是 nil。
+    /// `applySettings` 在原本的空間同步完、清掉快取之前執行（例如儲存新的 WebDAV 網址）。
+    func switchStorage(to storage: VaultStorage, force: Bool = false, applySettings: () -> Void = {}) async -> String? {
+        guard force || storage != VaultBackend.storage else { return nil }
+        if VaultBackend.current() != nil {
+            await syncNow()
+            if let lastError { return "還有修改沒上傳到原本的空間（\(lastError)）。請連上網路後再切換。" }
+            if await engine.hasUnsyncedChanges() { return "還有修改沒上傳到原本的空間，請稍後再切換。" }
+        }
+        stopLiveSync()
+        applySettings()
+        await engine.resetAll()
+        vault.removeAll()
+        pendingFiles = []
+        pushCursor = nil
+        lastSyncedAt = nil
+        lastReport = nil
+        VaultBackend.storage = storage
+        revision += 1
+        startLiveSync()
+        return nil
+    }
+
+    /// 進入背景時關閉連線（回到前景時重新連線並同步一次）。
+    func stopLiveSync() {
+        live?.cancel()
+        live = nil
+        isLive = false
+    }
+
+    /// 即時推送（WebSocket）：連線建立或重新建立時同步一次補上漏掉的變動，之後只在伺服器送來變動時動作。
+    /// 舊版伺服器沒有推送、或金鑰與儲存空間有問題時，每 5 分鐘同步一次作為備援。
     private func startLiveUpdates() {
         live?.cancel()
-        live = Task {
-            var cursor: String?
+        live = Task { [weak self] in
             var failures = 0
             while !Task.isCancelled {
+                guard let self else { return }
                 guard let client = VaultClient.configured() else {
-                    try? await Task.sleep(for: .seconds(30))
+                    // 沒有配對 LocalOCR 伺服器（只用 WebDAV）：WebDAV 沒有推送，每分鐘同步一次
+                    try? await Task.sleep(for: .seconds(60))
+                    await self.syncNow()
                     continue
                 }
-                do {
-                    let result = try await client.changes(since: cursor, wait: 25)
+                let outcome = await VaultPush.run(client: client, since: self.pushCursor) { [weak self] event in
+                    await self?.handlePush(event)
+                }
+                let wasLive = self.isLive
+                self.isLive = false
+                guard !Task.isCancelled else { return }
+                switch outcome {
+                case .unsupported, .unauthorized, .notConfigured:
                     failures = 0
-                    let isFirst = cursor == nil
-                    cursor = result.cursor
-                    if !isFirst, result.reset || !result.changes.isEmpty {
-                        await applyRemoteChanges(result)
-                    }
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    switch error {
-                    case VaultError.notFound, VaultError.notConfigured:
-                        // 舊版伺服器沒有變動通知、或還沒設定儲存空間：靠每分鐘的同步
-                        try? await Task.sleep(for: .seconds(600))
-                    default:
-                        failures += 1
-                        try? await Task.sleep(for: .seconds(min(60, 5 * failures)))
-                    }
+                    try? await Task.sleep(for: .seconds(300))
+                    await self.syncNow()
+                case .disconnected:
+                    // 剛才連線正常（例如伺服器重新部署）：馬上重連；連不上時逐漸拉長間隔
+                    failures = wasLive ? 1 : failures + 1
+                    let delays = [1, 2, 5, 15, 60]
+                    try? await Task.sleep(for: .seconds(delays[min(failures - 1, delays.count - 1)]))
                 }
             }
+        }
+    }
+
+    private func handlePush(_ event: VaultPushEvent) async {
+        switch event {
+        case .ready(let cursor, _):
+            let reconnected = pushCursor != nil
+            pushCursor = cursor
+            isLive = true
+            // 重新連線：補上斷線期間的變動（第一次連線時 startLiveSync 已經同步過）
+            if reconnected { await syncNow() }
+        case .changes(let changes):
+            pushCursor = changes.cursor
+            await applyRemoteChanges(changes)
         }
     }
 
@@ -772,7 +836,7 @@ final class VaultSyncCenter {
             touch(path)
             return vault.url(for: path)
         }
-        guard let client = VaultClient.configured() else { return nil }
+        guard let client = VaultBackend.current() else { return nil }
         let url = try? await engine.ensureLocal(path, remote: client)
         if url != nil { pendingFiles.removeAll { $0.path == path } }
         return url
