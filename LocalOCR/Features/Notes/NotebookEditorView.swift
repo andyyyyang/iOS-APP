@@ -19,6 +19,8 @@ struct NotebookEditorView: View {
     @State private var showsInspector = false
     @State private var saveTask: Task<Void, Never>?
     @State private var isPublishing = false
+    /// 有沒有還沒更新到 Obsidian 圖片的修改（沒改過就不必重新產生、上傳圖片）。
+    @State private var hasUnpublishedChanges = false
     @State private var toast: String?
     @FocusState private var titleFocused: Bool
     private let store = NotesStore.shared
@@ -48,7 +50,10 @@ struct NotebookEditorView: View {
         .background(DS.pane)
         .toolbar(.hidden, for: .navigationBar)
         .inspector(isPresented: $showsInspector) {
-            NotebookInspector(archive: $archive, currentDrawing: { currentDrawing }, onChange: { saveArchiveNow() }, onPublish: { await publish() })
+            NotebookInspector(archive: $archive, currentDrawing: { currentDrawing }, onChange: {
+                hasUnpublishedChanges = true
+                saveArchiveNow()
+            }, onPublish: { await publish() })
                 .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
         }
         .toast($toast)
@@ -56,7 +61,12 @@ struct NotebookEditorView: View {
             if !focused { rename(to: title) }
         }
         .task { await load() }
-        .onDisappear { Task { await publish() } }
+        .onDisappear {
+            // 畫布還在時先取得最後一筆，再更新圖片與 Markdown
+            captureDrawing()
+            guard hasUnpublishedChanges else { return }
+            Task { await publish() }
+        }
     }
 
     // MARK: - 上方一列
@@ -133,6 +143,7 @@ struct NotebookEditorView: View {
     }
 
     private func scheduleSave(_ drawing: PKDrawing) {
+        hasUnpublishedChanges = true
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(600))
@@ -142,12 +153,17 @@ struct NotebookEditorView: View {
         }
     }
 
+    /// 取得畫布目前的筆跡；有還沒存檔的筆跡時立即存檔。
     private func captureDrawing() {
+        let pending = saveTask != nil
         saveTask?.cancel()
         saveTask = nil
         if let drawing = handle.currentDrawing, var current = archive, drawing != current.pkDrawing {
             current.pkDrawing = drawing
             archive = current
+            saveArchiveNow()
+        } else if pending {
+            saveArchiveNow()
         }
     }
 
@@ -166,6 +182,7 @@ struct NotebookEditorView: View {
         defer { isPublishing = false }
         do {
             try await NotebookFiles.publish(current, notePath: path, store: store)
+            hasUnpublishedChanges = false
         } catch {
             toast = "儲存失敗：\(error.localizedDescription)"
         }
@@ -190,6 +207,7 @@ struct NotebookEditorView: View {
         captureDrawing()
         archive?.paper = style
         NotesSettings.lastPaper = style
+        hasUnpublishedChanges = true
         saveArchiveNow()
         revision += 1
     }
