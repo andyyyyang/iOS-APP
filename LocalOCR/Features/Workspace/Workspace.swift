@@ -180,11 +180,19 @@ final class Workspace {
     /// Apple Intelligence 對各筆記的整理結果（切換面板時保留）。
     var insights: [String: NoteInsights] = [:]
 
+    /// 上一頁（像瀏覽器）：之前看過的頁面。`closesCurrent` 表示目前的分頁是從那一頁開出來的，回去時關掉它（或原地換回）。
+    private struct BackEntry {
+        let page: WorkspaceTab
+        let closesCurrent: Bool
+    }
+    private var backStack: [BackEntry] = []
+
     /// 黑色功能列的寬度。
     static let railWidth: CGFloat = 56
     static let leftWidthRange: ClosedRange<CGFloat> = 220...440
     static let rightWidthRange: ClosedRange<CGFloat> = 260...460
     private static let maxTabs = 10
+    private static let maxBack = 50
 
     private enum Key {
         static let tabs = "workspace.tabs"
@@ -236,7 +244,9 @@ final class Workspace {
 
     /// 開啟（已經開著就切換過去）；目前是空白的新分頁時直接取代它。
     func open(_ tab: WorkspaceTab) {
-        if !tabs.contains(tab) {
+        let previous = active
+        let wasOpen = tabs.contains(tab)
+        if !wasOpen {
             if active == .start, let index = tabs.firstIndex(of: .start) {
                 tabs[index] = tab
             } else {
@@ -248,6 +258,7 @@ final class Workspace {
             }
         }
         active = tab
+        if previous != tab { pushBack(previous, closesCurrent: !wasOpen) }
         saveTabs()
     }
 
@@ -257,6 +268,7 @@ final class Workspace {
 
     func select(_ tab: WorkspaceTab) {
         guard tabs.contains(tab) else { return }
+        if tab != active { pushBack(active, closesCurrent: false) }
         active = tab
         saveTabs()
     }
@@ -275,9 +287,53 @@ final class Workspace {
     }
 
     func newTab() {
-        if !tabs.contains(.start) { tabs.append(.start) }
+        let wasOpen = tabs.contains(.start)
+        if !wasOpen { tabs.append(.start) }
+        if active != .start { pushBack(active, closesCurrent: !wasOpen) }
         active = .start
         saveTabs()
+    }
+
+    // MARK: - 上一頁
+
+    /// 有沒有上一頁可以回去（往右滑、上一頁按鈕）。
+    var canGoBack: Bool {
+        backStack.contains { $0.page != active && isAvailable($0.page) }
+    }
+
+    /// 回到上一頁：目前的分頁是從那一頁開出來的就關掉（那一頁已經關了就原地換回）；只是切換過來的就切回去。
+    @discardableResult
+    func goBack() -> Bool {
+        while let entry = backStack.popLast() {
+            guard entry.page != active, isAvailable(entry.page) else { continue }
+            let current = active
+            if entry.closesCurrent, let index = tabs.firstIndex(of: current) {
+                if tabs.contains(entry.page) {
+                    tabs.remove(at: index)
+                    if let path = current.notePath { liveText[path] = nil }
+                } else {
+                    tabs[index] = entry.page
+                }
+            } else if !tabs.contains(entry.page) {
+                let insertAt = (tabs.firstIndex(of: current) ?? tabs.count - 1) + 1
+                tabs.insert(entry.page, at: min(insertAt, tabs.count))
+            }
+            active = entry.page
+            saveTabs()
+            return true
+        }
+        return false
+    }
+
+    private func pushBack(_ page: WorkspaceTab, closesCurrent: Bool) {
+        backStack.append(BackEntry(page: page, closesCurrent: closesCurrent))
+        if backStack.count > Self.maxBack { backStack.removeFirst(backStack.count - Self.maxBack) }
+    }
+
+    /// 刪掉的筆記不能回去。
+    private func isAvailable(_ tab: WorkspaceTab) -> Bool {
+        guard let path = tab.notePath else { return true }
+        return store.vault.exists(path) || store.notes.contains { $0.path == path }
     }
 
     func selectAdjacentTab(_ step: Int) {
@@ -289,6 +345,7 @@ final class Workspace {
     func renameNote(from old: String, to new: String) {
         tabs = tabs.map { $0 == .note(old) ? .note(new) : $0 }
         if active == .note(old) { active = .note(new) }
+        backStack = backStack.map { $0.page == .note(old) ? BackEntry(page: .note(new), closesCurrent: $0.closesCurrent) : $0 }
         liveText[new] = liveText.removeValue(forKey: old)
         saveTabs()
     }

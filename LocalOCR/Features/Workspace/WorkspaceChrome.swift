@@ -300,7 +300,13 @@ struct SyncIndicator: View {
 // MARK: - 中間
 
 struct CenterPane: View {
+    /// 往右滑回上一頁（iPhone 打開側欄時關掉）。
+    var allowsBackSwipe = true
+    /// 從視窗左緣這個距離內開始的滑動留給左側欄。
+    var edgeExclusion: CGFloat = 0
+
     @Environment(Workspace.self) private var workspace
+    @State private var swipe = BackSwipeState()
 
     var body: some View {
         ZStack {
@@ -308,6 +314,19 @@ struct CenterPane: View {
             WorkspaceTabContent(tab: workspace.active)
                 .id(workspace.active.id)
         }
+        .background {
+            BackSwipeArea(
+                // 關聯圖的拖曳是平移畫面，不當成返回
+                isEnabled: allowsBackSwipe && !workspace.showsPalette && workspace.active != .graph,
+                canGoBack: workspace.canGoBack,
+                edgeExclusion: edgeExclusion,
+                state: swipe,
+                onBack: {
+                    withAnimation(.smooth(duration: 0.25)) { _ = workspace.goBack() }
+                }
+            )
+        }
+        .overlay(alignment: .leading) { BackSwipeIndicator(state: swipe) }
     }
 }
 

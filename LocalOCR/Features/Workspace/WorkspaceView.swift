@@ -198,47 +198,56 @@ private struct CompactWorkspace: View {
     @State private var showsLeft = false
     @State private var showsRight = false
     @State private var showsTabs = false
+    /// 拖曳中的側欄：往外拉出為正、往回推為負；nil 表示沒有在拖。
+    @State private var leftDrag: CGFloat?
+    @State private var rightDrag: CGFloat?
+
+    /// 螢幕邊緣可以拉出側欄的寬度（往右滑回上一頁不從這裡開始）。
+    static let edgeWidth: CGFloat = 22
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                CompactTopBar(
-                    onLeft: { setDrawer(left: true) },
-                    onRight: { setDrawer(right: true) },
-                    onTabs: { showsTabs = true }
-                )
-                CenterPane()
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous))
-                    .ignoresSafeArea(edges: .bottom)
-            }
+        GeometryReader { proxy in
+            let width = min(proxy.size.width * 0.84, 330)
+            let left = revealed(isOpen: showsLeft, drag: leftDrag, width: width)
+            let right = revealed(isOpen: showsRight, drag: rightDrag, width: width)
+            ZStack {
+                VStack(spacing: 0) {
+                    CompactTopBar(
+                        onLeft: { setDrawer(left: true) },
+                        onRight: { setDrawer(right: true) },
+                        onTabs: { showsTabs = true }
+                    )
+                    CenterPane(allowsBackSwipe: left == 0 && right == 0, edgeExclusion: Self.edgeWidth)
+                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous))
+                        .ignoresSafeArea(edges: .bottom)
+                }
 
-            if showsLeft || showsRight {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                    .onTapGesture { setDrawer() }
-                    .transition(.opacity)
-            }
-            if showsLeft {
-                drawer(edge: .leading) {
-                    VStack(spacing: 0) {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            Ribbon(axis: .horizontal, onAction: { setDrawer() })
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 8)
+                if left > 0 || right > 0 {
+                    Color.black.opacity(0.4 * max(left, right) / width)
+                        .ignoresSafeArea()
+                        .onTapGesture { setDrawer() }
+                        .transition(.opacity)
+                }
+                if left > 0 {
+                    drawer(edge: .leading, width: width, revealed: left) {
+                        VStack(spacing: 0) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                Ribbon(axis: .horizontal, onAction: { setDrawer() })
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 8)
+                            }
+                            .background(DS.ink.ignoresSafeArea(edges: .top))
+                            LeftSidebar()
                         }
-                        .background(DS.ink.ignoresSafeArea(edges: .top))
-                        LeftSidebar()
                     }
                 }
+                if right > 0 {
+                    drawer(edge: .trailing, width: width, revealed: right) { RightSidebar() }
+                }
             }
-            if showsRight {
-                drawer(edge: .trailing) { RightSidebar() }
-            }
+            .overlay(alignment: .leading) { edgeSwipe(opensLeft: true, width: width) }
+            .overlay(alignment: .trailing) { edgeSwipe(opensLeft: false, width: width) }
         }
-        .overlay(alignment: .leading) { edgeSwipe(opensLeft: true) }
-        .overlay(alignment: .trailing) { edgeSwipe(opensLeft: false) }
-        .animation(.smooth(duration: 0.3), value: showsLeft)
-        .animation(.smooth(duration: 0.3), value: showsRight)
         .sheet(isPresented: $showsTabs) {
             TabSwitcher()
                 .presentationDetents([.medium, .large])
@@ -246,43 +255,79 @@ private struct CompactWorkspace: View {
         .onChange(of: workspace.active) { _, _ in setDrawer() }
     }
 
+    /// 側欄露出多少（0 = 收起，width = 完全打開）。
+    private func revealed(isOpen: Bool, drag: CGFloat?, width: CGFloat) -> CGFloat {
+        min(max((isOpen ? width : 0) + (drag ?? 0), 0), width)
+    }
+
     private func setDrawer(left: Bool = false, right: Bool = false) {
-        showsLeft = left
-        showsRight = right
-    }
-
-    private func drawer<Content: View>(edge: HorizontalEdge, @ViewBuilder content: () -> Content) -> some View {
-        let panel = content()
-        return GeometryReader { proxy in
-            panel
-                .frame(width: min(proxy.size.width * 0.84, 330))
-                .frame(maxHeight: .infinity)
-                .background(DS.sidebar.ignoresSafeArea())
-                .shadow(color: .black.opacity(0.2), radius: 20, x: edge == .leading ? 8 : -8)
-                .frame(maxWidth: .infinity, alignment: edge == .leading ? .leading : .trailing)
-                .gesture(
-                    DragGesture(minimumDistance: 16).onEnded { value in
-                        let closing = edge == .leading ? value.translation.width < -60 : value.translation.width > 60
-                        if closing { setDrawer() }
-                    }
-                )
+        withAnimation(.smooth(duration: 0.3)) {
+            showsLeft = left
+            showsRight = right
+            leftDrag = nil
+            rightDrag = nil
         }
-        .transition(.move(edge: edge == .leading ? .leading : .trailing))
-        .zIndex(5)
     }
 
-    /// 從螢幕左右邊緣往內滑，打開側欄。
+    private func setDrag(_ value: CGFloat?, left: Bool) {
+        if left { leftDrag = value } else { rightDrag = value }
+    }
+
+    /// 側欄跟著手指：打開時往外推回去就收起（推超過三成、或推得快）。
+    private func drawer<Content: View>(edge: HorizontalEdge, width: CGFloat, revealed: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+        let isLeft = edge == .leading
+        return content()
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .background(DS.sidebar.ignoresSafeArea())
+            .shadow(color: .black.opacity(0.2), radius: 20, x: isLeft ? 8 : -8)
+            .offset(x: isLeft ? revealed - width : width - revealed)
+            .frame(maxWidth: .infinity, alignment: isLeft ? .leading : .trailing)
+            .gesture(
+                DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                    .onChanged { value in
+                        // 上下捲動側欄的清單時不動
+                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                        let inward = isLeft ? value.translation.width : -value.translation.width
+                        setDrag(min(0, inward), left: isLeft)
+                    }
+                    .onEnded { value in
+                        let inward = isLeft ? value.translation.width : -value.translation.width
+                        let predicted = isLeft ? value.predictedEndTranslation.width : -value.predictedEndTranslation.width
+                        let horizontal = abs(value.translation.width) > abs(value.translation.height)
+                        if horizontal, inward < -width * 0.3 || predicted < -width * 0.5 {
+                            setDrawer()
+                        } else {
+                            withAnimation(.smooth(duration: 0.25)) { setDrag(nil, left: isLeft) }
+                        }
+                    }
+            )
+            .transition(.move(edge: isLeft ? .leading : .trailing))
+            .zIndex(5)
+    }
+
+    /// 從螢幕左右邊緣往內滑：側欄跟著手指拉出來，放開時拉超過三成（或滑得快）就打開。
     @ViewBuilder
-    private func edgeSwipe(opensLeft: Bool) -> some View {
+    private func edgeSwipe(opensLeft: Bool, width: CGFloat) -> some View {
         if !showsLeft && !showsRight {
             Color.clear
-                .frame(width: 16)
+                .frame(width: Self.edgeWidth)
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture(minimumDistance: 12).onEnded { value in
-                        if opensLeft && value.translation.width > 50 { setDrawer(left: true) }
-                        if !opensLeft && value.translation.width < -50 { setDrawer(right: true) }
-                    }
+                    DragGesture(minimumDistance: 6, coordinateSpace: .global)
+                        .onChanged { value in
+                            let outward = opensLeft ? value.translation.width : -value.translation.width
+                            setDrag(max(0, outward), left: opensLeft)
+                        }
+                        .onEnded { value in
+                            let outward = opensLeft ? value.translation.width : -value.translation.width
+                            let predicted = opensLeft ? value.predictedEndTranslation.width : -value.predictedEndTranslation.width
+                            if outward > width * 0.3 || predicted > width * 0.55 {
+                                setDrawer(left: opensLeft, right: !opensLeft)
+                            } else {
+                                setDrawer()
+                            }
+                        }
                 )
         }
     }
