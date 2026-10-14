@@ -43,6 +43,8 @@ struct NotesSettingsView: View {
 
             StorageSettingsSection()
 
+            AssistantSettingsSection()
+
             Section {
                 LabeledContent("狀態") {
                     if sync.isSyncing {

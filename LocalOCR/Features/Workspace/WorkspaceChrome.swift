@@ -319,7 +319,7 @@ struct WorkspaceTabContent: View {
     var body: some View {
         switch tab {
         case .start:
-            StartPage()
+            AssistantHome()
         case .note(let path):
             NavigationStack {
                 NoteDetailRouter(path: path)

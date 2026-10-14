@@ -47,7 +47,7 @@ enum WorkspaceTab: Hashable, Identifiable {
 
     var title: String {
         switch self {
-        case .start: return "首頁"
+        case .start: return "知識庫"
         case .note(let path): return ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         case .folder(let path):
             guard !path.isEmpty else { return NotesSettings.vaultName.isEmpty ? "Vault" : NotesSettings.vaultName }
@@ -62,7 +62,7 @@ enum WorkspaceTab: Hashable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .start: return "house"
+        case .start: return "sparkles"
         case .note: return "doc.text"
         case .folder: return "folder"
         case .graph: return "point.3.connected.trianglepath.dotted"
