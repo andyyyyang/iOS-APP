@@ -212,6 +212,7 @@ struct Ribbon: View {
             separator
             button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
             button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
+            button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
             separator
             button("掃描文件", WorkspaceTab.scan.systemImage, isActive: workspace.active == .scan) { run { workspace.open(.scan) } }
             button("相機", "camera") { run { workspace.showsCamera = true } }
@@ -332,6 +333,8 @@ struct WorkspaceTabContent: View {
             GraphPage()
         case .tasks:
             TasksPage()
+        case .drawings:
+            DrawingsPage()
         case .scan:
             ScanView(selectedTab: toolSelection)
         case .history:

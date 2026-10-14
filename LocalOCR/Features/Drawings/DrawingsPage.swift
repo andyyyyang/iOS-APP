@@ -1,0 +1,206 @@
+import SwiftUI
+
+/// 圖面瀏覽器（移植自 Obsidian 插件「Jentech 圖面瀏覽器」）：依客戶瀏覽機種工程圖與各站產能。
+/// 圖面可縮放／平移／旋轉與多版本切換；產能清單以 PO LIST 為準並標出與 catalog 的差異。
+/// 所有資料在線上讀取，圖面打開時才取得。
+struct DrawingsPage: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case drawings = "圖面瀏覽"
+        case capacity = "產能清單"
+
+        var id: String { rawValue }
+    }
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var library = DrawingsLibrary.shared
+    @State private var mode: Mode = .drawings
+    @State private var selectedID: String?
+    @State private var filter = DrawingListFilter()
+    @State private var specModel: DrawingModel?
+    @State private var compactPath: [String] = []
+
+    private var isCompact: Bool { sizeClass == .compact }
+    private var selected: DrawingModel? { library.models.first { $0.id == selectedID } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            Divider().overlay(DS.hairline)
+            content
+        }
+        .background(DS.pane)
+        .task {
+            await library.ensureLoaded()
+            selectInitial()
+        }
+        .onChange(of: library.scope) {
+            selectInitial()
+        }
+        .sheet(item: $specModel) { model in
+            DrawingSpecSheet(model: model)
+        }
+    }
+
+    // MARK: 上方
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            scopeMenu
+            Button {
+                Task {
+                    await DrawingFileCache.shared.removeAll()
+                    await library.reload()
+                    selectInitial()
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(DS.text)
+                    .frame(width: 32, height: 32)
+                    .background(DS.control, in: Circle())
+            }
+            .disabled(library.isLoading)
+            .accessibilityLabel("重新掃描")
+            if library.isLoading {
+                Text(library.loadedAt == nil ? "掃描中…" : "重新掃描中…")
+                    .font(.footnote)
+                    .foregroundStyle(DS.textSecondary)
+            } else if let error = library.error {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(DS.warning)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Picker("檢視", selection: $mode) {
+                ForEach(Mode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 240)
+        }
+        .padding(.horizontal, isCompact ? 12 : 16)
+        .padding(.vertical, 10)
+    }
+
+    private var scopeMenu: some View {
+        Menu {
+            let all = library.scopes.filter { $0.kind == .all }
+            let ships = library.scopes.filter { $0.kind == .ship }
+            let ends = library.scopes.filter { $0.kind == .end }
+            ForEach(all) { scope in scopeButton(scope) }
+            if !ships.isEmpty {
+                Section("OSAT（PO 開給我們的封裝廠）") {
+                    ForEach(ships) { scope in scopeButton(scope) }
+                }
+            }
+            if !ends.isEmpty {
+                Section("END USER（晶片端）") {
+                    ForEach(ends) { scope in scopeButton(scope) }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text("客戶")
+                    .font(.caption)
+                    .foregroundStyle(DS.textTertiary)
+                Text(library.scopeLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.text)
+                Image(systemName: "chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(DS.textTertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(DS.control, in: Capsule())
+        }
+        .disabled(library.scopes.isEmpty)
+    }
+
+    private func scopeButton(_ scope: DrawingScope) -> some View {
+        Button {
+            library.scope = scope.id
+        } label: {
+            if library.scope == scope.id {
+                Label("\(scope.label)（\(scope.count)）", systemImage: "checkmark")
+            } else {
+                Text("\(scope.label)（\(scope.count)）")
+            }
+        }
+    }
+
+    // MARK: 內容
+
+    @ViewBuilder
+    private var content: some View {
+        if library.loadedAt == nil && library.isLoading {
+            ProgressView("掃描中…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            switch mode {
+            case .drawings:
+                if isCompact { compactBrowser } else { regularBrowser }
+            case .capacity:
+                CapacityTableView { model in
+                    focus(model)
+                }
+            }
+        }
+    }
+
+    private var regularBrowser: some View {
+        HStack(spacing: 0) {
+            DrawingModelList(models: library.models, selectedID: selectedID, filter: $filter, onSelect: select, onSpec: { specModel = $0 })
+                .frame(width: 340)
+            Divider().overlay(DS.hairline)
+            DrawingViewer(model: selected) { specModel = $0 }
+        }
+    }
+
+    private var compactBrowser: some View {
+        NavigationStack(path: $compactPath) {
+            DrawingModelList(models: library.models, selectedID: selectedID, filter: $filter, onSelect: { model in
+                select(model)
+                compactPath = [model.id]
+            }, onSpec: { specModel = $0 })
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: String.self) { id in
+                DrawingViewer(model: library.models.first { $0.id == id }) { specModel = $0 }
+                    .navigationTitle(library.models.first { $0.id == id }?.dwg ?? "")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbarBackground(DS.pane, for: .navigationBar)
+            }
+        }
+    }
+
+    // MARK: 選取
+
+    private func select(_ model: DrawingModel) {
+        selectedID = model.id
+        library.setLastModel(model.dwg, in: library.scope)
+    }
+
+    /// 產能清單點圖號：切到圖面瀏覽並選取這個機種。
+    private func focus(_ model: DrawingModel) {
+        if !library.models.contains(where: { $0.id == model.id }) {
+            library.scope = "all"
+        }
+        mode = .drawings
+        select(model)
+        if isCompact { compactPath = [model.id] }
+    }
+
+    /// 打開或換範圍時：上次看的機種，其次第一個有圖面的機種。
+    private func selectInitial() {
+        let models = library.models
+        if let selectedID, models.contains(where: { $0.id == selectedID }) { return }
+        let withDrawings = models.filter { !$0.drawings.isEmpty }
+        if let last = library.lastModel(in: library.scope), let model = withDrawings.first(where: { $0.dwg == last }) {
+            selectedID = model.id
+        } else {
+            selectedID = (withDrawings.first ?? models.first)?.id
+        }
+    }
+}

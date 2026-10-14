@@ -169,6 +169,7 @@ struct CommandPalette: View {
             Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.newTaskNote() }),
             Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
             Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),
+            Item(id: "drawings", title: "圖面瀏覽與產能清單", detail: "", systemImage: WorkspaceTab.drawings.systemImage, isCommand: true, action: { workspace.open(.drawings) }),
             Item(id: "vault", title: "瀏覽整個 vault", detail: "", systemImage: "folder", isCommand: true, action: { workspace.open(.folder("")) }),
             Item(id: "scan", title: "掃描文件", detail: "", systemImage: "viewfinder", isCommand: true, action: { workspace.open(.scan) }),
             Item(id: "camera", title: "開啟相機連續拍照", detail: "", systemImage: "camera", isCommand: true, action: { workspace.showsCamera = true }),

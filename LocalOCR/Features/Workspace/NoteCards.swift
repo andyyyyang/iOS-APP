@@ -21,6 +21,7 @@ struct CreatePalette: View {
                 Button { workspace.showsCamera = true } label: { Label("相機連續拍照", systemImage: "camera") }
                 Button { workspace.open(.tasks) } label: { Label("所有待辦", systemImage: "checkmark.square") }
                 Button { workspace.open(.graph) } label: { Label("關聯圖", systemImage: WorkspaceTab.graph.systemImage) }
+            Button { workspace.open(.drawings) } label: { Label("圖面瀏覽", systemImage: WorkspaceTab.drawings.systemImage) }
                 Button { Task { await VaultSyncCenter.shared.syncNow() } } label: { Label("立即同步", systemImage: "arrow.triangle.2.circlepath") }
             } label: {
                 Image(systemName: "plus")

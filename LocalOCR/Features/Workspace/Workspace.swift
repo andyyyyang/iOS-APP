@@ -8,6 +8,7 @@ enum WorkspaceTab: Hashable, Identifiable {
     case folder(String)
     case graph
     case tasks
+    case drawings
     case scan
     case history
     case settings
@@ -19,6 +20,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .folder(let path): return "folder:" + path
         case .graph: return "graph"
         case .tasks: return "tasks"
+        case .drawings: return "drawings"
         case .scan: return "scan"
         case .history: return "history"
         case .settings: return "settings"
@@ -38,6 +40,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case "start": self = .start
         case "graph": self = .graph
         case "tasks": self = .tasks
+        case "drawings": self = .drawings
         case "scan": self = .scan
         case "history": self = .history
         case "settings": self = .settings
@@ -54,6 +57,7 @@ enum WorkspaceTab: Hashable, Identifiable {
             return (path as NSString).lastPathComponent
         case .graph: return "關聯圖"
         case .tasks: return "待辦"
+        case .drawings: return "圖面"
         case .scan: return "掃描"
         case .history: return "掃描紀錄"
         case .settings: return "設定"
@@ -67,6 +71,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .folder: return "folder"
         case .graph: return "point.3.connected.trianglepath.dotted"
         case .tasks: return "checkmark.square"
+        case .drawings: return "square.stack.3d.up"
         case .scan: return "viewfinder"
         case .history: return "clock"
         case .settings: return "slider.horizontal.3"
