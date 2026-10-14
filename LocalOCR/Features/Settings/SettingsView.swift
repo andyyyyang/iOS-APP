@@ -10,10 +10,24 @@ struct SettingsView: View {
     @AppStorage(ServerSettings.Key.useJev) private var useJev = true
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @State private var aiStatus = OnDeviceAIStatus.current
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.dark.rawValue
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker("外觀", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.title).tag(option.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("外觀")
+                } footer: {
+                    Text("Midnight 以深色為主；淺色模式改用霧白玻璃。")
+                }
+
                 Section {
                     NavigationLink {
                         TemplateListView()
@@ -95,6 +109,7 @@ struct SettingsView: View {
                     LabeledContent("版本", value: appVersion)
                 }
             }
+            .midnightList()
             .navigationTitle("設定")
             .onAppear { aiStatus = OnDeviceAIStatus.current }
         }

@@ -4,50 +4,34 @@ import SwiftUI
 struct ContentView: View {
     @Environment(TemplateLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab: AppTab = .notes
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.dark.rawValue
+    @State private var workspace = Workspace()
     @State private var pairingLink: PairingLinkItem?
 
     var body: some View {
-        // 筆記是主要功能；掃描、相機、紀錄是附加的工具。iPad 顯示為側邊欄，iPhone 為底部分頁列。
-        TabView(selection: $selectedTab) {
-            Tab("筆記", systemImage: "note.text", value: AppTab.notes) {
-                NotesHomeView(selectedTab: $selectedTab)
-            }
-            TabSection("工具") {
-                Tab("掃描", systemImage: "doc.text.viewfinder", value: AppTab.scan) {
-                    ScanView(selectedTab: $selectedTab)
-                }
-                Tab("相機", systemImage: "camera", value: AppTab.live) {
-                    LiveScanView()
-                }
-                // iPhone 的分頁列放不下：相機可從「掃描」頁進入
-                .defaultVisibility(.hidden, for: .tabBar)
-                Tab("紀錄", systemImage: "clock.arrow.circlepath", value: AppTab.history) {
-                    HistoryView()
+        // 像 Obsidian 的工作區：筆記是主角，掃描、相機、紀錄是附加的工具
+        WorkspaceView()
+            .environment(workspace)
+            .tint(Midnight.accent)
+            .fontDesign(.rounded)
+            .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .dark).colorScheme)
+            .task { await refreshServerTemplates() }
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                switch phase {
+                case .active: VaultSyncCenter.shared.startPeriodicSync()
+                case .background: VaultSyncCenter.shared.stopPeriodicSync()
+                default: break
                 }
             }
-            Tab("設定", systemImage: "gearshape", value: AppTab.settings) {
-                SettingsView()
+            // localocr://pair?server=…&code=…（點配對連結或用相機掃描 QR Code）
+            .onOpenURL { url in
+                if let link = PairingClient.parse(url) {
+                    pairingLink = PairingLinkItem(link: link)
+                }
             }
-        }
-        .tabViewStyle(.sidebarAdaptable)
-        .task { await refreshServerTemplates() }
-        .onChange(of: scenePhase, initial: true) { _, phase in
-            switch phase {
-            case .active: VaultSyncCenter.shared.startPeriodicSync()
-            case .background: VaultSyncCenter.shared.stopPeriodicSync()
-            default: break
+            .sheet(item: $pairingLink) { item in
+                NavigationStack { PairingView(link: item.link) }
             }
-        }
-        // localocr://pair?server=…&code=…（點配對連結或用相機掃描 QR Code）
-        .onOpenURL { url in
-            if let link = PairingClient.parse(url) {
-                pairingLink = PairingLinkItem(link: link)
-            }
-        }
-        .sheet(item: $pairingLink) { item in
-            NavigationStack { PairingView(link: item.link) }
-        }
     }
 
     /// 啟動時從伺服器更新情境樣板（失敗時沿用上次的快取）。

@@ -60,6 +60,7 @@ struct LanguageSelectionView: View {
                 }
             }
         }
+        .midnightList()
         .navigationTitle("辨識語言")
         .toolbar { EditButton() }
         .task(id: level) {

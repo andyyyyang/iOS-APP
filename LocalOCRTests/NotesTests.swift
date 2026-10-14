@@ -185,6 +185,54 @@ final class NotesTests: XCTestCase {
         XCTAssertEqual(NoteIntelligence.cleanTag(" #產品 規劃 "), "產品-規劃")
     }
 
+    // MARK: - 連結、大綱、指令面板
+
+    func testWikiLinksAreExtractedAndResolved() {
+        let text = "見 [[會議紀錄]] 與 [[專案/規格書|規格]]、[[週報#決議]]，圖片 ![[photo.png]] 不算，[[會議紀錄]] 重複只算一次"
+        XCTAssertEqual(NoteLinks.targets(in: text), ["會議紀錄", "專案/規格書", "週報"])
+        let notes = [
+            NotesStore.summarize(path: "工作/會議紀錄.md", mtime: Date(), text: ""),
+            NotesStore.summarize(path: "專案/規格書.md", mtime: Date(), text: ""),
+            NotesStore.summarize(path: "封存/專案/規格書.md", mtime: Date(), text: ""),
+        ]
+        let index = NoteLinks.index(notes)
+        XCTAssertEqual(NoteLinks.resolve("會議紀錄", in: index), "工作/會議紀錄.md")
+        XCTAssertEqual(NoteLinks.resolve("規格書", in: index), "專案/規格書.md", "同名時取路徑較短的")
+        XCTAssertEqual(NoteLinks.resolve("封存/專案/規格書", in: index), "封存/專案/規格書.md")
+        XCTAssertNil(NoteLinks.resolve("不存在", in: index))
+    }
+
+    func testOutlineMatchesParserBlocksAndLines() {
+        let text = """
+        ---
+        tags: a
+        ---
+        # 標題一
+        內文
+        ```
+        # 程式碼不是標題
+        ```
+        ## 小節
+        """
+        let headings = NoteOutline.headings(in: text)
+        XCTAssertEqual(headings.map(\.title), ["標題一", "小節"])
+        XCTAssertEqual(headings.map(\.level), [1, 2])
+        XCTAssertEqual(headings.map(\.line), [3, 8])
+        let blocks = MarkdownParser.blocks(from: text)
+        for heading in headings {
+            guard case .heading(_, let title) = blocks[heading.block] else { return XCTFail("區塊序號要指到標題") }
+            XCTAssertEqual(title, heading.title)
+        }
+    }
+
+    func testCommandPaletteFuzzyScore() {
+        XCTAssertNotNil(CommandPalette.score("會議紀錄 2026", query: "會紀"))
+        XCTAssertNil(CommandPalette.score("會議紀錄", query: "紀會"), "字要依序出現")
+        let exact = CommandPalette.score("週報", query: "週報") ?? 0
+        let scattered = CommandPalette.score("週一的報告", query: "週報") ?? 0
+        XCTAssertGreaterThan(exact, scattered, "連續且較短的標題排前面")
+    }
+
     // MARK: - 整個 vault
 
     func testFolderContainment() {

@@ -23,6 +23,7 @@ struct HistoryView: View {
         // iPad 左邊列表、右邊內容；iPhone 自動變成一層層進入
         NavigationSplitView {
             content
+                .midnightList()
                 .navigationTitle("紀錄")
                 .searchable(text: $searchText, prompt: "搜尋名稱、文字或 JSON")
                 .toolbar {
@@ -43,7 +44,9 @@ struct HistoryView: View {
                     HistoryDetailView(record: selection)
                         .id(selection.persistentModelID)
                 } else {
-                    ContentUnavailableView("選擇一筆紀錄", systemImage: "doc.text.magnifyingglass")
+                    MidnightEmptyState(title: "選擇一筆紀錄", systemImage: "doc.text.magnifyingglass")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(MidnightBackground(animated: false))
                 }
             }
         }

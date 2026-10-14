@@ -290,7 +290,9 @@ struct MarkdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { offset, block in
+                // 區塊序號當作捲動目標（右側大綱跳轉）
                 view(for: block, at: offset)
+                    .id(offset)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

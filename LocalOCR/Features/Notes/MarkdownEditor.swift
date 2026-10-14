@@ -30,7 +30,9 @@ enum MarkdownHighlighter {
         case heading, doneTask, taskMarker, listMarker, quote, bold, italic, highlight, code, link, tag, codeBlock, frontmatter
     }
 
-    static var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: .body) }
+    static var bodyFont: UIFont { UIFont.preferredFont(forTextStyle: .body).rounded }
+    /// Midnight 的強調色（清單符號、待辦、連結、標籤、游標）。
+    static let accent = UIColor { $0.userInterfaceStyle == .light ? UIColor(hex: 0x6D3FE0) : UIColor(hex: 0xB197FC) }
 
     static func apply(to storage: NSTextStorage) {
         let text = storage.string as NSString
@@ -52,16 +54,16 @@ enum MarkdownHighlighter {
         case .heading:
             let level = match.range(at: 1).length
             let sizes: [UIFont.TextStyle] = [.title1, .title2, .title3, .headline, .headline, .headline]
-            let font = UIFont.preferredFont(forTextStyle: sizes[min(level, 6) - 1])
+            let font = UIFont.preferredFont(forTextStyle: sizes[min(level, 6) - 1]).rounded
             storage.addAttribute(.font, value: font.withTraits(.traitBold), range: range)
             storage.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: match.range(at: 1))
         case .doneTask:
             storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
             storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
         case .taskMarker:
-            storage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: range)
+            storage.addAttribute(.foregroundColor, value: accent, range: range)
         case .listMarker:
-            storage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: range)
+            storage.addAttribute(.foregroundColor, value: accent, range: range)
         case .quote:
             storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
         case .bold:
@@ -69,12 +71,12 @@ enum MarkdownHighlighter {
         case .italic:
             storage.addAttribute(.font, value: body.withTraits(.traitItalic), range: range)
         case .highlight:
-            storage.addAttribute(.backgroundColor, value: UIColor.systemYellow.withAlphaComponent(0.3), range: range)
+            storage.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.28), range: range)
         case .code, .codeBlock:
             storage.addAttribute(.font, value: UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.92, weight: .regular), range: range)
             storage.addAttribute(.backgroundColor, value: UIColor.secondarySystemFill, range: range)
         case .link, .tag:
-            storage.addAttribute(.foregroundColor, value: UIColor.tintColor, range: range)
+            storage.addAttribute(.foregroundColor, value: accent, range: range)
         case .frontmatter:
             storage.addAttribute(.font, value: UIFont.preferredFont(forTextStyle: .footnote), range: range)
             storage.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: range)
@@ -83,6 +85,12 @@ enum MarkdownHighlighter {
 }
 
 private extension UIFont {
+    /// SF Pro Rounded（Midnight 的字體）。
+    var rounded: UIFont {
+        guard let descriptor = fontDescriptor.withDesign(.rounded) else { return self }
+        return UIFont(descriptor: descriptor, size: pointSize)
+    }
+
     func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
         guard let descriptor = fontDescriptor.withSymbolicTraits(fontDescriptor.symbolicTraits.union(traits)) else { return self }
         return UIFont(descriptor: descriptor, size: pointSize)
@@ -139,6 +147,21 @@ final class MarkdownEditorController {
         textView?.becomeFirstResponder()
     }
 
+    /// 捲動到第 `line` 行並把游標放在那裡（右側大綱跳轉）。
+    func reveal(line: Int) {
+        guard let textView else { return }
+        let text = textView.text as NSString
+        var location = 0
+        var current = 0
+        while current < line, location < text.length {
+            location = NSMaxRange(text.lineRange(for: NSRange(location: location, length: 0)))
+            current += 1
+        }
+        let target = NSRange(location: min(location, text.length), length: 0)
+        textView.selectedRange = target
+        textView.scrollRangeToVisible(target)
+    }
+
     func dismissKeyboard() {
         textView?.resignFirstResponder()
     }
@@ -173,9 +196,10 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.font = MarkdownHighlighter.bodyFont
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
+        textView.tintColor = MarkdownHighlighter.accent
         textView.alwaysBounceVertical = true
         textView.keyboardDismissMode = .interactive
-        textView.textContainerInset = UIEdgeInsets(top: 20, left: 16, bottom: 120, right: 16)
+        textView.textContainerInset = UIEdgeInsets(top: 24, left: 28, bottom: 140, right: 28)
         // Markdown 不需要智慧引號與破折號
         textView.smartQuotesType = .no
         textView.smartDashesType = .no

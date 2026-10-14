@@ -122,6 +122,7 @@ struct TemplateEditorView: View {
                 Text("與內建或伺服器情境相同的代碼會覆寫該情境。")
             }
         }
+        .midnightList()
         .navigationTitle(draft.name.isEmpty ? "新增情境" : draft.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

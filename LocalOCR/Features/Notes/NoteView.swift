@@ -2,13 +2,15 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// 一則 Markdown 筆記：閱讀（可點待辦、手寫區塊、[[連結]]）與編輯（即時樣式、手寫區塊、照片），右側 Apple Intelligence。
+/// 一則 Markdown 筆記：閱讀（可點待辦、手寫區塊、[[連結]]）與編輯（即時樣式、手寫區塊、照片）。
+/// 大綱、反向連結與 Apple Intelligence 在工作區的右側欄；這裡回報即時內容並套用右側欄的跳轉與修改。
 struct NoteView: View {
     let initialPath: String
     var onPathChange: (String) -> Void = { _ in }
     var onOpenNote: (String) -> Void = { _ in }
 
     @Environment(\.openURL) private var openURL
+    @Environment(Workspace.self) private var workspace
     @State private var path = ""
     @State private var text = ""
     @State private var savedText = ""
@@ -20,10 +22,6 @@ struct NoteView: View {
     @State private var inkRequest: InkEditRequest?
     @State private var showsPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
-    @State private var showsInspector = false
-    @State private var insights: NoteInsights?
-    @State private var aiMessage: String?
-    @State private var isThinking = false
     @State private var toast: String?
     private let sync = VaultSyncCenter.shared
     private let store = NotesStore.shared
@@ -34,9 +32,6 @@ struct NoteView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarRole(.editor)
             .toolbar { toolbarContent }
-            .inspector(isPresented: $showsInspector) {
-                inspector.inspectorColumnWidth(min: 300, ideal: 340, max: 440)
-            }
             .sheet(item: $inkRequest) { request in
                 InkBlockEditorView(notePath: path, request: request) { saved in
                     if saved.isNew {
@@ -53,7 +48,20 @@ struct NoteView: View {
                 photoItem = nil
                 Task { await insertPhoto(item) }
             }
-            .onChange(of: text) { _, _ in scheduleSave() }
+            .onChange(of: text) { _, newText in
+                workspace.liveText[path] = newText
+                scheduleSave()
+            }
+            .onChange(of: workspace.editRequest) { _, request in
+                guard let request, request.path == path else { return }
+                text = request.transform(text)
+                workspace.editRequest = nil
+                toast = "已更新筆記"
+            }
+            .onChange(of: workspace.revealRequest) { _, request in
+                guard let request, request.path == path, isEditing else { return }
+                controller.reveal(line: request.heading.line)
+            }
             .onChange(of: title) { _, newTitle in rename(to: newTitle) }
             .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
             .toast($toast)
@@ -74,10 +82,16 @@ struct NoteView: View {
             )
             .ignoresSafeArea(.container, edges: .bottom)
         } else {
+            ScrollViewReader { proxy in
             ScrollView {
+                inlineHeader
+                    .padding(.horizontal, 32)
+                    .padding(.top, 28)
+                    .frame(maxWidth: 820, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    ContentUnavailableView("空白筆記", systemImage: "square.and.pencil", description: Text("點右上角的鉛筆開始書寫。"))
-                        .padding(.top, 80)
+                    MidnightEmptyState(title: "空白筆記", systemImage: "square.and.pencil", message: "點右上角的鉛筆開始書寫。")
+                        .padding(.top, 40)
                 } else {
                     MarkdownView(
                         text: text,
@@ -92,13 +106,44 @@ struct NoteView: View {
                             }
                         }
                     )
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 20)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 8)
+                    .padding(.bottom, 60)
                     .frame(maxWidth: 820)
                     .frame(maxWidth: .infinity)
                 }
             }
+            .scrollIndicators(.hidden)
+            .onChange(of: workspace.revealRequest) { _, request in
+                guard let request, request.path == path else { return }
+                withAnimation(.smooth(duration: 0.4)) { proxy.scrollTo(request.heading.block, anchor: .top) }
+            }
+            }
         }
+    }
+
+    /// 閱讀模式上方的路徑、修改時間與大標題（同 Obsidian 的行內標題）。
+    private var inlineHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            let folder = (path as NSString).deletingLastPathComponent
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(folder.isEmpty ? NotesStore.folderTitle("") : folder)
+                if let mtime = store.notes.first(where: { $0.path == path })?.mtime {
+                    Text("·")
+                    Text(mtime.formatted(.relative(presentation: .named)))
+                }
+            }
+            .font(.system(.caption, design: .rounded).weight(.medium))
+            .foregroundStyle(Midnight.textTertiary)
+            .lineLimit(1)
+            Text(title)
+                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .tracking(-0.5)
+                .foregroundStyle(Midnight.text)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ToolbarContentBuilder
@@ -118,7 +163,7 @@ struct NoteView: View {
                 Label(isEditing ? "閱讀" : "編輯", systemImage: isEditing ? "book" : "pencil")
             }
             Button {
-                showsInspector.toggle()
+                workspace.showRight(.ai)
             } label: {
                 Label("Apple Intelligence", systemImage: "sparkles")
             }
@@ -149,67 +194,6 @@ struct NoteView: View {
         }
     }
 
-    private var inspector: some View {
-        Form {
-            Section {
-                Button {
-                    Task { await analyze() }
-                } label: {
-                    HStack {
-                        Label(insights == nil ? "整理這則筆記" : "重新整理", systemImage: "sparkles")
-                        Spacer()
-                        if isThinking { ProgressView() }
-                    }
-                }
-                .disabled(isThinking || text.isEmpty)
-                if let aiMessage {
-                    Label(aiMessage, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
-            } header: {
-                Text("Apple Intelligence")
-            } footer: {
-                Text("在裝置上整理摘要、重點、待辦與標籤；編輯時也可以選取文字使用系統的「書寫工具」。")
-            }
-            if let insights {
-                Section("摘要") {
-                    Text(insights.summary).font(.callout).textSelection(.enabled)
-                }
-                if !insights.keyPoints.isEmpty {
-                    Section("重點") {
-                        ForEach(insights.keyPoints, id: \.self) { Text("• \($0)") }
-                    }
-                }
-                if !insights.actionItems.isEmpty {
-                    Section("待辦") {
-                        ForEach(insights.actionItems, id: \.self) { Label($0, systemImage: "circle") }
-                    }
-                }
-                if !insights.tags.isEmpty {
-                    Section("標籤") {
-                        Text(insights.tags.map { "#\($0)" }.joined(separator: "  ")).foregroundStyle(.tint)
-                    }
-                }
-                Section {
-                    Button {
-                        text = NoteMarkdownEditing.insertingInsights(insights, into: text)
-                        toast = "已加到筆記開頭"
-                    } label: {
-                        Label("把摘要、重點與標籤加到筆記", systemImage: "text.insert")
-                    }
-                    if !insights.actionItems.isEmpty {
-                        Button {
-                            let tasks = insights.actionItems.map { "- [ ] \($0)" }.joined(separator: "\n")
-                            text = text.trimmingCharacters(in: .newlines) + "\n\n## 待辦\n" + tasks + "\n"
-                            toast = "已加入待辦"
-                        } label: {
-                            Label("把待辦加到筆記最後", systemImage: "checklist")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // MARK: - 載入與儲存
 
     private func load() {
@@ -217,6 +201,7 @@ struct NoteView: View {
         path = initialPath
         text = sync.vault.readText(path) ?? ""
         savedText = text
+        workspace.liveText[path] = text
         title = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         isEditing = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         didLoad = true
@@ -291,17 +276,6 @@ struct NoteView: View {
             insertBlock("![[\(name)]]")
         } catch {
             toast = "無法儲存照片：\(error.localizedDescription)"
-        }
-    }
-
-    private func analyze() async {
-        isThinking = true
-        defer { isThinking = false }
-        do {
-            insights = try await NoteIntelligence.insights(for: text)
-            aiMessage = nil
-        } catch {
-            aiMessage = error.localizedDescription
         }
     }
 

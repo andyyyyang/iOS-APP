@@ -91,6 +91,7 @@ struct PairingView: View {
                 Text("掃描 QR Code 會自動帶入伺服器網址；只有輸入配對碼時才會使用這裡的網址。")
             }
         }
+        .midnightList()
         .navigationTitle("與 Obsidian 配對")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

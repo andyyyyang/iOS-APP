@@ -27,6 +27,8 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
     /// 第一張內嵌圖片（清單縮圖）。
     let firstEmbed: String?
     let tasks: [NoteTask]
+    /// [[連結]] 的目標名稱（關聯圖、反向連結）。
+    let links: [String]
 
     var id: String { path }
     var isNotebook: Bool { notebookID != nil }
@@ -75,6 +77,8 @@ final class NotesStore {
     /// 筆記以外的檔案（本機的，加上尚未下載的雲端檔案）。
     private(set) var files: [VaultItem] = []
     private(set) var folders: [String] = []
+    /// 名稱（小寫）→ 筆記路徑，用來解析 [[連結]]。
+    private(set) var linkIndex: [String: String] = [:]
     private(set) var isLoading = false
     private var cache: [String: NoteSummary] = [:]
     /// 每則筆記的內容（搜尋用，不必每次輸入都讀檔）。
@@ -116,6 +120,7 @@ final class NotesStore {
         cache = Dictionary(summaries.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         self.contents = contents
         notes = summaries.sorted { $0.mtime > $1.mtime }
+        linkIndex = NoteLinks.index(notes)
 
         // 尚未下載的雲端檔案也列出來（以及它們所在的資料夾）
         let localPaths = Set(localFiles.map(\.path))
@@ -175,7 +180,8 @@ final class NotesStore {
             tags: tags,
             notebookID: notebookID?.isEmpty == false ? notebookID : nil,
             firstEmbed: firstEmbed,
-            tasks: tasks
+            tasks: tasks,
+            links: NoteLinks.targets(in: text)
         )
     }
 
@@ -208,6 +214,24 @@ final class NotesStore {
     /// `folder` 是否在 `ancestor` 之中（或就是它）；`ancestor` 為空字串時是整個 vault。
     nonisolated static func isInside(_ folder: String, _ ancestor: String) -> Bool {
         ancestor.isEmpty || folder == ancestor || folder.hasPrefix(ancestor + "/")
+    }
+
+    /// 筆記目前的內容（快取，沒有時讀檔）。
+    func text(of path: String) -> String? {
+        contents[path] ?? vault.readText(path)
+    }
+
+    /// 這則筆記連到的其他筆記（路徑，不重複）。
+    func outgoingLinks(of note: NoteSummary) -> [String] {
+        var seen = Set<String>()
+        return note.links.compactMap { NoteLinks.resolve($0, in: linkIndex) }.filter { $0 != note.path && seen.insert($0).inserted }
+    }
+
+    /// 連到這則筆記的其他筆記（反向連結），最近編輯的在前。
+    func backlinks(to path: String) -> [NoteSummary] {
+        notes.filter { note in
+            note.path != path && note.links.contains { NoteLinks.resolve($0, in: linkIndex) == path }
+        }
     }
 
     /// 資料夾的顯示名稱；最上層（空字串）顯示 vault 名稱。
@@ -318,5 +342,87 @@ extension LocalVault {
     /// . 開頭的檔案或資料夾（.obsidian、.trash 等）不顯示也不同步。
     static func isHidden(_ path: String) -> Bool {
         path.split(separator: "/").contains { $0.hasPrefix(".") }
+    }
+}
+
+/// Obsidian 的 [[連結]]：從筆記中找出目標，並依檔名或路徑解析成筆記。
+enum NoteLinks {
+    private static let pattern = try! NSRegularExpression(pattern: #"(!?)\[\[([^\]\|#\^]+)[^\]]*\]\]"#)
+    /// 內嵌圖片、PDF 等附件不算筆記之間的連結。
+    private static let attachmentExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "svg", "pdf", "mp3", "m4a", "wav", "ogg", "mp4", "mov", "webm", "canvas", "ink",
+    ]
+
+    /// 筆記中連到的目標名稱（不含 #標題與 |別名，不重複）。
+    static func targets(in text: String) -> [String] {
+        let ns = text as NSString
+        var seen = Set<String>()
+        var result: [String] = []
+        for match in pattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let target = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
+            guard !target.isEmpty, !attachmentExtensions.contains((target as NSString).pathExtension.lowercased()) else { continue }
+            if seen.insert(target.lowercased()).inserted { result.append(target) }
+        }
+        return result
+    }
+
+    /// 名稱（小寫）→ 路徑：檔名與不含副檔名的完整路徑都能找到筆記；同名時取路徑較短的。
+    static func index(_ notes: [NoteSummary]) -> [String: String] {
+        var index: [String: String] = [:]
+        for note in notes.sorted(by: { $0.path.count < $1.path.count }) {
+            let withoutExtension = String(note.path.dropLast(3)).lowercased()
+            index[withoutExtension] = index[withoutExtension] ?? note.path
+            index[note.title.lowercased()] = index[note.title.lowercased()] ?? note.path
+        }
+        return index
+    }
+
+    static func resolve(_ target: String, in index: [String: String]) -> String? {
+        var key = target.lowercased()
+        if key.hasSuffix(".md") { key = String(key.dropLast(3)) }
+        return index[key] ?? index[(key as NSString).lastPathComponent]
+    }
+}
+
+/// 筆記中的一個標題（右側大綱）。
+struct NoteHeading: Identifiable, Hashable {
+    let level: Int
+    let title: String
+    /// 原始文字中的行號（編輯模式跳轉）。
+    let line: Int
+    /// MarkdownParser 的區塊序號（閱讀模式跳轉）。
+    let block: Int
+
+    var id: Int { block }
+}
+
+enum NoteOutline {
+    static func headings(in text: String) -> [NoteHeading] {
+        let blocks = MarkdownParser.blocks(from: text)
+        var parsed: [(block: Int, level: Int, title: String)] = []
+        for (offset, block) in blocks.enumerated() {
+            if case .heading(let level, let title) = block { parsed.append((offset, level, title)) }
+        }
+        // 對應的行號：與 MarkdownParser 相同，略過屬性區與程式碼區塊
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var start = 0
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---",
+           let end = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
+            start = end + 1
+        }
+        var headingLines: [Int] = []
+        var inCode = false
+        for (index, line) in lines.enumerated() where index >= start {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCode.toggle()
+                continue
+            }
+            let hashes = trimmed.prefix { $0 == "#" }.count
+            if !inCode, (1...6).contains(hashes), trimmed.dropFirst(hashes).hasPrefix(" ") { headingLines.append(index) }
+        }
+        return parsed.enumerated().map { index, item in
+            NoteHeading(level: item.level, title: item.title, line: index < headingLines.count ? headingLines[index] : 0, block: item.block)
+        }
     }
 }

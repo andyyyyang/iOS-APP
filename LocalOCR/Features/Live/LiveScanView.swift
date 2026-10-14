@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// 相機分頁：按快門一頁一頁拍，全部拍完再一起分析（與「掃描」分頁共用同一份文件）。
+/// 相機：按快門一頁一頁拍，全部拍完再一起分析（與「掃描」共用同一份文件）。從工作區以全螢幕開啟。
 struct LiveScanView: View {
+    var onClose: (() -> Void)?
+
     @Environment(ScanDraft.self) private var draft
     @State private var camera = CameraController()
     @State private var toast: String?
@@ -15,6 +17,13 @@ struct LiveScanView: View {
             CameraAccessView { cameraScreen }
                 .navigationTitle("連續拍照")
                 .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if let onClose {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成", action: onClose)
+                        }
+                    }
+                }
                 .navigationDestination(item: $captureModel.session) { session in
                     ResultView(session: session)
                 }

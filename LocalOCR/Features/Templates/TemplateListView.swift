@@ -11,6 +11,7 @@ struct TemplateListView: View {
             section("伺服器", templates: library.all.filter { $0.origin == .server })
             section("自訂", templates: library.all.filter { $0.origin == .custom })
         }
+        .midnightList()
         .navigationTitle("情境樣板")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
