@@ -17,6 +17,7 @@ struct WorkspaceView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
+    @AppStorage(KeyboardDiagnosticsLabel.key) private var showsKeyboardDiagnostics = false
 
     var body: some View {
         @Bindable var workspace = workspace
@@ -32,6 +33,15 @@ struct WorkspaceView: View {
             // 鍵盤出現時版面完全不動（頂部列、側欄、浮動工具列都不跟著跑）；
             // 筆記編輯器自己依鍵盤高度調整捲動範圍（MarkdownEditor）
             .ignoresSafeArea(.keyboard)
+            if showsKeyboardDiagnostics {
+                KeyboardDiagnosticsOverlay()
+                    .frame(width: 290, height: 190)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 64)
+                    .padding(.trailing, 12)
+                    .allowsHitTesting(false)
+                    .zIndex(20)
+            }
             if workspace.showsPalette {
                 CommandPalette()
                     .transition(.opacity)

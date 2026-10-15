@@ -62,12 +62,13 @@ final class KeyboardLayoutTests: XCTestCase {
         let input: UIView = try await waitFor {
             Self.find(UITextView.self, in: appWindow).map { $0 as UIView } ?? Self.find(UITextField.self, in: appWindow)
         }
-        try await measure(appWindow, focusing: input, label: "app-window-\(type(of: input))")
+        // 首頁的 AI 輸入框本來就會移到鍵盤上方：只比較頂部列
+        try await measure(appWindow, focusing: input, label: "app-window-\(type(of: input))", checksInput: false)
     }
 
     // MARK: - 量測
 
-    private func measure(_ window: UIWindow, focusing input: UIView, label: String) async throws {
+    private func measure(_ window: UIWindow, focusing input: UIView, label: String, checksInput: Bool = true) async throws {
         try await Task.sleep(for: .milliseconds(800))
         let frameBefore = input.convert(input.bounds, to: window)
         let before = Self.render(window)
@@ -97,7 +98,9 @@ final class KeyboardLayoutTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        XCTAssertEqual(frameAfter.minY, frameBefore.minY, accuracy: 1, "\(name)：鍵盤出現後輸入框的位置移動了 \(frameAfter.minY - frameBefore.minY) 點")
+        if checksInput {
+            XCTAssertEqual(frameAfter.minY, frameBefore.minY, accuracy: 1, "\(name)：鍵盤出現後輸入框的位置移動了 \(frameAfter.minY - frameBefore.minY) 點")
+        }
         XCTAssertLessThan(topChange, 0.02, "\(name)：鍵盤出現後頂部列的畫面變了 \(Int(topChange * 100))%（整個版面被推動）")
     }
 
