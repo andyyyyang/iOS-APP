@@ -266,6 +266,24 @@ actor VaultSyncEngine {
         let moveTargets = Set(moves.map { LocalVault.normalize($0.to.path) })
         downloads.removeAll { moveTargets.contains(LocalVault.normalize($0.path)) }
 
+        // 搬移的新位置先同步下來、舊位置在下一次同步才刪除：內容已經在新位置（同名、同樣內容），舊位置照常刪除，
+        // 也記成搬移（開著的分頁跟著換過去），不算進大量刪除保護
+        var followed: [Report.Move] = []
+        if !localDeletions.isEmpty {
+            let deleting = Set(localDeletions)
+            var byETag: [String: [String]] = [:]
+            for (path, file) in state where !deleting.contains(path) && remoteByPath[path] != nil && !file.etag.isEmpty {
+                byETag[file.etag, default: []].append(path)
+            }
+            for path in localDeletions {
+                guard let base = state[path], let others = byETag[base.etag] else { continue }
+                let name = (path as NSString).lastPathComponent
+                let sameName = others.filter { ($0 as NSString).lastPathComponent == name }
+                if sameName.count == 1 { followed.append(Report.Move(from: path, to: sameName[0])) }
+            }
+        }
+        let followedSources = Set(followed.map(\.from))
+
         // 大量刪除保護（在這台裝置上搬移或改名的檔案——舊位置刪除、同樣內容在新位置上傳——不算）
         let limit = max(10, state.count * 3 / 10)
         var remoteDeletionCount = remoteDeletions.count
@@ -273,8 +291,9 @@ actor VaultSyncEngine {
             let newLocal = Set(uploads.filter { $0.base == nil }.compactMap { localHash($0.path) })
             remoteDeletionCount -= remoteDeletions.filter { state[$0.path].map { newLocal.contains($0.hash) } ?? false }.count
         }
-        if !allowMassDeletion && (localDeletions.count > limit || remoteDeletionCount > limit) {
-            throw VaultSyncError.tooManyDeletions(local: localDeletions.count, remote: remoteDeletionCount)
+        let localDeletionCount = localDeletions.filter { !followedSources.contains($0) }.count
+        if !allowMassDeletion && (localDeletionCount > limit || remoteDeletionCount > limit) {
+            throw VaultSyncError.tooManyDeletions(local: localDeletionCount, remote: remoteDeletionCount)
         }
 
         var report = Report()
@@ -303,9 +322,11 @@ actor VaultSyncEngine {
         }
         for path in localDeletions {
             try? vault.delete(path)
+            vault.removeEmptyParents(of: path)
             state[path] = nil
             report.deleted += 1
         }
+        report.moves += followed
         for (path, etag) in remoteDeletions {
             do {
                 try await remote.delete(path, ifMatch: etag)

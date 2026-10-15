@@ -73,8 +73,18 @@ struct WorkspaceView: View {
         .onChange(of: sync.lastReport?.moves ?? []) { _, moves in
             for move in moves { workspace.renameNote(from: move.from, to: move.to) }
         }
-        .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
-        .onChange(of: sync.pendingFiles) { _, _ in Task { await store.reload() } }
+        .onChange(of: sync.revision) { _, _ in
+            Task {
+                await store.reload()
+                workspace.followMovedNotes()
+            }
+        }
+        .onChange(of: sync.pendingFiles) { _, _ in
+            Task {
+                await store.reload()
+                workspace.followMovedNotes()
+            }
+        }
         // 開啟 Markdown 筆記時，右側欄自動切到這則筆記的手寫備忘（手寫筆記本身不必）
         .onChange(of: workspace.activeNotePath, initial: true) { _, path in
             guard let path, NotesSettings.autoInkMemo, !isNotebook(path) else { return }

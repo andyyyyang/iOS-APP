@@ -447,13 +447,27 @@ struct NoteDetailRouter: View {
     }
 
     private func download() async {
+        if relocate() { return }
         do {
             _ = try await VaultSyncCenter.shared.download(path)
             isDownloaded = true
             await NotesStore.shared.reload()
         } catch {
+            // 可能剛被搬走（在 Obsidian 搬到別的資料夾）：同步一次，再依檔名找新位置
+            await VaultSyncCenter.shared.syncNow()
+            await NotesStore.shared.reload()
+            if relocate() { return }
             downloadError = error.localizedDescription
         }
+    }
+
+    /// 這個分頁的筆記已經不在原本的位置：依檔名找到搬到哪裡（vault 中只有一則同名筆記時），分頁改指到新位置。
+    private func relocate() -> Bool {
+        let store = NotesStore.shared
+        guard !LocalVault.shared.exists(path), !store.notes.contains(where: { $0.path == path }),
+              let target = store.movedNote(from: path) else { return false }
+        workspace.renameNote(from: path, to: target)
+        return true
     }
 }
 

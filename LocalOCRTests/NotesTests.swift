@@ -664,6 +664,11 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
         }
     }
 
+    /// 複製到新位置（同樣內容、同樣 ETag），舊位置還在：Remotely Save 搬移時先上傳新位置、稍後才刪除舊位置。
+    func copy(_ path: String, to destination: String) {
+        lock.withLock { files[destination] = files[path] }
+    }
+
     /// 上傳時伺服器拒絕的檔案（模擬檔案太大、網路中斷）。
     var rejectedWrites: Set<String> {
         get { lock.withLock { rejected } }
@@ -1100,6 +1105,22 @@ final class VaultSyncEngineTests: XCTestCase {
         let edit = try await engine.sync(remote: remote)
         XCTAssertEqual(edit.uploaded, 1)
         XCTAssertEqual(remote.text("專案/n3.md"), "改過")
+    }
+
+    func testMoveSeenInTwoSyncsIsStillReportedAsAMove() async throws {
+        for index in 0..<20 { remote.put("n\(index).md", "筆記 \(index)") }
+        _ = try await engine.sync(remote: remote)
+        // 同步時新位置已經上傳、舊位置還沒刪除：新位置先下載下來
+        for index in 0..<12 { remote.copy("n\(index).md", to: "資料夾/n\(index).md") }
+        let first = try await engine.sync(remote: remote)
+        XCTAssertEqual(first.downloaded, 12)
+        // 下一次同步舊位置才刪除：記成搬移（分頁跟著換過去），不觸發大量刪除保護
+        for index in 0..<12 { remote.remove("n\(index).md") }
+        let second = try await engine.sync(remote: remote)
+        XCTAssertEqual(second.moves.count, 12)
+        XCTAssertTrue(second.moves.contains(.init(from: "n0.md", to: "資料夾/n0.md")))
+        XCTAssertFalse(vault.exists("n0.md"))
+        XCTAssertEqual(vault.readText("資料夾/n0.md"), "筆記 0")
     }
 
     func testMovedFileEditedOnThisDeviceIsKept() async throws {

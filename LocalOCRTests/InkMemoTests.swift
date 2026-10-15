@@ -18,7 +18,7 @@ final class InkMemoTests: XCTestCase {
 
     func testMemoIsNamedAfterTheNote() {
         XCTAssertEqual(InkMemo.name(forNote: "工作/會議 記錄.md", text: "# 會議"), "ink-memo-會議 記錄")
-        XCTAssertEqual(InkFiles.dataPath(notePath: "工作/會議 記錄.md", name: "ink-memo-會議 記錄"), "工作/附件/ink-memo-會議 記錄.ink")
+        XCTAssertEqual(InkFiles.expectedDataPath(notePath: "工作/會議 記錄.md", name: "ink-memo-會議 記錄"), "工作/附件/ink-memo-會議 記錄.ink")
         XCTAssertTrue(VaultSyncEngine.isRegenerated("工作/附件/ink-memo-會議 記錄.png"), "備忘圖片是重新產生的，衝突時不另存")
         XCTAssertEqual(InkFiles.blockName(fromEmbed: "ink-memo-會議 記錄.png"), "ink-memo-會議 記錄", "插入筆記後點圖片可以用手寫區塊編輯")
     }
@@ -53,5 +53,40 @@ final class InkMemoTests: XCTestCase {
 
         let old = try JSONDecoder().decode(InkBlock.self, from: Data(#"{"version":2,"height":240,"paper":"blank","drawing":""}"#.utf8))
         XCTAssertEqual(old.canvasWidth, CanvasLayout.width, "舊的手寫區塊沒有寬度：維持手寫筆記的寬度")
+    }
+}
+
+/// 筆記被搬到別的資料夾後（附件留在原處），依檔名找到手寫筆記的筆跡與手寫區塊。
+@MainActor
+final class AttachmentLocatorTests: XCTestCase {
+    private let base = "附件定位測試-\(UUID().uuidString.prefix(6))"
+    private var vault: LocalVault { VaultSyncCenter.shared.vault }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: vault.root.appending(path: base))
+    }
+
+    func testNotebookDataIsFoundAfterTheNoteMoves() throws {
+        let id = "nb-loc\(UUID().uuidString.prefix(4).lowercased())"
+        try vault.writeText("{}", to: "\(base)/舊資料夾/附件/\(id).\(NotebookArchive.fileExtension)")
+        XCTAssertEqual(NotebookFiles.archivePath(notePath: "\(base)/新資料夾/手寫.md", id: id), "\(base)/舊資料夾/附件/\(id).\(NotebookArchive.fileExtension)")
+        XCTAssertEqual(NotebookFiles.pageImagePath(notePath: "\(base)/新資料夾/手寫.md", id: id, page: 1), "\(base)/舊資料夾/附件/\(id)-p1.png", "每頁圖片也存回筆跡旁邊")
+    }
+
+    func testInkBlocksAreFoundAfterTheNoteMoves() throws {
+        let name = "ink-loc\(UUID().uuidString.prefix(4).lowercased())"
+        try vault.writeText("{}", to: "\(base)/A/附件/\(name).ink")
+        XCTAssertEqual(InkFiles.dataPath(notePath: "\(base)/B/筆記.md", name: name), "\(base)/A/附件/\(name).ink")
+        XCTAssertEqual(InkFiles.imagePath(notePath: "\(base)/B/筆記.md", name: name), "\(base)/A/附件/\(name).png")
+        XCTAssertEqual(InkFiles.dataPath(notePath: "\(base)/B/筆記.md", name: "ink-沒有這個"), "\(base)/B/附件/ink-沒有這個.ink", "找不到時是筆記旁邊的附件")
+    }
+
+    func testAnotherNotesMemoIsNotBorrowed() throws {
+        let stem = "會議\(UUID().uuidString.prefix(4))"
+        try vault.writeText("{}", to: "\(base)/A/附件/ink-memo-\(stem).ink")
+        try vault.writeText("# A 的筆記", to: "\(base)/A/\(stem).md")
+        XCTAssertEqual(InkFiles.dataPath(notePath: "\(base)/B/\(stem).md", name: "ink-memo-\(stem)"), "\(base)/B/附件/ink-memo-\(stem).ink", "同名但不同資料夾的筆記：備忘是 A 的，不拿來用")
+        try vault.delete("\(base)/A/\(stem).md")
+        XCTAssertEqual(InkFiles.dataPath(notePath: "\(base)/B/\(stem).md", name: "ink-memo-\(stem)"), "\(base)/A/附件/ink-memo-\(stem).ink", "A 已經不在（搬到 B 了）：備忘跟著找到")
     }
 }

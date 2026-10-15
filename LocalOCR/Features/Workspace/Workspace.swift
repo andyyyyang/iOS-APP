@@ -511,6 +511,15 @@ final class Workspace {
         }
     }
 
+    /// 開著的分頁的筆記不在原本的位置了（在 Obsidian 或其他裝置搬走）：依檔名找到新位置，分頁跟著換過去。
+    func followMovedNotes() {
+        for tab in tabs {
+            guard let path = tab.notePath, !store.vault.exists(path), !store.notes.contains(where: { $0.path == path }),
+                  let target = store.movedNote(from: path) else { continue }
+            renameNote(from: path, to: target)
+        }
+    }
+
     /// 側欄的拖曳搬移與「搬移到」：搬到另一個資料夾，開著的分頁跟著換到新位置。
     /// 還沒下載的檔案先下載再搬。回傳新的路徑；失敗時是 nil。
     @discardableResult

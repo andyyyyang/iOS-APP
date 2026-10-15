@@ -209,12 +209,15 @@ enum NotebookFiles {
         "nb-" + UUID().uuidString.prefix(8).lowercased()
     }
 
+    /// 筆跡資料的位置：通常在筆記旁邊的「附件」；筆記被搬到別的資料夾後依檔名找到原本的位置，之後也存回那裡。
     static func archivePath(notePath: String, id: String) -> String {
-        "\(NotesSettings.attachmentsFolder(forNote: notePath))/\(id).\(NotebookArchive.fileExtension)"
+        AttachmentLocator.locate("\(NotesSettings.attachmentsFolder(forNote: notePath))/\(id).\(NotebookArchive.fileExtension)")
     }
 
+    /// 每頁圖片放在筆跡資料旁邊（筆記搬走後也不會在新資料夾多出一份同名的圖片）。
     static func pageImagePath(notePath: String, id: String, page: Int) -> String {
-        "\(NotesSettings.attachmentsFolder(forNote: notePath))/\(NotebookMarkdown.pageImageName(id: id, page: page))"
+        let folder = (archivePath(notePath: notePath, id: id) as NSString).deletingLastPathComponent
+        return "\(folder)/\(NotebookMarkdown.pageImageName(id: id, page: page))"
     }
 
     /// 建立新的手寫筆記（空白畫布），回傳 Markdown 路徑。
@@ -363,15 +366,67 @@ enum InkFiles {
         return String(name.dropLast(4))
     }
 
-    static func dataPath(notePath: String, name: String) -> String {
+    /// 筆記旁邊「附件」資料夾中的位置（新的區塊存在這裡）。
+    static func expectedDataPath(notePath: String, name: String) -> String {
         "\(NotesSettings.attachmentsFolder(forNote: notePath))/\(name).\(fileExtension)"
     }
 
-    static func imagePath(notePath: String, name: String) -> String {
+    static func expectedImagePath(notePath: String, name: String) -> String {
         "\(NotesSettings.attachmentsFolder(forNote: notePath))/\(name).png"
+    }
+
+    /// 筆跡資料實際的位置：筆記被搬到別的資料夾後（附件留在原處），依檔名找到它。
+    /// 手寫備忘的名稱跟著筆記名稱，同名筆記各有一份：找到的備忘旁邊還有它自己的筆記時不算。
+    @MainActor
+    static func dataPath(notePath: String, name: String) -> String {
+        AttachmentLocator.locate(expectedDataPath(notePath: notePath, name: name)) { found in
+            guard name.hasPrefix(InkMemo.prefix) else { return true }
+            let attachments = (found as NSString).deletingLastPathComponent
+            let folder = (attachments as NSString).deletingLastPathComponent
+            let stem = String(name.dropFirst(InkMemo.prefix.count))
+            return !AttachmentLocator.exists((folder.isEmpty ? "" : folder + "/") + stem + ".md")
+        }
+    }
+
+    /// 圖片放在筆跡資料旁邊。
+    @MainActor
+    static func imagePath(notePath: String, name: String) -> String {
+        let folder = (dataPath(notePath: notePath, name: name) as NSString).deletingLastPathComponent
+        return "\(folder)/\(name).png"
     }
 
     static func image(for block: InkBlock) -> UIImage {
         PaperRenderer.canvasImage(drawing: block.pkDrawing, rect: CGRect(x: 0, y: 0, width: block.canvasWidth, height: block.height), paper: block.paper, scale: 2)
+    }
+}
+
+/// 依檔名在整個 vault（這台裝置上的檔案與遠端清單）找附件：筆記被搬到別的資料夾時附件通常留在原處（Obsidian 也不會搬附件）。
+@MainActor
+enum AttachmentLocator {
+    /// 檔名 → 上次找到的位置（避免每次都列出整個 vault）。
+    private static var found: [String: String] = [:]
+
+    /// `expected` 存在（這台裝置上或遠端）就是它；否則依檔名找，只有一個符合 `accept` 的檔案時才用它。
+    static func locate(_ expected: String, accept: (String) -> Bool = { _ in true }) -> String {
+        let expected = LocalVault.normalize(expected)
+        if exists(expected) { return expected }
+        let name = (expected as NSString).lastPathComponent
+        if let cached = found[name], exists(cached), accept(cached) { return cached }
+        let sync = VaultSyncCenter.shared
+        var matches = Set(sync.pendingFiles.map(\.path).filter { ($0 as NSString).lastPathComponent == name })
+        for file in sync.vault.allFiles() where (file.path as NSString).lastPathComponent == name {
+            matches.insert(file.path)
+        }
+        let candidates = matches.filter(accept)
+        guard candidates.count == 1, let match = candidates.first else { return expected }
+        found[name] = match
+        return match
+    }
+
+    /// 檔案在這台裝置上或遠端（還沒下載）。
+    static func exists(_ path: String) -> Bool {
+        let path = LocalVault.normalize(path)
+        let sync = VaultSyncCenter.shared
+        return sync.vault.exists(path) || sync.pendingFiles.contains { $0.path == path }
     }
 }

@@ -30,8 +30,8 @@ enum InkMemo {
         let oldName = embedded ?? name(forNote: oldPath, text: nil)
         let newName = embedded ?? name(forNote: newPath, text: nil)
         let pairs = [
-            (InkFiles.dataPath(notePath: oldPath, name: oldName), InkFiles.dataPath(notePath: newPath, name: newName)),
-            (InkFiles.imagePath(notePath: oldPath, name: oldName), InkFiles.imagePath(notePath: newPath, name: newName)),
+            (InkFiles.expectedDataPath(notePath: oldPath, name: oldName), InkFiles.expectedDataPath(notePath: newPath, name: newName)),
+            (InkFiles.expectedImagePath(notePath: oldPath, name: oldName), InkFiles.expectedImagePath(notePath: newPath, name: newName)),
         ]
         for (from, to) in pairs where from != to && vault.exists(from) && !vault.exists(to) {
             try? vault.move(from, to: to)
@@ -150,13 +150,15 @@ struct InkMemoPanel: View {
         !name.isEmpty && InkMemo.embeddedName(in: noteText) == name
     }
 
-    private var dataPath: String { InkFiles.dataPath(notePath: path, name: name) }
-    private var imagePath: String { InkFiles.imagePath(notePath: path, name: name) }
+    /// 備忘的檔案位置（載入時決定：筆記搬走後依檔名找到原本的位置，之後也存回那裡）。
+    @State private var dataPath = ""
+    private var imagePath: String { ((dataPath as NSString).deletingLastPathComponent as NSString).appendingPathComponent("\(name).png") }
 
     // MARK: 載入
 
     private func load() async {
         name = InkMemo.name(forNote: path, text: noteText)
+        dataPath = InkFiles.dataPath(notePath: path, name: name)
         let isRemote = sync.pendingFiles.contains { $0.path == LocalVault.normalize(dataPath) }
         if !sync.vault.exists(dataPath), isRemote {
             // 按需模式下備忘可能還在遠端：先下載；拿不到時不能編輯（否則會蓋掉原本的筆跡）
@@ -181,7 +183,7 @@ struct InkMemoPanel: View {
 
     /// 其他裝置改過（或在筆記中用手寫區塊編輯過）、這裡沒有未存的筆跡時載入新的內容。
     private func reloadIfChangedElsewhere() {
-        guard !hasChanges, let current = block, !name.isEmpty,
+        guard !hasChanges, let current = block, !dataPath.isEmpty,
               let data = try? sync.vault.read(dataPath), data != savedData,
               var saved = try? JSONDecoder().decode(InkBlock.self, from: data) else { return }
         saved.migrateToCanvas()
@@ -217,7 +219,7 @@ struct InkMemoPanel: View {
     private func persistNow() -> Bool {
         saveTask?.cancel()
         saveTask = nil
-        guard var current = block, !name.isEmpty else { return false }
+        guard var current = block, !dataPath.isEmpty else { return false }
         if let drawing = handle.currentDrawing { current.pkDrawing = drawing }
         current.height = InkBlock.fittedHeight(for: current.pkDrawing)
         guard let data = try? JSONEncoder().encode(current) else { return false }

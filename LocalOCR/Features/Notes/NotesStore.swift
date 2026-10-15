@@ -453,6 +453,13 @@ final class NotesStore {
         return target
     }
 
+    /// 不在原本位置的筆記被搬到哪裡（例如在 Obsidian 搬到別的資料夾）：vault 中只有一則同檔名的筆記時就是它。
+    func movedNote(from path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        let candidates = notes.filter { $0.path != path && ($0.path as NSString).lastPathComponent == name }
+        return candidates.count == 1 ? candidates[0].path : nil
+    }
+
     /// 搬到另一個資料夾（檔名不變，同名時加上編號）：同步時新位置上傳、舊位置從遠端刪除（算搬移，不算大量刪除）。
     /// [[連結]] 依名稱解析，搬移後照樣連得到。
     func move(_ path: String, toFolder folder: String) throws -> String {

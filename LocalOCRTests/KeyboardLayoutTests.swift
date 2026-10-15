@@ -28,12 +28,41 @@ final class KeyboardLayoutTests: XCTestCase {
         try await measure(window, focusing: textView, label: "note")
     }
 
+    /// iPad 橫向：鍵盤佔畫面的比例大很多。
+    func testTypingInANoteInLandscapeDoesNotMoveTheWorkspace() async throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("只在 iPad 量") }
+        try LocalVault.shared.writeText((1...80).map { "第 \($0) 行：鍵盤出現時版面不能動。" }.joined(separator: "\n"), to: notePath)
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
+        workspace.openNote(notePath)
+        let window = try host(workspace)
+        let scene = try XCTUnwrap(window.windowScene)
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { error in
+            print("[probe] rotate failed: \(error.localizedDescription)")
+        }
+        try await Task.sleep(for: .seconds(2))
+        defer { scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) }
+        guard scene.interfaceOrientation.isLandscape else { throw XCTSkip("模擬器沒有轉成橫向") }
+        let textView = try await waitFor { Self.find(NoteTextView.self, in: window) }
+        try await measure(window, focusing: textView, label: "note-landscape")
+    }
+
     func testSearchingInAToolPageDoesNotMoveTheWorkspace() async throws {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.open(.contacts)
         let window = try host(workspace)
         let field = try await waitFor { Self.find(UITextField.self, in: window) }
         try await measure(window, focusing: field, label: "tool-search")
+    }
+
+    /// App 自己的視窗（WindowGroup 建立、ContentView 的完整畫面，與實際使用時相同），在裡面打字。
+    func testTypingInTheAppWindowDoesNotMoveIt() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "沒有視窗場景")
+        let appWindow = try XCTUnwrap(scene.windows.first { $0.rootViewController != nil && !$0.isHidden && $0.windowLevel == .normal }, "找不到 App 的視窗")
+        appWindow.makeKeyAndVisible()
+        let input: UIView = try await waitFor {
+            Self.find(UITextView.self, in: appWindow).map { $0 as UIView } ?? Self.find(UITextField.self, in: appWindow)
+        }
+        try await measure(appWindow, focusing: input, label: "app-window-\(type(of: input))")
     }
 
     // MARK: - 量測

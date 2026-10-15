@@ -145,13 +145,16 @@ struct InkBlockEditorView: View {
         let vault = sync.vault
         let block = block
         let image = await Task.detached(priority: .userInitiated) { InkFiles.image(for: block).pngData() }.value
-        await sync.prepareOverwrite([InkFiles.dataPath(notePath: notePath, name: request.name), InkFiles.imagePath(notePath: notePath, name: request.name)])
+        // 筆記搬到別的資料夾後，筆跡與圖片存回原本的位置（依檔名找到）
+        let dataPath = InkFiles.dataPath(notePath: notePath, name: request.name)
+        let imagePath = ((dataPath as NSString).deletingLastPathComponent as NSString).appendingPathComponent("\(request.name).png")
+        await sync.prepareOverwrite([dataPath, imagePath])
         do {
             guard let image else { throw InkSaveError.render }
-            try vault.write(try JSONEncoder().encode(block), to: InkFiles.dataPath(notePath: notePath, name: request.name))
-            try vault.write(image, to: InkFiles.imagePath(notePath: notePath, name: request.name))
-            sync.fileDidChange(InkFiles.dataPath(notePath: notePath, name: request.name))
-            sync.fileDidChange(InkFiles.imagePath(notePath: notePath, name: request.name))
+            try vault.write(try JSONEncoder().encode(block), to: dataPath)
+            try vault.write(image, to: imagePath)
+            sync.fileDidChange(dataPath)
+            sync.fileDidChange(imagePath)
             sync.localDidChange()
             if !request.isNew || !embedded {
                 onSaved(request)
