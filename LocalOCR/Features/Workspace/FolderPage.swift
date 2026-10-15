@@ -77,6 +77,7 @@ struct FolderPage: View {
                 .frame(maxWidth: 1200, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .refreshable { await VaultSyncCenter.shared.pullToRefresh() }
             .scrollIndicators(.hidden)
 
             CreatePalette()

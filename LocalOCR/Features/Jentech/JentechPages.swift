@@ -93,7 +93,7 @@ struct JentechHubPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageToolbar("業務快查", subtitle: "業務快查與物流中心", query: $query, searchPlaceholder: "搜尋人名、分機、客戶、代碼、案件、單號") {
+            PageToolbar("業務快查", subtitle: "業務快查與物流中心", query: $query, searchPlaceholder: "搜尋人名、分機、客戶、代碼、案件、單號", pinnedSearch: true) {
                 EmptyView()
             } chips: {
                 ForEach([WorkspaceTab.contacts, .logistics, .codes, .cases], id: \.id) { tab in
@@ -221,7 +221,7 @@ struct JentechContactsPage: View {
     var body: some View {
         let rows = self.rows
         VStack(spacing: 0) {
-            PageToolbar("通訊錄", subtitle: store.isLoadingContacts && store.contacts.isEmpty ? "讀取中…" : "共 \(rows.count) 筆", query: $query, searchPlaceholder: "姓名、部門、分機、MVPN") {
+            PageToolbar("通訊錄", subtitle: store.isLoadingContacts && store.contacts.isEmpty ? "讀取中…" : "共 \(rows.count) 筆", query: $query, searchPlaceholder: "姓名、部門、分機、MVPN", pinnedSearch: true) {
                 Menu {
                     if store.contactHistory.isEmpty {
                         Text("尚無搜尋紀錄")
@@ -337,7 +337,7 @@ struct JentechCodesPage: View {
             (kind == "all" || code.kind.rawValue == kind) && JentechLogic.matches(query, [code.code, code.alias, code.name, code.fullName, code.detail])
         }
         VStack(spacing: 0) {
-            PageToolbar("代碼查詢", subtitle: "共 \(rows.count) 筆", query: $query, searchPlaceholder: "客戶名稱、客代、別稱、T-Code、說明") {
+            PageToolbar("代碼查詢", subtitle: "共 \(rows.count) 筆", query: $query, searchPlaceholder: "客戶名稱、客代、別稱、T-Code、說明", pinnedSearch: true) {
                 EmptyView()
             } chips: {
                 SegmentedPills(options: [(value: "all", title: "全部"), (value: JentechCode.Kind.customer.rawValue, title: "客戶"), (value: JentechCode.Kind.tcode.rawValue, title: "TCode")], selection: $kind)
@@ -407,7 +407,7 @@ struct JentechCasesPage: View {
             (customer == nil || item.customer == customer) && JentechLogic.matches(query, [item.caseNo, item.sapNo, item.product, item.customer, item.bpmRdmn, item.file])
         }
         VStack(spacing: 0) {
-            PageToolbar("案件查詢", subtitle: "共 \(rows.count) 筆", query: $query, searchPlaceholder: "開案號（T/S 號）、SAP 品號、產品、客戶、RDMN") {
+            PageToolbar("案件查詢", subtitle: "共 \(rows.count) 筆", query: $query, searchPlaceholder: "開案號（T/S 號）、SAP 品號、產品、客戶、RDMN", pinnedSearch: true) {
                 Button {
                     workspace.openLink("開案 Dashboard")
                 } label: {
@@ -587,7 +587,7 @@ struct JentechSopPage: View {
     var body: some View {
         let rows = JentechLogic.sops.filter { (stage == "all" || $0.stage == stage) && JentechLogic.sopMatches($0, query) }
         VStack(spacing: 0) {
-            PageToolbar("SOP 導覽", subtitle: "共 \(rows.count) 個", query: $query, searchPlaceholder: "SOP 名稱或標籤（#billing、#va01、#dhl…）") {
+            PageToolbar("SOP 導覽", subtitle: "共 \(rows.count) 個", query: $query, searchPlaceholder: "SOP 名稱或標籤（#billing、#va01、#dhl…）", pinnedSearch: true) {
                 EmptyView()
             } chips: {
                 SegmentedPills(options: [(value: "all", title: "全部")] + JentechLogic.sopStages.map { (value: $0, title: $0) }, selection: $stage)

@@ -10,6 +10,12 @@ enum NotesSettings {
         static let downloadPolicy = "notes.downloadPolicy"
         static let migratedDefaultFolder = "notes.migratedDefaultFolder"
         static let lastPaper = "notes.lastPaper"
+        static let limitsLineWidth = "notes.limitsLineWidth"
+    }
+
+    /// 筆記內容限制在易讀的行寬（760）；預設關閉：跟著畫面全寬自適應。
+    static var limitsLineWidth: Bool {
+        UserDefaults.standard.bool(forKey: Key.limitsLineWidth)
     }
 
     static func registerDefaults(in defaults: UserDefaults = .standard) {

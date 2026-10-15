@@ -213,7 +213,6 @@ struct Ribbon: View {
             button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
             button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
             button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
-            button("業務快查", WorkspaceTab.hub.systemImage, isActive: workspace.active == .hub) { run { workspace.open(.hub) } }
             separator
             button("掃描文件", WorkspaceTab.scan.systemImage, isActive: workspace.active == .scan) { run { workspace.open(.scan) } }
             button("相機", "camera") { run { workspace.showsCamera = true } }

@@ -270,12 +270,35 @@ final class MarkdownTableInfo: NSObject {
     }
 
     /// 表格裡某一點（相對於表格左上角）的連結：點 [[連結]] 或網址時開啟，不進入編輯。
+    /// 點到的連結：先找剛好點在連結文字上的；沒有時，點在只有一個連結的儲存格裡任何地方也算（手指不必對準文字）。
     func link(at point: CGPoint) -> MarkdownTapTarget? {
-        for piece in pieces where piece.frame.insetBy(dx: -4, dy: -4).contains(point) {
+        let hits = pieces.filter { $0.frame.insetBy(dx: -Self.horizontalPadding, dy: -Self.verticalPadding).contains(point) }
+        for piece in hits {
             let local = CGPoint(x: point.x - piece.frame.minX, y: point.y - piece.frame.minY)
             if let target = Self.link(in: piece.text, width: piece.frame.width, at: local) { return target }
         }
+        for piece in hits {
+            let targets = Self.links(in: piece.text)
+            if targets.count == 1 { return targets[0] }
+        }
         return nil
+    }
+
+    /// 一段儲存格文字中的連結（相同的只算一次）。
+    static func links(in text: NSAttributedString) -> [MarkdownTapTarget] {
+        var targets: [MarkdownTapTarget] = []
+        text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attributes, _, _ in
+            let target: MarkdownTapTarget?
+            if let wiki = attributes[.mdWikiLink] as? String {
+                target = .wikiLink(wiki)
+            } else if let url = attributes[.mdLink] as? String {
+                target = .link(url)
+            } else {
+                target = nil
+            }
+            if let target, !targets.contains(target) { targets.append(target) }
+        }
+        return targets
     }
 
     private static func link(in text: NSAttributedString, width: CGFloat, at local: CGPoint) -> MarkdownTapTarget? {

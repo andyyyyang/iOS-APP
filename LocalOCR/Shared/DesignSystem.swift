@@ -806,6 +806,8 @@ struct PageToolbar<Actions: View, Chips: View>: View {
     var subtitle: String?
     @Binding var query: String
     var searchPlaceholder = "搜尋"
+    /// 查詢類的頁面（通訊錄、代碼…）：搜尋框固定顯示在標題下方，不必先按放大鏡。
+    var pinnedSearch = false
     @ViewBuilder var actions: () -> Actions
     @ViewBuilder var chips: () -> Chips
 
@@ -817,6 +819,7 @@ struct PageToolbar<Actions: View, Chips: View>: View {
         subtitle: String? = nil,
         query: Binding<String>,
         searchPlaceholder: String = "搜尋",
+        pinnedSearch: Bool = false,
         @ViewBuilder actions: @escaping () -> Actions,
         @ViewBuilder chips: @escaping () -> Chips
     ) {
@@ -824,6 +827,7 @@ struct PageToolbar<Actions: View, Chips: View>: View {
         self.subtitle = subtitle
         _query = query
         self.searchPlaceholder = searchPlaceholder
+        self.pinnedSearch = pinnedSearch
         self.actions = actions
         self.chips = chips
     }
@@ -833,18 +837,28 @@ struct PageToolbar<Actions: View, Chips: View>: View {
             PageHeader(title, subtitle: subtitle) {
                 HStack(spacing: 8) {
                     actions()
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) { isSearching.toggle() }
-                        if !isSearching { query = "" }
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                            .symbolVariant(query.isEmpty ? .none : .circle.fill)
+                    if !pinnedSearch {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { isSearching.toggle() }
+                            if !isSearching { query = "" }
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                                .symbolVariant(query.isEmpty ? .none : .circle.fill)
+                        }
+                        .buttonStyle(CircleIconButtonStyle())
+                        .accessibilityLabel(isSearching ? "收起搜尋" : "搜尋")
                     }
-                    .buttonStyle(CircleIconButtonStyle())
-                    .accessibilityLabel(isSearching ? "收起搜尋" : "搜尋")
                 }
             }
-            if isSearching || !query.isEmpty {
+            if pinnedSearch {
+                SearchField(placeholder: searchPlaceholder, text: $query, height: 38)
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        chips()
+                    }
+                }
+                .scrollIndicators(.hidden)
+            } else if isSearching || !query.isEmpty {
                 HStack(spacing: 10) {
                     SearchField(placeholder: searchPlaceholder, text: $query, height: 34, autofocus: true)
                     Button("取消") {

@@ -27,7 +27,7 @@ struct JentechCardsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageToolbar("編輯卡片", subtitle: editingPath == nil ? "新卡片" : "編輯中", query: $query, searchPlaceholder: kind == .person ? "載入現有人員卡（姓名、英文名）" : "載入現有客戶卡（名稱、英文名）") {
+            PageToolbar("編輯卡片", subtitle: editingPath == nil ? "新卡片" : "編輯中", query: $query, searchPlaceholder: kind == .person ? "載入現有人員卡（姓名、英文名）" : "載入現有客戶卡（名稱、英文名）", pinnedSearch: true) {
                 Button {
                     reset()
                 } label: {

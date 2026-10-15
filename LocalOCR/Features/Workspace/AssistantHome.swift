@@ -46,6 +46,7 @@ struct AssistantHome: View {
                     }
                     .scrollIndicators(.hidden)
                     .scrollDismissesKeyboard(.interactively)
+                    .refreshable { await VaultSyncCenter.shared.pullToRefresh() }
                     .onChange(of: assistant.messages) {
                         withAnimation(.easeOut(duration: 0.2)) { reader.scrollTo("bottom", anchor: .bottom) }
                     }

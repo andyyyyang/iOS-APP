@@ -519,7 +519,22 @@ actor VaultSyncEngine {
                 remoteFiles[path] = entry
                 count += 1
             } catch VaultError.conflict {
-                // 上傳時遠端剛好也改了：清掉紀錄，下次同步會當成衝突處理，兩份都保留
+                // 同一個檔案的另一次上傳（例如連續存檔的手寫筆記）先完成、記下了新版本：那是自己的修改，不是衝突，
+                // 以它的版本為準再上傳一次（內容已相同就不必）
+                if let current = state[path], current.etag != base?.etag {
+                    if let local = localFile(path), !hasLocalChanges(local, since: current) {
+                        continue
+                    }
+                    let retryStamp = stamp(path)
+                    if let latest = try? vault.read(path),
+                       let entry = try? await remote.write(path, data: latest, contentType: Self.contentType(for: path), condition: .ifMatch(current.etag), mtime: now()) {
+                        record(path, etag: entry.etag, hash: LocalVault.hash(latest), stamp: retryStamp, opened: true)
+                        remoteFiles[path] = entry
+                        count += 1
+                        continue
+                    }
+                }
+                // 上傳時遠端（其他裝置）剛好也改了：清掉紀錄，下次同步會當成衝突處理，兩份都保留
                 state[path] = nil
             }
         }
@@ -627,6 +642,13 @@ final class VaultSyncCenter {
         if done / 200 > previous / 200 { revision += 1 }
     }
 
+    /// 下拉同步：先把等著上傳的修改傳完，再完整同步一次，並更新 vault 索引（關聯、待辦、屬性）。
+    func pullToRefresh() async {
+        await flushPushes(timeout: 10)
+        await syncNow()
+        await VaultIndexStore.shared.refresh()
+    }
+
     /// 下載一個還沒在這台裝置上的檔案，回傳本機位置。
     func download(_ path: String) async throws -> URL {
         if vault.exists(path) {
@@ -647,14 +669,33 @@ final class VaultSyncCenter {
     }
 
     /// 編輯中的檔案存檔後呼叫：直接上傳這個檔案（編輯當下同步，不必等完整同步）。
+    /// 同一個檔案一次只上傳一個版本：上傳中又存檔時，等這次上傳完成再上傳最新的內容（不會帶著舊版本號上傳而變成衝突）。
     func fileDidChange(_ path: String) {
         revision += 1
         let path = LocalVault.normalize(path)
         pushes[path]?.cancel()
         pushes[path] = Task {
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, let client = VaultBackend.current() else { return }
+            guard !Task.isCancelled else { return }
             pushes[path] = nil
+            await runPush(path)
+        }
+    }
+
+    /// 正在上傳的檔案，以及上傳中又改過、完成後要再上傳一次的檔案。
+    private var pushing: Set<String> = []
+    private var pushAgain: Set<String> = []
+
+    private func runPush(_ path: String) async {
+        guard !pushing.contains(path) else {
+            pushAgain.insert(path)
+            return
+        }
+        pushing.insert(path)
+        defer { pushing.remove(path) }
+        repeat {
+            pushAgain.remove(path)
+            guard let client = VaultBackend.current() else { return }
             do {
                 if try await engine.push([path], remote: client) > 0 {
                     reportToServer([path])
@@ -662,7 +703,24 @@ final class VaultSyncCenter {
             } catch {
                 // 網路中斷等：下次完整同步會再上傳
                 scheduleSync(after: 30)
+                return
             }
+        } while pushAgain.contains(path)
+    }
+
+    /// 還有排隊或上傳中的檔案（進入背景前等它們完成）。
+    var hasPendingPushes: Bool { !pushes.isEmpty || !pushing.isEmpty }
+
+    /// 等排隊中的上傳完成（最多 `timeout` 秒）；進入背景時用。
+    func flushPushes(timeout: Double = 20) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        for (path, task) in pushes {
+            task.cancel()
+            pushes[path] = nil
+            await runPush(path)
+        }
+        while !pushing.isEmpty, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
         }
     }
 

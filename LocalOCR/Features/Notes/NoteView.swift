@@ -27,6 +27,9 @@ struct NoteView: View {
     @State private var header = NoteHeaderState()
     @State private var showsProperties = false
     @AppStorage(AISettings.noteButtonKey) private var showsAIButton = true
+    @AppStorage(NotesSettings.Key.limitsLineWidth) private var limitsLineWidth = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var contentWidth: CGFloat = 0
     @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
     @FocusState private var titleFocused: Bool
     private let sync = VaultSyncCenter.shared
@@ -109,14 +112,21 @@ struct NoteView: View {
                     meta: headerMeta,
                     actions: headerActions,
                     title: titleField
-                        .padding(.horizontal, NoteTextView.horizontalPadding)
+                        .padding(.horizontal, horizontalPadding)
                         .padding(.top, 6)
-                        .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
+                        .frame(maxWidth: limitsLineWidth ? NoteTextView.readableColumnWidth : .infinity, alignment: .leading)
                         .frame(maxWidth: .infinity),
                     onTapCompact: { controller.scrollToTop() }
                 )
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
+            .onChange(of: limitsLineWidth) { controller.relayout() }
         }
+    }
+
+    /// 與編輯器相同的左右留白（窄畫面 18、寬畫面 32）。
+    private var horizontalPadding: CGFloat {
+        NoteTextView.horizontalPadding(compact: sizeClass == .compact || (contentWidth > 0 && contentWidth < 500))
     }
 
     @ViewBuilder
@@ -125,9 +135,9 @@ struct NoteView: View {
             Text("開始書寫…　輸入 [[ 連到其他筆記，或按上方的 AI 請它幫忙")
                 .font(.body)
                 .foregroundStyle(DS.textTertiary)
-                .padding(.horizontal, NoteTextView.horizontalPadding)
+                .padding(.horizontal, horizontalPadding)
                 .padding(.top, header.barHeight + header.titleHeight + NoteTextView.topInset)
-                .frame(maxWidth: NoteTextView.columnWidth, alignment: .leading)
+                .frame(maxWidth: limitsLineWidth ? NoteTextView.readableColumnWidth : .infinity, alignment: .leading)
                 .frame(maxWidth: .infinity)
                 .allowsHitTesting(false)
         }

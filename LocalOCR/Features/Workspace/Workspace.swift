@@ -124,11 +124,13 @@ enum WorkspaceTab: Hashable, Identifiable {
     }
 }
 
-/// 左側欄的內容（功能列上方的三個按鈕）。
+/// 左側欄的內容（功能列上方的四個按鈕）。
 enum LeftPanelMode: String, CaseIterable, Identifiable {
     case files
     case search
     case tags
+    /// 業務快查：工具選單與固定的快速查詢框。
+    case tools
 
     var id: Self { self }
 
@@ -137,6 +139,7 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
         case .files: return "檔案"
         case .search: return "搜尋"
         case .tags: return "標籤"
+        case .tools: return "業務快查"
         }
     }
 
@@ -145,6 +148,7 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
         case .files: return "folder"
         case .search: return "magnifyingglass"
         case .tags: return "tag"
+        case .tools: return "truck.box"
         }
     }
 }

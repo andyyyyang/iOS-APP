@@ -5,6 +5,7 @@ struct NotesSettingsView: View {
     @AppStorage(NotesSettings.Key.defaultFolder) private var defaultFolder = ""
     @AppStorage(NotesSettings.Key.downloadPolicy) private var downloadPolicy = VaultDownloadPolicy.onDemand.rawValue
     @AppStorage(NotesSettings.Key.vaultName) private var vaultName = ""
+    @AppStorage(NotesSettings.Key.limitsLineWidth) private var limitsLineWidth = false
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
     @State private var sync = VaultSyncCenter.shared
@@ -42,6 +43,14 @@ struct NotesSettingsView: View {
             }
 
             StorageSettingsSection()
+
+            Section {
+                Toggle("限制行寬（易讀寬度）", isOn: $limitsLineWidth)
+            } header: {
+                Text("版面")
+            } footer: {
+                Text("關閉時筆記內容跟著畫面全寬自適應（表格與 Dataview 也會用滿寬度）；開啟時每行最寬約 760 點，在大螢幕上比較好讀。")
+            }
 
             Section {
                 LabeledContent("狀態") {

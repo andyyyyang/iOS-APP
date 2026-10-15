@@ -10,6 +10,7 @@ struct NotebookEditorView: View {
     var onPathChange: (String) -> Void = { _ in }
 
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var path = ""
     @State private var title = ""
     @State private var archive: NotebookArchive?
@@ -18,6 +19,8 @@ struct NotebookEditorView: View {
     @State private var revision = 0
     @State private var showsInspector = false
     @State private var saveTask: Task<Void, Never>?
+    /// 畫布回報、還沒寫進檔案的最新筆跡（離開時畫布可能已經不在，靠它保住最後幾筆）。
+    @State private var pendingDrawing: PKDrawing?
     @State private var isPublishing = false
     /// 有沒有還沒更新到 Obsidian 圖片的修改（沒改過就不必重新產生、上傳圖片）。
     @State private var hasUnpublishedChanges = false
@@ -65,7 +68,13 @@ struct NotebookEditorView: View {
             // 畫布還在時先取得最後一筆，再更新圖片與 Markdown
             captureDrawing()
             guard hasUnpublishedChanges else { return }
-            Task { await publish() }
+            BackgroundWork.run("notebook-publish") { await publishAndUpload() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // 切到其他 App、鎖定螢幕或被系統關閉前：立即存檔，並更新 Obsidian 中的圖片與 Markdown
+            guard phase != .active else { return }
+            captureDrawing()
+            if hasUnpublishedChanges { BackgroundWork.run("notebook-publish") { await publishAndUpload() } }
         }
     }
 
@@ -144,25 +153,27 @@ struct NotebookEditorView: View {
 
     private func scheduleSave(_ drawing: PKDrawing) {
         hasUnpublishedChanges = true
+        pendingDrawing = drawing
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
+            saveTask = nil
             archive?.pkDrawing = drawing
+            pendingDrawing = nil
             saveArchiveNow()
         }
     }
 
-    /// 取得畫布目前的筆跡；有還沒存檔的筆跡時立即存檔。
+    /// 取得畫布目前的筆跡（畫布已經不在時用最後回報的筆跡）；有還沒存檔的筆跡時立即存檔。
     private func captureDrawing() {
-        let pending = saveTask != nil
         saveTask?.cancel()
         saveTask = nil
-        if let drawing = handle.currentDrawing, var current = archive, drawing != current.pkDrawing {
-            current.pkDrawing = drawing
+        let latest = handle.currentDrawing ?? pendingDrawing
+        pendingDrawing = nil
+        if let latest, var current = archive, latest.dataRepresentation() != current.drawing {
+            current.pkDrawing = latest
             archive = current
-            saveArchiveNow()
-        } else if pending {
             saveArchiveNow()
         }
     }
@@ -171,7 +182,17 @@ struct NotebookEditorView: View {
         guard var current = archive else { return }
         current.updatedAt = Date()
         archive = current
-        try? NotebookFiles.saveArchive(current, notePath: path)
+        do {
+            try NotebookFiles.saveArchive(current, notePath: path)
+        } catch {
+            toast = "筆跡存檔失敗：\(error.localizedDescription)"
+        }
+    }
+
+    /// 離開筆記、切到其他 App 時：更新圖片與 Markdown，並等筆跡上傳完成（在背景時間內）。
+    private func publishAndUpload() async {
+        await publish()
+        await VaultSyncCenter.shared.flushPushes(timeout: 20)
     }
 
     /// 更新畫布圖片與 Markdown（離開、同步、AI 整理後）。

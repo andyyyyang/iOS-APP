@@ -18,7 +18,12 @@ struct ContentView: View {
             .onChange(of: scenePhase, initial: true) { _, phase in
                 switch phase {
                 case .active: VaultSyncCenter.shared.startLiveSync()
-                case .background: VaultSyncCenter.shared.stopLiveSync()
+                case .background:
+                    VaultSyncCenter.shared.stopLiveSync()
+                    // 進入背景前把剛存檔、還沒上傳的修改（例如手寫筆跡）傳完：向系統要一點背景時間
+                    if VaultSyncCenter.shared.hasPendingPushes {
+                        BackgroundWork.run("vault-upload") { await VaultSyncCenter.shared.flushPushes(timeout: 20) }
+                    }
                 default: break
                 }
             }

@@ -17,12 +17,19 @@ struct InkBlockEditorView: View {
     var onSaved: (InkEditRequest) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var block = InkBlock(height: InkBlock.minimumHeight, paper: NotesSettings.lastPaper, drawing: PKDrawing().dataRepresentation())
     @State private var handle = CanvasNotebookHandle()
     @State private var revision = 0
     @State private var didLoad = false
     @State private var loadFailed = false
     @State private var isSaving = false
+    /// 打開後寫過或改過紙張（取消時要確認）。
+    @State private var hasChanges = false
+    /// 新的區塊已經插入筆記（切到背景時先存過一次）。
+    @State private var embedded = false
+    @State private var confirmsDiscard = false
+    @State private var saveError: String?
 
     var body: some View {
         NavigationStack {
@@ -36,7 +43,7 @@ struct InkBlockEditorView: View {
                         paper: block.paper,
                         handle: handle,
                         revision: revision,
-                        onDrawingChange: { _ in }
+                        onDrawingChange: { _ in hasChanges = true }
                     )
                     .ignoresSafeArea(edges: .bottom)
                 } else {
@@ -47,7 +54,9 @@ struct InkBlockEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button("取消") {
+                        if hasChanges { confirmsDiscard = true } else { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -70,6 +79,20 @@ struct InkBlockEditorView: View {
                 }
             }
             .task { await load() }
+            .confirmationDialog("要捨棄這次的手寫嗎？", isPresented: $confirmsDiscard, titleVisibility: .visible) {
+                Button("儲存") { Task { await save() } }
+                Button("捨棄", role: .destructive) { dismiss() }
+            }
+            .alert("儲存失敗", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+                Button("好") { saveError = nil }
+            } message: {
+                Text(saveError ?? "")
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // 切到其他 App 或被系統關閉前先存一次（不關閉畫面）
+                guard phase == .background, hasChanges, didLoad, !loadFailed else { return }
+                BackgroundWork.run("ink-block") { _ = await persist() }
+            }
         }
         .interactiveDismissDisabled()
     }
@@ -103,12 +126,18 @@ struct InkBlockEditorView: View {
         captureDrawing()
         block.paper = paper
         NotesSettings.lastPaper = paper
+        hasChanges = true
         revision += 1
     }
 
     private func save() async {
         isSaving = true
         defer { isSaving = false }
+        if await persist() { dismiss() }
+    }
+
+    /// 寫入筆跡與圖片（新的區塊第一次存時插入筆記）；成功時回傳 true。
+    private func persist() async -> Bool {
         captureDrawing()
         block.height = InkBlock.fittedHeight(for: block.pkDrawing)
         let sync = VaultSyncCenter.shared
@@ -117,15 +146,28 @@ struct InkBlockEditorView: View {
         let image = await Task.detached(priority: .userInitiated) { InkFiles.image(for: block).pngData() }.value
         await sync.prepareOverwrite([InkFiles.dataPath(notePath: notePath, name: request.name), InkFiles.imagePath(notePath: notePath, name: request.name)])
         do {
+            guard let image else { throw InkSaveError.render }
             try vault.write(try JSONEncoder().encode(block), to: InkFiles.dataPath(notePath: notePath, name: request.name))
-            if let image {
-                try vault.write(image, to: InkFiles.imagePath(notePath: notePath, name: request.name))
+            try vault.write(image, to: InkFiles.imagePath(notePath: notePath, name: request.name))
+            sync.fileDidChange(InkFiles.dataPath(notePath: notePath, name: request.name))
+            sync.fileDidChange(InkFiles.imagePath(notePath: notePath, name: request.name))
+            sync.localDidChange()
+            if !request.isNew || !embedded {
+                onSaved(request)
+                embedded = true
             }
-            VaultSyncCenter.shared.localDidChange()
-            onSaved(request)
-            dismiss()
+            hasChanges = false
+            return true
         } catch {
             // 寫入本機失敗（空間不足等）：保留畫面讓使用者再試
+            saveError = error.localizedDescription
+            return false
         }
     }
+}
+
+private enum InkSaveError: LocalizedError {
+    case render
+
+    var errorDescription: String? { "無法產生手寫區塊的圖片，請再試一次。" }
 }

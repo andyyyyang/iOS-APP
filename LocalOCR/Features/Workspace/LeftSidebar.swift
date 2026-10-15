@@ -1,7 +1,7 @@
 import QuickLook
 import SwiftUI
 
-/// 左側欄：檔案樹、搜尋、標籤。
+/// 左側欄：檔案樹、搜尋、標籤、業務快查。
 struct LeftSidebar: View {
     @Environment(Workspace.self) private var workspace
 
@@ -11,6 +11,7 @@ struct LeftSidebar: View {
             case .files: FileExplorer()
             case .search: SearchPanel()
             case .tags: TagsPanel()
+            case .tools: ToolsPanel()
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -118,7 +119,7 @@ struct FileExplorer: View {
                 .padding(.bottom, 16)
             }
             .scrollIndicators(.hidden)
-            .refreshable { await sync.syncNow() }
+            .refreshable { await sync.pullToRefresh() }
         }
         .quickLookPreview($previewURL)
         .alert("新增資料夾", isPresented: Binding(get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })) {

@@ -16,6 +16,11 @@ final class MarkdownEditorController {
     fileprivate var onTextChange: ((String) -> Void)?
     fileprivate var restyle: (() -> Void)?
 
+    /// 版面設定改了（例如全寬／易讀寬度）：重新計算邊距並重排。
+    func relayout() {
+        textView?.setNeedsLayout()
+    }
+
     var cursorLocation: Int { textView?.selectedRange.location ?? 0 }
     var selectedRange: NSRange { textView?.selectedRange ?? NSRange(location: 0, length: 0) }
 
@@ -111,10 +116,14 @@ final class MarkdownEditorController {
 }
 
 /// 筆記編輯器的文字區（TextKit 1，方框、圓點、圖片等由 LiveMarkdownLayoutManager 畫出）。
-/// 內容欄最寬 760、左右 32；工作區不隨鍵盤縮放（版面才不會跑來跑去），所以由這裡依鍵盤蓋住的高度加大捲動範圍。
+/// 內容跟著畫面全寬自適應（設定中可限制在易讀的 760）；左右留白手機 18、平板 32。
+/// 工作區不隨鍵盤縮放（版面才不會跑來跑去），所以由這裡依鍵盤蓋住的高度加大捲動範圍。
 final class NoteTextView: UITextView {
-    static let columnWidth: CGFloat = 760
-    static let horizontalPadding: CGFloat = 32
+    static let readableColumnWidth: CGFloat = 760
+    /// 內容欄的最大寬度（全寬時不限制）。
+    static var columnWidth: CGFloat { NotesSettings.limitsLineWidth ? readableColumnWidth : .infinity }
+
+    static func horizontalPadding(compact: Bool) -> CGFloat { compact ? 18 : 32 }
     /// 與標題之間的距離（標題下緣的漸層淡出也在這段距離內）。
     static let topInset: CGFloat = 18
     static let bottomInset: CGFloat = 160
@@ -177,7 +186,8 @@ final class NoteTextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let side = max((bounds.width - Self.columnWidth) / 2, 0) + Self.horizontalPadding
+        let compact = traitCollection.horizontalSizeClass == .compact || bounds.width < 500
+        let side = max((bounds.width - Self.columnWidth) / 2, 0) + Self.horizontalPadding(compact: compact)
         let insets = UIEdgeInsets(top: Self.topInset + max(headerHeights.expanded - headerHeights.collapsed, 0), left: side, bottom: Self.bottomInset, right: side)
         if textContainerInset != insets {
             textContainerInset = insets
@@ -188,8 +198,10 @@ final class NoteTextView: UITextView {
             verticalScrollIndicatorInsets.top = headerHeights.collapsed
             if atTop { contentOffset.y = -headerHeights.collapsed }
         }
-        if abs(bounds.width - lastWidth) > 0.5 {
-            lastWidth = bounds.width
+        // 內容寬度變了（旋轉、側欄開關、全寬設定）：表格等依寬度排版的內容重新排
+        let contentWidth = bounds.width - insets.left - insets.right
+        if abs(contentWidth - lastWidth) > 0.5 {
+            lastWidth = contentWidth
             onWidthChange?()
         }
         prioritizeInteractionTap()
@@ -368,10 +380,13 @@ final class NoteTextView: UITextView {
         if let info = storage.attribute(.mdImage, at: index, effectiveRange: nil) as? MarkdownImageInfo {
             return .image(info.name)
         }
-        // 畫成格線表的表格：點到儲存格裡的連結就開啟，其他地方照常移動游標（顯示原始文字）
-        if let table = storage.attribute(.mdTable, at: index, effectiveRange: nil) as? MarkdownTableInfo {
-            let spacing = (storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle)?.paragraphSpacingBefore ?? 0
-            return table.link(at: CGPoint(x: inContainer.x - line.minX, y: inContainer.y - line.minY - spacing))
+        // 畫成格線表的表格：點到儲存格裡的連結就開啟，其他地方照常移動游標（顯示原始文字）。
+        // 表格資訊記在表格第一行的文字上；點在表格右側或下方時對到的是那一行結尾的換行，所以用整行來找
+        let tableLine = (storage.string as NSString).lineRange(for: NSRange(location: index, length: 0))
+        if let table = (storage.attribute(.mdTable, at: index, effectiveRange: nil)
+            ?? storage.attribute(.mdTable, at: tableLine.location, effectiveRange: nil)) as? MarkdownTableInfo {
+            let style = storage.attribute(.paragraphStyle, at: tableLine.location, effectiveRange: nil) as? NSParagraphStyle
+            return table.link(at: CGPoint(x: inContainer.x - line.minX, y: inContainer.y - line.minY - (style?.paragraphSpacingBefore ?? 0)))
         }
         guard !isEditingLine(containing: index) else { return nil }
         if let target = storage.attribute(.mdWikiLink, at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) as? String, hitRect(range, slop: 4) {
