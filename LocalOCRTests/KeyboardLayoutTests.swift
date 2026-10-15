@@ -28,21 +28,6 @@ final class KeyboardLayoutTests: XCTestCase {
         try await measure(window, focusing: textView, label: "note")
     }
 
-    /// 參考量測（不判定）：整個工作區放在不算鍵盤安全區域的容器裡時，鍵盤出現前後的差異。
-    func testProbeKeyboardIndependentHost() async throws {
-        try LocalVault.shared.writeText((1...80).map { "第 \($0) 行：鍵盤出現時版面不能動。" }.joined(separator: "\n"), to: notePath)
-        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
-        workspace.openNote(notePath)
-        let content = WorkspaceView()
-            .environment(workspace)
-            .environment(TemplateLibrary.shared)
-            .environment(ScanDraft())
-            .modelContainer(for: ScanRecord.self, inMemory: true)
-        let window = try host(KeyboardIndependentHost(content: content).ignoresSafeArea())
-        let textView = try await waitFor { Self.find(NoteTextView.self, in: window) }
-        try await measure(window, focusing: textView, label: "note-independent-host", asserts: false)
-    }
-
     func testSearchingInAToolPageDoesNotMoveTheWorkspace() async throws {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.open(.contacts)
@@ -53,7 +38,7 @@ final class KeyboardLayoutTests: XCTestCase {
 
     // MARK: - 量測
 
-    private func measure(_ window: UIWindow, focusing input: UIView, label: String, asserts: Bool = true) async throws {
+    private func measure(_ window: UIWindow, focusing input: UIView, label: String) async throws {
         try await Task.sleep(for: .milliseconds(800))
         let frameBefore = input.convert(input.bounds, to: window)
         let before = Self.render(window)
@@ -83,7 +68,6 @@ final class KeyboardLayoutTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        guard asserts else { return }
         XCTAssertEqual(frameAfter.minY, frameBefore.minY, accuracy: 1, "\(name)：鍵盤出現後輸入框的位置移動了 \(frameAfter.minY - frameBefore.minY) 點")
         XCTAssertLessThan(topChange, 0.02, "\(name)：鍵盤出現後頂部列的畫面變了 \(Int(topChange * 100))%（整個版面被推動）")
     }
