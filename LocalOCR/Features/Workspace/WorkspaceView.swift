@@ -30,6 +30,7 @@ struct WorkspaceView: View {
                     .zIndex(10)
             }
         }
+        .ignoresSafeArea(.keyboard)
         .animation(.easeOut(duration: 0.18), value: workspace.showsPalette)
         .background { KeyboardShortcuts() }
         .fullScreenCover(isPresented: $workspace.showsCamera) {
@@ -50,6 +51,20 @@ struct WorkspaceView: View {
         } message: {
             Text("同步後也會從 Obsidian 與其他裝置刪除。")
         }
+        // 同步會刪除很多檔案時先停下來問（以前要到設定按「仍要同步」，同步會一直失敗）
+        .alert(
+            "這次同步會刪除 \(sync.blockedDeletion?.total ?? 0) 個檔案",
+            isPresented: Binding(get: { sync.asksAboutDeletion }, set: { if !$0 { sync.asksAboutDeletion = false } })
+        ) {
+            Button("取消", role: .cancel) { sync.resolveMassDeletion(proceed: false) }
+            Button("仍要同步", role: .destructive) { sync.resolveMassDeletion(proceed: true) }
+        } message: {
+            Text(massDeletionMessage)
+        }
+        // 在其他地方（Obsidian）搬移或改名的筆記：開著的分頁跟著換到新位置
+        .onChange(of: sync.lastReport?.moves ?? []) { _, moves in
+            for move in moves { workspace.renameNote(from: move.from, to: move.to) }
+        }
         .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
         .onChange(of: sync.pendingFiles) { _, _ in Task { await store.reload() } }
         // 開著的筆記不會在按需模式整理空間時被移除
@@ -69,6 +84,14 @@ struct WorkspaceView: View {
             }
             if sync.isConfigured { await sync.syncNow() }
         }
+    }
+
+    private var massDeletionMessage: String {
+        guard let deletion = sync.blockedDeletion else { return "" }
+        var parts: [String] = []
+        if deletion.local > 0 { parts.append("這台裝置上 \(deletion.local) 個（Obsidian 或其他裝置已經刪除）") }
+        if deletion.remote > 0 { parts.append("雲端 \(deletion.remote) 個（這台裝置上已經刪除）") }
+        return parts.joined(separator: "、") + "。為了安全先停下來了；確定是你刪除的就按「仍要同步」。搬移到其他資料夾的檔案不算刪除。"
     }
 }
 

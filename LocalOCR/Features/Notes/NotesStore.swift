@@ -452,6 +452,22 @@ final class NotesStore {
         return target
     }
 
+    /// 搬到另一個資料夾（檔名不變，同名時加上編號）：同步時新位置上傳、舊位置從遠端刪除（算搬移，不算大量刪除）。
+    /// [[連結]] 依名稱解析，搬移後照樣連得到。
+    func move(_ path: String, toFolder folder: String) throws -> String {
+        let name = (path as NSString).lastPathComponent
+        guard (path as NSString).deletingLastPathComponent != folder else { return path }
+        var target = (folder.isEmpty ? "" : folder + "/") + name
+        let remotePaths = Set(VaultSyncCenter.shared.pendingFiles.map(\.path))
+        if vault.exists(target) || remotePaths.contains(LocalVault.normalize(target)) {
+            let ext = (name as NSString).pathExtension
+            target = uniquePath(folder: folder, title: (name as NSString).deletingPathExtension, extension: ext.isEmpty ? "md" : ext)
+        }
+        try vault.move(path, to: target)
+        changed()
+        return target
+    }
+
     func delete(_ path: String) throws {
         guard vault.exists(path) else {
             // 還沒下載的筆記：同步時直接從遠端刪除

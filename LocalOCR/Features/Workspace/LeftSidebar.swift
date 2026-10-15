@@ -89,6 +89,7 @@ struct FileExplorer: View {
     @State private var previewURL: URL?
     @State private var folderPrompt: String?
     @State private var folderName = ""
+    @State private var moving: NoteSummary?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -122,6 +123,10 @@ struct FileExplorer: View {
             .refreshable { await sync.pullToRefresh() }
         }
         .quickLookPreview($previewURL)
+        .sheet(item: $moving) { note in
+            MoveToFolderSheet(note: note) { folder in workspace.moveNote(note.path, toFolder: folder) }
+                .presentationDetents([.medium, .large])
+        }
         .alert("新增資料夾", isPresented: Binding(get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })) {
             TextField("名稱", text: $folderName)
             Button("取消", role: .cancel) {}
@@ -136,7 +141,9 @@ struct FileExplorer: View {
     private var subtitle: String {
         if !sync.isConfigured { return "尚未配對 · \(store.notes.count) 則筆記" }
         if sync.isSyncing { return sync.progress.map { "下載中 \($0.done)/\($0.total)" } ?? "同步中…" }
+        if sync.blockedDeletion != nil { return "等待確認 · \(store.notes.count) 則筆記" }
         if sync.lastError != nil { return "同步失敗 · \(store.notes.count) 則筆記" }
+        if !sync.failedFiles.isEmpty { return "\(sync.failedFiles.count) 個檔案沒有同步 · \(store.notes.count) 則筆記" }
         return "已同步 · \(store.notes.count) 則筆記"
     }
 
@@ -210,6 +217,9 @@ struct FileExplorer: View {
                 if let url = NotesSettings.obsidianURL(for: note.path) {
                     Link(destination: url) { Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app") }
                 }
+                if note.isLocal {
+                    Button { moving = note } label: { Label("搬移到…", systemImage: "folder") }
+                }
                 Button(role: .destructive) { workspace.pendingDelete = note } label: { Label("刪除", systemImage: "trash") }
             }
         case .file(let file):
@@ -249,6 +259,59 @@ struct FileExplorer: View {
     private func promptFolder(in parent: String) {
         folderName = ""
         folderPrompt = parent
+    }
+}
+
+/// 「搬移到」：選一個資料夾（可以搜尋）。
+private struct MoveToFolderSheet: View {
+    let note: NoteSummary
+    var onMove: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    private let store = NotesStore.shared
+
+    var body: some View {
+        NavigationStack {
+            List(folders, id: \.self) { folder in
+                Button {
+                    onMove(folder)
+                    dismiss()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: folder.isEmpty ? "tray" : "folder")
+                            .foregroundStyle(DS.textSecondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(folder.isEmpty ? "\(NotesStore.folderTitle(""))（最上層）" : NotesStore.folderTitle(folder))
+                                .foregroundStyle(DS.text)
+                            let parent = (folder as NSString).deletingLastPathComponent
+                            if !parent.isEmpty {
+                                Text(parent).font(.caption).foregroundStyle(DS.textTertiary)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        if folder == note.folder {
+                            Text("目前位置").font(.caption).foregroundStyle(DS.textTertiary)
+                        }
+                    }
+                }
+                .disabled(folder == note.folder)
+            }
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜尋資料夾")
+            .navigationTitle("搬移「\(note.title)」")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var folders: [String] {
+        let all = [""] + store.folders.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let text = query.trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(text) }
     }
 }
 

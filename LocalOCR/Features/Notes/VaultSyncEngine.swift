@@ -35,13 +35,16 @@ enum VaultDownloadPolicy: String, CaseIterable, Identifiable, Sendable {
 enum VaultSyncError: LocalizedError {
     case remoteLooksEmpty
     case tooManyDeletions(local: Int, remote: Int)
+    case uploadFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .remoteLooksEmpty:
             return "Railway 空間是空的，為了避免刪除這台裝置上的筆記，已停止同步。請確認 Obsidian 已上傳 vault。"
         case .tooManyDeletions(let local, let remote):
-            return "這次同步會刪除 \(local + remote) 個檔案，為了安全已停止。請確認後在設定中按「仍要同步」。"
+            return "這次同步會刪除 \(local + remote) 個檔案，為了安全已先停止，等你確認。"
+        case .uploadFailed(let detail):
+            return "上傳失敗：\(detail)"
         }
     }
 }
@@ -73,13 +76,22 @@ actor VaultSyncEngine {
     typealias ProgressHandler = @Sendable (_ done: Int, _ total: Int) -> Void
 
     struct Report: Equatable {
+        /// 在其他地方（Obsidian）搬移或改名的檔案：這台裝置上跟著搬，不重新下載。
+        struct Move: Equatable {
+            let from: String
+            let to: String
+        }
+
         var downloaded = 0
         var uploaded = 0
         var deleted = 0
         var conflicts: [String] = []
+        var moves: [Move] = []
+        /// 這次沒有同步成功的檔案（「路徑：原因」），其他檔案照常同步，下次會再試。
+        var failures: [String] = []
 
-        var changedLocalFiles: Bool { downloaded + deleted + conflicts.count > 0 }
-        var isEmpty: Bool { downloaded + uploaded + deleted + conflicts.count == 0 }
+        var changedLocalFiles: Bool { downloaded + deleted + conflicts.count + moves.count > 0 }
+        var isEmpty: Bool { downloaded + uploaded + deleted + conflicts.count + moves.count == 0 }
     }
 
     /// 不下載所有檔案時，仍一律下載的類型（其他類型在需要時才下載）。
@@ -193,6 +205,8 @@ actor VaultSyncEngine {
         var localDeletions: [String] = []
         var remoteDeletions: [(path: String, etag: String)] = []
         var droppedStates: [String] = []
+        /// 遠端新出現的檔案（依內容的 ETag）：用來認出在其他地方搬移或改名的檔案。
+        var newRemote: [String: [VaultEntry]] = [:]
 
         for path in Set(remoteByPath.keys).union(localByPath.keys).union(state.keys) {
             let remoteEntry = remoteByPath[path]
@@ -200,6 +214,7 @@ actor VaultSyncEngine {
             let base = state[path]
             switch (remoteEntry, local, base) {
             case let (remoteEntry?, nil, nil):
+                newRemote[Self.normalizeETag(remoteEntry.etag), default: []].append(remoteEntry)
                 if Self.shouldDownload(remoteEntry, policy: policy) { downloads.append(remoteEntry) }
             case let (remoteEntry?, _?, nil):
                 adoptions.append(remoteEntry)
@@ -233,16 +248,58 @@ actor VaultSyncEngine {
             }
         }
 
-        // 大量刪除保護
+        // 搬移：舊位置在遠端不見了（這台裝置上沒改過），同樣內容（ETag）出現在新位置——在 Obsidian 搬到資料夾或改名。
+        // 這台裝置上直接搬過去，不刪除、不重新下載，也不算進大量刪除保護
+        var moves: [(from: String, to: VaultEntry)] = []
+        localDeletions.removeAll { path in
+            guard let base = state[path], !base.etag.isEmpty, var candidates = newRemote[base.etag] else { return false }
+            candidates.removeAll { entry in base.size.map { $0 != entry.size } ?? false }
+            guard !candidates.isEmpty else { return false }
+            // 同名的優先（搬到別的資料夾），否則是改名
+            let name = (path as NSString).lastPathComponent
+            let index = candidates.firstIndex { ($0.path as NSString).lastPathComponent == name } ?? candidates.startIndex
+            let target = candidates[index]
+            newRemote[base.etag]?.removeAll { $0.path == target.path }
+            moves.append((path, target))
+            return true
+        }
+        let moveTargets = Set(moves.map { LocalVault.normalize($0.to.path) })
+        downloads.removeAll { moveTargets.contains(LocalVault.normalize($0.path)) }
+
+        // 大量刪除保護（在這台裝置上搬移或改名的檔案——舊位置刪除、同樣內容在新位置上傳——不算）
         let limit = max(10, state.count * 3 / 10)
-        if !allowMassDeletion && (localDeletions.count > limit || remoteDeletions.count > limit) {
-            throw VaultSyncError.tooManyDeletions(local: localDeletions.count, remote: remoteDeletions.count)
+        var remoteDeletionCount = remoteDeletions.count
+        if remoteDeletionCount > limit {
+            let newLocal = Set(uploads.filter { $0.base == nil }.compactMap { localHash($0.path) })
+            remoteDeletionCount -= remoteDeletions.filter { state[$0.path].map { newLocal.contains($0.hash) } ?? false }.count
+        }
+        if !allowMassDeletion && (localDeletions.count > limit || remoteDeletionCount > limit) {
+            throw VaultSyncError.tooManyDeletions(local: localDeletions.count, remote: remoteDeletionCount)
         }
 
         var report = Report()
         // 2. 執行
         for path in droppedStates {
             state[path] = nil
+        }
+        for (from, entry) in moves {
+            let to = LocalVault.normalize(entry.path)
+            do {
+                try vault.move(from, to: to)
+                vault.removeEmptyParents(of: from)
+                if var moved = state[from] {
+                    moved.etag = Self.normalizeETag(entry.etag)
+                    state[to] = moved
+                }
+                state[from] = nil
+                report.moves.append(Report.Move(from: from, to: to))
+            } catch {
+                // 搬不過去（例如目的地已有同名檔案）：舊位置照常刪除，新位置重新下載
+                try? vault.delete(from)
+                state[from] = nil
+                downloads.append(entry)
+                report.deleted += 1
+            }
         }
         for path in localDeletions {
             try? vault.delete(path)
@@ -260,6 +317,12 @@ actor VaultSyncEngine {
                 remoteFiles[path] = nil
             } catch VaultError.conflict {
                 // 刪除前遠端剛好被修改：下次同步會重新下載
+            } catch {
+                if Self.isConnectivity(error) {
+                    saveState()
+                    throw error
+                }
+                report.failures.append("\(path)：\(error.localizedDescription)")
             }
         }
         // 衝突（兩邊都改過）：內容其實相同就不是衝突；否則較新的版本留在原檔名，較舊的版本另存一份，
@@ -312,7 +375,16 @@ actor VaultSyncEngine {
             }
         }
         report.downloaded += try await download(downloads, from: remote, progress: progress)
-        report.uploaded += try await upload(uploads, to: remote)
+        let uploaded: (count: Int, failures: [String])
+        do {
+            uploaded = try await upload(uploads, to: remote)
+        } catch {
+            saveState()
+            saveIndex()
+            throw error
+        }
+        report.uploaded += uploaded.count
+        report.failures += uploaded.failures
         saveState()
         saveIndex()
         return report
@@ -357,10 +429,17 @@ actor VaultSyncEngine {
             items.append((path, base))
         }
         guard !items.isEmpty else { return 0 }
-        let count = try await upload(items, to: remote)
+        let result: (count: Int, failures: [String])
+        do {
+            result = try await upload(items, to: remote)
+        } catch {
+            saveState()
+            throw error
+        }
         saveState()
         saveIndex()
-        return count
+        if let failure = result.failures.first, result.count == 0 { throw VaultSyncError.uploadFailed(failure) }
+        return result.count
     }
 
     /// 打開中的檔案：遠端有新版本、這台裝置上沒有未上傳的修改時下載新版本（只列出它所在的資料夾）。
@@ -537,8 +616,10 @@ actor VaultSyncEngine {
         return count
     }
 
-    private func upload(_ items: [(path: String, base: FileState?)], to remote: any VaultRemote) async throws -> Int {
+    /// 上傳；一個檔案被拒絕不影響其他檔案，失敗的列在 `failures`，下次同步再試。網路中斷時整個停下來（丟出錯誤）。
+    private func upload(_ items: [(path: String, base: FileState?)], to remote: any VaultRemote) async throws -> (count: Int, failures: [String]) {
         var count = 0
+        var failures: [String] = []
         for (path, base) in items {
             let before = stamp(path)
             guard let data = try? vault.read(path) else { continue }
@@ -566,9 +647,23 @@ actor VaultSyncEngine {
                 }
                 // 上傳時遠端（其他裝置）剛好也改了：清掉紀錄，下次同步會當成衝突處理，兩份都保留
                 state[path] = nil
+            } catch {
+                if Self.isConnectivity(error) { throw error }
+                failures.append("\(path)：\(error.localizedDescription)")
             }
         }
-        return count
+        return (count, failures)
+    }
+
+    /// 網路中斷或工作被取消：整次同步停下來（下次再同步），不是個別檔案的問題。
+    static func isConnectivity(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        guard let error = error as? URLError else { return false }
+        let codes: Set<URLError.Code> = [
+            .notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost,
+            .cannotFindHost, .dnsLookupFailed, .cancelled, .dataNotAllowed, .internationalRoamingOff,
+        ]
+        return codes.contains(error.code)
     }
 
     private func saveState() {
@@ -610,6 +705,20 @@ final class VaultSyncCenter {
     var openPaths: Set<String> = []
     /// 與伺服器的即時推送連線中。
     private(set) var isLive = false
+    /// 上次同步沒有傳成功的檔案（「路徑：原因」）；其他檔案照常同步，下次同步會再試。
+    var failedFiles: [String] = []
+
+    /// 這次同步會刪除很多檔案、為了安全先停下來了：等使用者確認。
+    struct MassDeletion: Equatable {
+        let local: Int
+        let remote: Int
+        var total: Int { local + remote }
+    }
+
+    var blockedDeletion: MassDeletion?
+    /// 顯示「仍要同步嗎？」確認（WorkspaceView）。按了取消後自動同步不再跳出，下拉同步時才會再問。
+    var asksAboutDeletion = false
+    private var declinedDeletion = false
 
     let vault: LocalVault
     let engine: VaultSyncEngine
@@ -656,14 +765,32 @@ final class VaultSyncCenter {
             lastReport = report
             lastSyncedAt = Date()
             lastError = nil
+            failedFiles = report.failures
+            blockedDeletion = nil
+            asksAboutDeletion = false
             var changed = report.changedLocalFiles
             if policy == .onDemand, await engine.evictUnused(keeping: openPaths) > 0 { changed = true }
             if changed { revision += 1 }
             if report.uploaded + report.deleted > 0 { reportToServer([]) }
+        } catch VaultSyncError.tooManyDeletions(let local, let remote) {
+            lastError = VaultSyncError.tooManyDeletions(local: local, remote: remote).localizedDescription
+            blockedDeletion = MassDeletion(local: local, remote: remote)
+            if !declinedDeletion { asksAboutDeletion = true }
         } catch {
             lastError = error.localizedDescription
         }
         pendingFiles = await engine.pendingRemoteFiles()
+    }
+
+    /// 大量刪除的確認：「仍要同步」或「取消」。
+    func resolveMassDeletion(proceed: Bool) {
+        asksAboutDeletion = false
+        if proceed {
+            declinedDeletion = false
+            Task { await syncNow(allowMassDeletion: true) }
+        } else {
+            declinedDeletion = true
+        }
     }
 
     private func updateProgress(done: Int, total: Int) {
@@ -675,11 +802,20 @@ final class VaultSyncCenter {
     }
 
     /// 下拉同步：先把等著上傳的修改傳完，再完整同步一次，並更新 vault 索引（關聯、待辦、屬性）。
+    /// 同步在獨立的工作中進行：放開手指、下拉的轉圈結束（SwiftUI 取消 refreshable 的工作）時不會中斷同步。
+    /// 剛好有同步在進行時等它完成再同步一次（這次的修改才會被帶上）。
     func pullToRefresh() async {
-        NotificationCenter.default.post(name: .vaultWillSync, object: nil)
-        await flushPushes(timeout: 10)
-        await syncNow()
-        await VaultIndexStore.shared.refresh()
+        declinedDeletion = false
+        await Task { @MainActor in
+            NotificationCenter.default.post(name: .vaultWillSync, object: nil)
+            await flushPushes(timeout: 10)
+            let deadline = Date().addingTimeInterval(60)
+            while isSyncing, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            await syncNow()
+            await VaultIndexStore.shared.refresh()
+        }.value
     }
 
     /// 下載一個還沒在這台裝置上的檔案，回傳本機位置。
@@ -917,6 +1053,10 @@ final class VaultSyncCenter {
         guard needsFullSync else { return }
         if isSyncing {
             scheduleSync(after: 2)
+        } else if result.changes.contains(where: { $0.op == "delete" }) {
+            // 刪除通常是搬移或改名（Obsidian 的 Remotely Save 上傳新位置、刪除舊位置）：等一下讓兩邊都到齊，
+            // 同步時才認得出是搬移（這台裝置上跟著搬），而不是刪除後再下載
+            scheduleSync(after: 4)
         } else {
             await syncNow()
         }

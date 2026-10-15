@@ -73,13 +73,23 @@ struct NotesSettingsView: View {
                         .font(.footnote)
                 }
                 if let report = sync.lastReport, !report.isEmpty {
-                    Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)（兩份都保留）")")
+                    Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.moves.isEmpty ? "" : "、搬移 \(report.moves.count)")\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)（兩份都保留）")")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+                if !sync.failedFiles.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(sync.failedFiles.count) 個檔案沒有同步（其他檔案已同步，下次會再試）")
+                            .foregroundStyle(.orange)
+                        ForEach(sync.failedFiles.prefix(5), id: \.self) { failure in
+                            Text(failure).foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.footnote)
+                }
                 Button("立即同步") { Task { await sync.syncNow() } }
                     .disabled(!sync.isConfigured || sync.isSyncing)
-                if sync.lastError?.contains("為了安全已停止") ?? false {
+                if sync.blockedDeletion != nil {
                     Button("仍要同步（會刪除檔案）", role: .destructive) {
                         Task { await sync.syncNow(allowMassDeletion: true) }
                     }

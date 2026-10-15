@@ -509,6 +509,16 @@ final class Workspace {
         }
     }
 
+    /// 側欄的「搬移到」：搬到另一個資料夾，開著的分頁跟著換到新位置。
+    func moveNote(_ path: String, toFolder folder: String) {
+        guard let target = try? store.move(path, toFolder: folder), target != path else { return }
+        renameNote(from: path, to: target)
+        if !folder.isEmpty, !expandedFolders.contains(folder) {
+            expandedFolders.insert(folder)
+            defaults.set(Array(expandedFolders), forKey: Key.expanded)
+        }
+    }
+
     func delete(_ note: NoteSummary) {
         try? store.delete(note.path)
         close(.note(note.path))

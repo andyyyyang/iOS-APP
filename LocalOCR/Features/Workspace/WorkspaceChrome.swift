@@ -262,7 +262,10 @@ struct SyncIndicator: View {
 
     var body: some View {
         Button {
-            if sync.isConfigured {
+            if sync.blockedDeletion != nil {
+                // 同步因為會刪除很多檔案而停下來了：再問一次要不要繼續
+                sync.asksAboutDeletion = true
+            } else if sync.isConfigured {
                 Task { await sync.syncNow() }
             } else {
                 workspace.showsPairing = true
@@ -292,6 +295,7 @@ struct SyncIndicator: View {
         if !sync.isConfigured { return "與 Obsidian 配對" }
         if sync.isSyncing { return sync.progress.map { "下載中 \($0.done)/\($0.total)" } ?? "同步中" }
         if let error = sync.lastError { return error }
+        if let failed = sync.failedFiles.first { return "\(sync.failedFiles.count) 個檔案沒有同步（下次會再試）：\(failed)" }
         if let date = sync.lastSyncedAt { return "已同步 \(date.formatted(.relative(presentation: .named)))，點一下立即同步" }
         return "立即同步"
     }
@@ -341,11 +345,15 @@ struct WorkspaceTabContent: View {
         case .start:
             AssistantHome()
         case .note(let path):
+            // NavigationStack 裡的內容自己又會避開鍵盤（外層的 ignoresSafeArea 管不到）：筆記跟著縮短、整個往上推。
+            // 這裡也忽略鍵盤，編輯器自己依鍵盤高度調整捲動範圍
             NavigationStack {
                 NoteDetailRouter(path: path)
                     .background(DS.pane)
                     .toolbarBackground(DS.pane, for: .navigationBar)
+                    .ignoresSafeArea(.keyboard)
             }
+            .ignoresSafeArea(.keyboard)
         case .folder(let path):
             FolderPage(folder: path)
         case .graph:

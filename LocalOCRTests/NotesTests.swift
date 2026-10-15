@@ -656,6 +656,22 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
         lock.withLock { files[path] = nil }
     }
 
+    /// 在 Obsidian 搬移或改名（Remotely Save 上傳新位置、刪除舊位置）：內容一樣，S3 的 ETag（MD5）也一樣。
+    func move(_ path: String, to destination: String) {
+        lock.withLock {
+            files[destination] = files.removeValue(forKey: path)
+            mtimes[destination] = mtimes.removeValue(forKey: path)
+        }
+    }
+
+    /// 上傳時伺服器拒絕的檔案（模擬檔案太大、網路中斷）。
+    var rejectedWrites: Set<String> {
+        get { lock.withLock { rejected } }
+        set { lock.withLock { rejected = newValue } }
+    }
+
+    private var rejected: Set<String> = []
+
     func text(_ path: String) -> String? {
         lock.withLock { files[path].map { String(decoding: $0.data, as: UTF8.self) } }
     }
@@ -680,6 +696,7 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
 
     func write(_ path: String, data: Data, contentType: String, condition: VaultClient.WriteCondition, mtime: Date) async throws -> VaultEntry {
         try lock.withLock {
+            if rejected.contains(path) { throw URLError(.cannotParseResponse) }
             switch condition {
             case .none: break
             case .ifMatch(let etag):
@@ -1056,6 +1073,77 @@ final class VaultSyncEngineTests: XCTestCase {
         XCTAssertTrue(vault.exists("n0.md"), "停止時不刪任何檔案")
         let report = try await engine.sync(remote: remote, allowMassDeletion: true)
         XCTAssertEqual(report.deleted, 15)
+    }
+
+    func testFilesMovedInObsidianAreMovedNotDeleted() async throws {
+        for index in 0..<20 { remote.put("n\(index).md", "筆記 \(index)") }
+        _ = try await engine.sync(remote: remote)
+        // 在 Obsidian 的側欄把 15 個檔案拖到資料夾裡：舊位置不見、同樣內容出現在新位置
+        for index in 0..<15 { remote.move("n\(index).md", to: "專案/n\(index).md") }
+        remote.move("n15.md", to: "改名.md")
+
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.moves.count, 16, "搬移不算刪除，不會觸發大量刪除保護")
+        XCTAssertEqual(report.deleted, 0)
+        XCTAssertEqual(report.downloaded, 0, "這台裝置上直接搬過去，不重新下載")
+        XCTAssertTrue(report.moves.contains(.init(from: "n3.md", to: "專案/n3.md")))
+        XCTAssertTrue(report.moves.contains(.init(from: "n15.md", to: "改名.md")))
+        XCTAssertFalse(vault.exists("n3.md"))
+        XCTAssertEqual(vault.readText("專案/n3.md"), "筆記 3")
+        XCTAssertEqual(vault.readText("改名.md"), "筆記 15")
+        XCTAssertTrue(remote.writes.isEmpty, "不會把搬過去的檔案再上傳")
+        let again = try await engine.sync(remote: remote)
+        XCTAssertTrue(again.isEmpty)
+
+        // 搬過去之後在 iPad 上編輯：照常上傳到新位置
+        try vault.writeText("改過", to: "專案/n3.md")
+        let edit = try await engine.sync(remote: remote)
+        XCTAssertEqual(edit.uploaded, 1)
+        XCTAssertEqual(remote.text("專案/n3.md"), "改過")
+    }
+
+    func testMovedFileEditedOnThisDeviceIsKept() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        remote.move("a.md", to: "資料夾/a.md")
+        try vault.writeText("iPad 改過", to: "a.md")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.moves.isEmpty, "這台裝置上改過的檔案不跟著搬，也不會刪除")
+        XCTAssertEqual(vault.readText("a.md"), "iPad 改過")
+        XCTAssertEqual(remote.text("a.md"), "iPad 改過")
+        XCTAssertEqual(vault.readText("資料夾/a.md"), "v1")
+    }
+
+    func testMovesInTheAppDoNotTriggerMassDeletionProtection() async throws {
+        for index in 0..<20 { remote.put("n\(index).md", "筆記 \(index)") }
+        _ = try await engine.sync(remote: remote)
+        for index in 0..<15 { try vault.move("n\(index).md", to: "封存/n\(index).md") }
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.uploaded, 15)
+        XCTAssertEqual(report.deleted, 15)
+        XCTAssertEqual(remote.text("封存/n0.md"), "筆記 0")
+        XCTAssertNil(remote.text("n0.md"))
+    }
+
+    func testOneFailedUploadDoesNotFailTheWholeSync() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        remote.rejectedWrites = ["大檔.pdf"]
+        try vault.writeText("PDF", to: "大檔.pdf")
+        try vault.writeText("v2", to: "a.md")
+        remote.put("b.md", "新筆記")
+
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.failures.count, 1)
+        XCTAssertTrue(report.failures[0].hasPrefix("大檔.pdf"))
+        XCTAssertEqual(remote.text("a.md"), "v2", "其他檔案照常上傳")
+        XCTAssertEqual(vault.readText("b.md"), "新筆記", "也照常下載")
+
+        remote.rejectedWrites = []
+        let retry = try await engine.sync(remote: remote)
+        XCTAssertEqual(retry.uploaded, 1, "下次同步再試")
+        XCTAssertTrue(retry.failures.isEmpty)
+        XCTAssertEqual(remote.text("大檔.pdf"), "PDF")
     }
 
     func testStatePersistsAcrossLaunches() async throws {
