@@ -66,6 +66,26 @@ final class KeyboardLayoutTests: XCTestCase {
         try await measure(appWindow, focusing: input, label: "app-window-\(type(of: input))", checksInput: false)
     }
 
+    /// 首頁的 AI 輸入列整個在 Home 指示條上面（工作區的內容延伸到指示條下面，輸入列要自己讓開）。
+    func testAssistantInputStaysAboveTheHomeIndicator() async throws {
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
+        workspace.open(.start)
+        let window = try host(workspace)
+        _ = try await waitFor { Self.lowestTextView(in: window) }
+        try await Task.sleep(for: .milliseconds(800))
+        let input = try XCTUnwrap(Self.lowestTextView(in: window))
+        let frame = input.convert(input.bounds, to: window)
+        let safeBottom = window.bounds.maxY - window.safeAreaInsets.bottom
+        let name = "assistant-input-\(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone")"
+        print("[probe] \(name): window \(window.bounds.size) safe bottom \(safeBottom) input \(frame)")
+        let attachment = XCTAttachment(image: Self.render(window))
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        // 輸入框下面還有一排 34 點高的按鈕
+        XCTAssertLessThanOrEqual(frame.maxY + 34, safeBottom + 1, "\(name)：輸入列底部（\(Int(frame.maxY + 34))）超出安全區域（\(Int(safeBottom))），被 Home 指示條蓋住")
+    }
+
     /// iPad 橫向打開鍵盤後，鍵盤上方只剩約 450 點（台前調度的小視窗更矮）。版面中只要有固定高度比這高的內容
     /// （例如一整排固定的按鈕），SwiftUI 就會把整個版面置中排版，頂部列跟著往上推。各種畫面都要放得進 320 點高。
     func testWorkspaceFitsInAShortSpace() throws {
@@ -174,6 +194,17 @@ final class KeyboardLayoutTests: XCTestCase {
             if let match = find(type, in: subview) { return match }
         }
         return nil
+    }
+
+    /// 畫面最下面的輸入框（首頁的 AI 輸入框）。
+    static func lowestTextView(in window: UIWindow) -> UIView? {
+        var found: [UIView] = []
+        func collect(_ view: UIView) {
+            if view is UITextView || view is UITextField, !view.isHidden, view.window != nil { found.append(view) }
+            view.subviews.forEach(collect)
+        }
+        collect(window)
+        return found.max { $0.convert($0.bounds, to: window).maxY < $1.convert($1.bounds, to: window).maxY }
     }
 
     static func render(_ window: UIWindow) -> UIImage {

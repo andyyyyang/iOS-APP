@@ -7,11 +7,13 @@ struct AssistantHome: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var assistant = KnowledgeAssistant.shared
-    /// 切換 AI 執行位置後重畫狀態列。
+    /// 切換 AI 執行位置後重畫輸入列上的標示。
     @State private var engineRevision = 0
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
     @State private var keyboard = KeyboardFrame.shared
+    /// 視窗底部的安全區域（Home 指示條）。
+    @State private var windowBottom: CGFloat = 0
     @State private var draft = ""
     @State private var notice: String?
     @State private var folderName = ""
@@ -64,12 +66,14 @@ struct AssistantHome: View {
                 }
                 inputBar
                     .padding(.horizontal, gutter)
-                    .padding(.bottom, overlap > 0 ? overlap + 8 : (isCompact ? 12 : 18))
+                    .padding(.bottom, inputBottomPadding(overlap: overlap))
                     .frame(maxWidth: 800)
                     .frame(maxWidth: .infinity)
             }
             .animation(.easeOut(duration: 0.25), value: overlap)
         }
+        // 工作區的內容延伸到 Home 指示條下面（SwiftUI 在這裡讀不到底部安全區域），輸入列要自己讓開
+        .background(WindowInsetsReader { windowBottom = $0.bottom })
         .task {
             if sync.isConfigured { await assistant.prepare() }
         }
@@ -163,32 +167,7 @@ struct AssistantHome: View {
                 }
                 .buttonStyle(.plain)
             }
-            if assistant.cloudAvailable || AIPrivacy.localOnly {
-                // 點一下切換：只用裝置端，或依預算交給雲端
-                Menu {
-                    Button {
-                        AIPrivacy.localOnly = true
-                        engineRevision += 1
-                    } label: {
-                        Label("只使用裝置端模型", systemImage: AIPrivacy.localOnly ? "checkmark" : "iphone")
-                    }
-                    Divider()
-                    ForEach(AssistantEngineMode.budgets) { mode in
-                        Button {
-                            AIPrivacy.localOnly = false
-                            UserDefaults.standard.set(mode.rawValue, forKey: AssistantEngineMode.key)
-                            engineRevision += 1
-                        } label: {
-                            Label(mode.title, systemImage: !AIPrivacy.localOnly && AssistantEngineMode.current == mode ? "checkmark" : "cloud")
-                        }
-                    }
-                } label: {
-                    let mode = AssistantEngineMode.current
-                    statusLine(mode == .device ? "iphone" : "cloud", mode == .device ? "只使用裝置端模型（不用雲端 AI 與 Jev）" : "預算\(mode.shortTitle)：Jev 依難度自動選裝置端或雲端模型", tint: DS.textSecondary)
-                        .id(engineRevision)
-                }
-                .buttonStyle(.plain)
-            }
+            // AI 執行位置（裝置端／雲端預算）在輸入列上切換
             if VaultBackend.storage == .webdav {
                 statusLine("externaldrive.badge.icloud", "AI 搜尋的是 LocalOCR 伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
             }
@@ -333,9 +312,11 @@ struct AssistantHome: View {
 
     // MARK: 輸入列
 
+    private static let inputShape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+
+    /// 上面是輸入框（整個寬度），下面一排是新增、AI 執行位置與送出。
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            createMenu
+        VStack(alignment: .leading, spacing: 0) {
             TextField("問問題，或請 AI 整理、修改筆記", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .font(.body)
@@ -343,33 +324,116 @@ struct AssistantHome: View {
                 .focused($inputFocused)
                 .submitLabel(.send)
                 .onSubmit { send(draft) }
-                .padding(.vertical, 10)
-            Button {
-                if assistant.isWorking {
-                    assistant.stop()
-                } else {
-                    send(draft)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
+            HStack(spacing: 8) {
+                createMenu
+                if showsEngineMenu {
+                    engineChip
                 }
-            } label: {
-                Image(systemName: assistant.isWorking ? "stop.fill" : "arrow.up")
-                    .font(.system(size: assistant.isWorking ? 13 : 16, weight: .semibold))
-                    .foregroundStyle(DS.onPrimary)
-                    .frame(width: 36, height: 36)
-                    .background(DS.primary.opacity(canSend || assistant.isWorking ? 1 : 0.3), in: Circle())
+                Spacer(minLength: 0)
+                sendButton
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend && !assistant.isWorking)
-            .padding(.bottom, 4)
-            .accessibilityLabel(assistant.isWorking ? "停止" : "送出")
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
         }
-        .padding(.leading, 6)
-        .padding(.trailing, 6)
-        .background(DS.card, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+        .background {
+            // 點輸入列的空白處也能開始輸入
+            Self.inputShape
+                .fill(DS.card)
+                .shadow(color: .black.opacity(0.08), radius: 14, y: 4)
+                .onTapGesture { inputFocused = true }
+        }
+        .overlay {
+            Self.inputShape
+                .strokeBorder(inputFocused ? DS.textTertiary.opacity(0.7) : DS.cardBorder, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .animation(.easeOut(duration: 0.15), value: inputFocused)
+    }
+
+    /// 鍵盤出現時貼在鍵盤上方；否則在 Home 指示條上面（沒有指示條的裝置留一點邊）。
+    private func inputBottomPadding(overlap: CGFloat) -> CGFloat {
+        if overlap > 0 { return overlap + 8 }
+        return max(windowBottom + 4, isCompact ? 12 : 18)
+    }
+
+    private var sendButton: some View {
+        let active = canSend || assistant.isWorking
+        return Button {
+            if assistant.isWorking {
+                assistant.stop()
+            } else {
+                send(draft)
+            }
+        } label: {
+            Image(systemName: assistant.isWorking ? "stop.fill" : "arrow.up")
+                .font(.system(size: assistant.isWorking ? 12 : 15, weight: .bold))
+                .foregroundStyle(active ? DS.onPrimary : DS.textTertiary)
+                .frame(width: 34, height: 34)
+                .background(active ? DS.primary : DS.control, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!active)
+        .animation(.easeOut(duration: 0.15), value: active)
+        .accessibilityLabel(assistant.isWorking ? "停止" : "送出")
     }
 
     private var canSend: Bool {
         !assistant.isWorking && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var showsEngineMenu: Bool {
+        assistant.cloudAvailable || AIPrivacy.localOnly
+    }
+
+    /// 只用裝置端，或依預算交給雲端（Jev 依難度選模型）。
+    @ViewBuilder
+    private var engineChoices: some View {
+        Button {
+            AIPrivacy.localOnly = true
+            engineRevision += 1
+        } label: {
+            Label("只使用裝置端模型", systemImage: AIPrivacy.localOnly ? "checkmark" : "iphone")
+        }
+        Divider()
+        ForEach(AssistantEngineMode.budgets) { mode in
+            Button {
+                AIPrivacy.localOnly = false
+                UserDefaults.standard.set(mode.rawValue, forKey: AssistantEngineMode.key)
+                engineRevision += 1
+            } label: {
+                Label(mode.title, systemImage: !AIPrivacy.localOnly && AssistantEngineMode.current == mode ? "checkmark" : "cloud")
+            }
+        }
+    }
+
+    /// 輸入列上的 AI 執行位置：對話中也看得到、點一下就能切換。
+    private var engineChip: some View {
+        Menu {
+            engineChoices
+        } label: {
+            let mode = AssistantEngineMode.current
+            HStack(spacing: 5) {
+                Image(systemName: mode == .device ? "iphone" : "cloud")
+                    .font(.system(size: 12, weight: .medium))
+                Text(mode == .device ? "裝置端" : "預算：\(mode.shortTitle)")
+                    .font(.footnote.weight(.medium))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(DS.textTertiary)
+            }
+            .foregroundStyle(DS.textSecondary)
+            .padding(.horizontal, 11)
+            .frame(height: 34)
+            .background(DS.control, in: Capsule())
+            .contentShape(Capsule())
+            .id(engineRevision)
+        }
+        .disabled(assistant.isWorking)
+        .accessibilityLabel("AI 執行位置")
     }
 
     /// 原本首頁浮動工具列的新增動作。
@@ -394,12 +458,12 @@ struct AssistantHome: View {
             Button { Task { await sync.syncNow() } } label: { Label("立即同步", systemImage: "arrow.triangle.2.circlepath") }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(DS.text)
-                .frame(width: 36, height: 36)
-                .background(DS.control, in: Circle())
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(DS.textSecondary)
+                .frame(width: 34, height: 34)
+                .overlay(Circle().strokeBorder(DS.textTertiary.opacity(0.45), lineWidth: 1))
+                .contentShape(Circle())
         }
-        .padding(.bottom, 4)
         .accessibilityLabel("新增")
     }
 
@@ -762,5 +826,49 @@ final class KeyboardFrame {
     func overlap(with rect: CGRect) -> CGFloat {
         guard !frame.isNull else { return 0 }
         return max(0, rect.maxY - frame.minY)
+    }
+}
+
+/// 讀視窗的安全區域。工作區忽略了底部安全區域（內容延伸到 Home 指示條下面），裡面的畫面從 SwiftUI 讀到的是 0；
+/// 旋轉、分割畫面時會再回報。
+struct WindowInsetsReader: UIViewRepresentable {
+    var onChange: (UIEdgeInsets) -> Void
+
+    func makeUIView(context: Context) -> Probe {
+        let view = Probe()
+        view.isUserInteractionEnabled = false
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ view: Probe, context: Context) {
+        view.onChange = onChange
+    }
+
+    final class Probe: UIView {
+        var onChange: ((UIEdgeInsets) -> Void)?
+        private var reported: UIEdgeInsets?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            report()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            report()
+        }
+
+        override func safeAreaInsetsDidChange() {
+            super.safeAreaInsetsDidChange()
+            report()
+        }
+
+        private func report() {
+            guard let insets = window?.safeAreaInsets, insets != reported else { return }
+            reported = insets
+            // 在版面計算中途，下一輪再更新畫面
+            DispatchQueue.main.async { [weak self] in self?.onChange?(insets) }
+        }
     }
 }

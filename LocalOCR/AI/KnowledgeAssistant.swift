@@ -476,6 +476,10 @@ final class KnowledgeAssistant {
                     if let answer = state.answer, case .narration(let text)? = message.steps.last, text == answer {
                         message.steps.removeLast()
                     }
+                    // 失敗原因會寫在回答裡，最後一個同樣內容的錯誤步驟不要重複顯示
+                    if state.status != "completed", let error = state.error, case .failed(let text)? = message.steps.last, text == error {
+                        message.steps.removeLast()
+                    }
                 }
                 switch state.status {
                 case "completed":
