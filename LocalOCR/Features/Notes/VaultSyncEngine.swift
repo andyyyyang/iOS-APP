@@ -485,7 +485,8 @@ actor VaultSyncEngine {
     static func isRegenerated(_ path: String) -> Bool {
         let name = (path as NSString).lastPathComponent.lowercased()
         guard name.hasSuffix(".png") else { return false }
-        return name.hasPrefix("ink-") || (name.hasPrefix("nb-") && name.range(of: #"-p\d+\.png$"#, options: .regularExpression) != nil)
+        return name.hasPrefix("ink-") || name.hasPrefix(JournalNotebook.idPrefix)
+            || (name.hasPrefix("nb-") && name.range(of: #"-p\d+\.png$"#, options: .regularExpression) != nil)
     }
 
     /// App 要整個重新產生的檔案（例如手寫筆記的圖片），這台裝置上可能沒有：先記下遠端目前的版本，

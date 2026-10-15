@@ -11,6 +11,7 @@ struct CreatePalette: View {
         FloatingPalette {
             PaletteButton(title: "新增筆記", glyph: "T", pastel: .lavender) { workspace.newTextNote() }
             PaletteButton(title: "新增手寫筆記", systemImage: "pencil", pastel: .sky) { workspace.newNotebook() }
+            PaletteButton(title: "新增日誌筆記本", systemImage: "book.closed", pastel: .lavender) { workspace.newJournal() }
             PaletteButton(title: "新增待辦清單", systemImage: "checkmark.square", pastel: .butter) { workspace.newTaskNote() }
             PaletteButton(title: "新增資料夾", systemImage: "folder", pastel: .blush) {
                 folderName = ""
@@ -71,7 +72,7 @@ struct NoteCard: View {
                         .frame(width: 30, height: 30)
                 } else {
                     CircleIcon(
-                        systemImage: note.isNotebook ? "pencil" : "doc.text",
+                        systemImage: note.isJournal ? "book.closed" : (note.isNotebook ? "pencil" : "doc.text"),
                         fill: featured ? DS.card : DS.Pastel.stable(for: note.path).color
                     )
                 }

@@ -101,6 +101,7 @@ struct FileExplorer: View {
                 Menu {
                     Button { workspace.newTextNote(in: "") } label: { Label("新增筆記", systemImage: "square.and.pencil") }
                     Button { workspace.newNotebook(in: "") } label: { Label("新增手寫筆記", systemImage: "pencil") }
+                    Button { workspace.newJournal() } label: { Label("新增日誌筆記本", systemImage: "book.closed") }
                     Button { promptFolder(in: "") } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 } label: {
                     SmallBoxButtonLabel(systemImage: "plus")
@@ -202,6 +203,7 @@ struct FileExplorer: View {
             .contextMenu {
                 Button { workspace.newTextNote(in: folder) } label: { Label("新增筆記", systemImage: "square.and.pencil") }
                 Button { workspace.newNotebook(in: folder) } label: { Label("新增手寫筆記", systemImage: "pencil") }
+                Button { workspace.newJournal(in: folder) } label: { Label("新增日誌筆記本", systemImage: "book.closed") }
                 Button { promptFolder(in: folder) } label: { Label("新增資料夾", systemImage: "folder.badge.plus") }
                 Divider()
                 Button { workspace.open(.folder(folder)) } label: { Label("在分頁中開啟", systemImage: "rectangle.on.rectangle") }
@@ -216,7 +218,7 @@ struct FileExplorer: View {
             let selected = workspace.activeNotePath == note.path
             TreeRow(depth: row.depth, isSelected: selected) {
                 Color.clear.frame(width: 10)
-                Image(systemName: note.isNotebook ? "pencil" : "doc")
+                Image(systemName: note.isJournal ? "book.closed" : (note.isNotebook ? "pencil" : "doc"))
                     .font(.system(size: 12))
                     .foregroundStyle(selected ? DS.text : DS.textTertiary)
                 Text(note.title)
@@ -226,7 +228,7 @@ struct FileExplorer: View {
                 workspace.openNote(note.path)
             }
             .draggable(TreeDrag.payload(note.path)) {
-                TreeDragPreview(systemImage: note.isNotebook ? "pencil" : "doc", title: note.title)
+                TreeDragPreview(systemImage: note.isJournal ? "book.closed" : (note.isNotebook ? "pencil" : "doc"), title: note.title)
             }
             // 拖到筆記上：搬到這則筆記所在的資料夾（同 Obsidian）
             .dropDestination(for: String.self) { items, _ in

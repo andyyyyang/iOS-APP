@@ -433,7 +433,9 @@ struct NoteDetailRouter: View {
         if isDownloaded || LocalVault.shared.exists(path) {
             let summary = NotesStore.shared.notes.first { $0.path == path && $0.isLocal }
                 ?? NotesStore.summarize(path: path, mtime: Date(), text: LocalVault.shared.readText(path) ?? "")
-            if let id = summary.notebookID {
+            if let id = summary.notebookID, id.hasPrefix(JournalNotebook.idPrefix) {
+                JournalNotebookView(initialPath: path, notebookID: id, onPathChange: { workspace.renameNote(from: path, to: $0) })
+            } else if let id = summary.notebookID {
                 NotebookEditorView(initialPath: path, notebookID: id, onPathChange: { workspace.renameNote(from: path, to: $0) })
             } else if !workspace.sourceNotes.contains(path), LogisticsLogic.isToolNote(path: path, text: LocalVault.shared.readText(path)) {
                 // 電腦上的「物流追蹤中心」dataviewjs 工具（要用 Python）：在 App 中開原生的物流追蹤

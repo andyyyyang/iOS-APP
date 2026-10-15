@@ -156,7 +156,7 @@ struct CommandPalette: View {
             id: "note:" + note.path,
             title: note.title,
             detail: note.folder.isEmpty ? "最上層" : note.folder,
-            systemImage: note.isNotebook ? "pencil" : "doc.text",
+            systemImage: note.isJournal ? "book.closed" : (note.isNotebook ? "pencil" : "doc.text"),
             isCommand: false,
             action: { workspace.openNote(note.path) }
         )
@@ -166,6 +166,7 @@ struct CommandPalette: View {
         var items: [Item] = [
             Item(id: "new-note", title: "新增筆記", detail: "", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
             Item(id: "new-notebook", title: "新增手寫筆記", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.newNotebook() }),
+            Item(id: "new-journal", title: "新增日誌筆記本", detail: "一頁一頁、依日期整理、#機種標記", systemImage: "book.closed", isCommand: true, action: { workspace.newJournal() }),
             Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.newTaskNote() }),
             Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
             Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),

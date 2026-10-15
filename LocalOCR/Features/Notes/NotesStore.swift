@@ -36,6 +36,8 @@ struct NoteSummary: Identifiable, Hashable, Sendable {
 
     var id: String { path }
     var isNotebook: Bool { notebookID != nil }
+    /// 日誌筆記本（一頁一頁、依日期整理）。
+    var isJournal: Bool { notebookID?.hasPrefix(JournalNotebook.idPrefix) == true }
 }
 
 /// vault 中筆記以外的檔案（圖片、PDF、Canvas…）。
@@ -66,7 +68,7 @@ struct VaultItem: Identifiable, Hashable, Sendable {
 
     /// App 自己的筆跡資料（手寫筆記本、手寫區塊）：會同步，但不在檔案清單中顯示。
     var isInternal: Bool {
-        pathExtension == NotebookArchive.fileExtension || pathExtension == InkFiles.fileExtension
+        pathExtension == NotebookArchive.fileExtension || pathExtension == InkFiles.fileExtension || pathExtension == JournalNotebook.fileExtension
     }
 }
 

@@ -500,6 +500,14 @@ final class Workspace {
         openNote(path)
     }
 
+    /// 新增日誌筆記本（一頁一頁、依日期整理、#機種標記），預設放在「06 日誌/手寫日誌」。
+    func newJournal(in folder: String? = nil) {
+        let target = folder ?? JournalFiles.defaultFolder(store: store, fallback: currentFolder)
+        guard let path = try? JournalFiles.create(in: target, title: "手寫日誌", paper: .lined, store: store) else { return }
+        reveal(path: path)
+        openNote(path)
+    }
+
     func createFolder(named name: String, in parent: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

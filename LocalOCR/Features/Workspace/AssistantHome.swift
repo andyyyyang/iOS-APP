@@ -377,6 +377,7 @@ struct AssistantHome: View {
         Menu {
             Button { workspace.newTextNote() } label: { Label("新增筆記", systemImage: "doc.text") }
             Button { workspace.newNotebook() } label: { Label("新增手寫筆記", systemImage: "pencil") }
+            Button { workspace.newJournal() } label: { Label("新增日誌筆記本", systemImage: "book.closed") }
             Button { workspace.newTaskNote() } label: { Label("新增待辦清單", systemImage: "checkmark.square") }
             Button {
                 folderName = ""
