@@ -70,6 +70,8 @@ struct NotebookEditorView: View {
             guard hasUnpublishedChanges else { return }
             BackgroundWork.run("notebook-publish") { await publishAndUpload() }
         }
+        // 同步前先把畫布上的最新筆跡存進檔案
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in captureDrawing() }
         .onChange(of: scenePhase) { _, phase in
             // 切到其他 App、鎖定螢幕或被系統關閉前：立即存檔，並更新 Obsidian 中的圖片與 Markdown
             guard phase != .active else { return }

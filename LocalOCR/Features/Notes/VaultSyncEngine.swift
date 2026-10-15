@@ -152,14 +152,14 @@ actor VaultSyncEngine {
         }
     }
 
-    /// 衝突時本機版本另存的路徑：「筆記（iPad 衝突 2026-10-13 1405）.md」。
-    static func conflictPath(for path: String, date: Date) -> String {
+    /// 衝突時較舊的版本另存的路徑：「筆記（iPad 衝突 2026-10-13 1405）.md」。
+    static func conflictPath(for path: String, date: Date, label: String = "iPad 衝突") -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HHmm"
         let ext = (path as NSString).pathExtension
         let base = ext.isEmpty ? path : String(path.dropLast(ext.count + 1))
-        let suffix = "（iPad 衝突 \(formatter.string(from: date))）"
+        let suffix = "（\(label) \(formatter.string(from: date))）"
         return ext.isEmpty ? base + suffix : "\(base)\(suffix).\(ext)"
     }
 
@@ -262,13 +262,36 @@ actor VaultSyncEngine {
                 // 刪除前遠端剛好被修改：下次同步會重新下載
             }
         }
-        // 衝突：先把本機版本另存，再下載遠端版本
+        // 衝突（兩邊都改過）：內容其實相同就不是衝突；否則較新的版本留在原檔名，較舊的版本另存一份，
+        // 兩份都不會遺失（App 依筆跡重新產生的圖片只留較新的）
         for (path, remoteEntry) in conflicts {
-            let copy = Self.conflictPath(for: path, date: now())
-            try vault.move(path, to: copy)
-            uploads.append((copy, nil))
-            downloads.append(remoteEntry)
-            report.conflicts.append(copy)
+            let remoteFile = try? await remote.read(remoteEntry.path)
+            let localData = try? vault.read(path)
+            if let remoteFile, let localData, LocalVault.hash(remoteFile.data) == LocalVault.hash(localData) {
+                record(path, etag: remoteFile.etag ?? remoteEntry.etag, hash: LocalVault.hash(localData), stamp: stamp(path))
+                continue
+            }
+            let localTime = localByPath[path]?.mtime ?? .distantPast
+            let regenerated = Self.isRegenerated(path)
+            if localTime > remoteEntry.mtime {
+                // 這台裝置上的版本比較新：上傳取代遠端，遠端較舊的版本另存
+                if !regenerated, let remoteFile {
+                    let copy = Self.conflictPath(for: path, date: now(), label: "較舊版本")
+                    try vault.write(remoteFile.data, to: copy)
+                    uploads.append((copy, nil))
+                    report.conflicts.append(copy)
+                }
+                uploads.append((path, FileState(etag: Self.normalizeETag(remoteFile?.etag ?? remoteEntry.etag), hash: "")))
+            } else if regenerated {
+                downloads.append(remoteEntry)
+            } else {
+                // 遠端（其他裝置、Obsidian）的版本比較新：本機較舊的版本另存，再下載遠端版本
+                let copy = Self.conflictPath(for: path, date: now())
+                try vault.move(path, to: copy)
+                uploads.append((copy, nil))
+                downloads.append(remoteEntry)
+                report.conflicts.append(copy)
+            }
         }
         // 兩邊都有、但沒有同步紀錄（例如第一次配對）：內容相同就記下，不同就當衝突處理
         for remoteEntry in adoptions {
@@ -356,6 +379,13 @@ actor VaultSyncEngine {
         saveState()
         saveIndex()
         return true
+    }
+
+    /// App 依筆跡重新產生的圖片（手寫筆記的 nb-xxxx-p1.png、手寫區塊的 ink-xxxx.png）：衝突時只留較新的，不另存。
+    static func isRegenerated(_ path: String) -> Bool {
+        let name = (path as NSString).lastPathComponent.lowercased()
+        guard name.hasSuffix(".png") else { return false }
+        return name.hasPrefix("ink-") || (name.hasPrefix("nb-") && name.range(of: #"-p\d+\.png$"#, options: .regularExpression) != nil)
     }
 
     /// App 要整個重新產生的檔案（例如手寫筆記的圖片），這台裝置上可能沒有：先記下遠端目前的版本，
@@ -607,6 +637,8 @@ final class VaultSyncCenter {
 
     func syncNow(allowMassDeletion: Bool = false) async {
         guard !isSyncing, let client = VaultBackend.current() else { return }
+        // 開著的筆記先把還沒存檔的修改（打字、筆跡）寫進檔案，這次同步才會帶上最新的內容
+        NotificationCenter.default.post(name: .vaultWillSync, object: nil)
         isSyncing = true
         defer {
             isSyncing = false
@@ -644,6 +676,7 @@ final class VaultSyncCenter {
 
     /// 下拉同步：先把等著上傳的修改傳完，再完整同步一次，並更新 vault 索引（關聯、待辦、屬性）。
     func pullToRefresh() async {
+        NotificationCenter.default.post(name: .vaultWillSync, object: nil)
         await flushPushes(timeout: 10)
         await syncNow()
         await VaultIndexStore.shared.refresh()
@@ -902,4 +935,9 @@ final class VaultSyncCenter {
         if url != nil { pendingFiles.removeAll { $0.path == path } }
         return url
     }
+}
+
+extension Notification.Name {
+    /// 同步開始前：開著的編輯器立即存檔（不等延遲存檔）。
+    static let vaultWillSync = Notification.Name("localocr.vaultWillSync")
 }

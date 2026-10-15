@@ -76,6 +76,8 @@ struct NoteView: View {
                 if !focused { rename(to: title) }
             }
             .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
+            // 同步前先存檔：剛打的字（還在 0.6 秒的延遲存檔中）也會被這次同步帶上
+            .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in flushSave() }
             .toast($toast)
             .task { load() }
             // 打開時先取得最新版本；之後其他裝置的修改由伺服器即時推送

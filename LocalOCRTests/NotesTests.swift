@@ -638,14 +638,17 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
     private var files: [String: (data: Data, etag: String)] = [:]
     /// 清單中回報的大小（模擬很大的檔案）。
     private var reportedSizes: [String: Int] = [:]
+    /// 列出時回報的修改時間（沒有指定時是現在）。
+    private var mtimes: [String: Date] = [:]
     private var counter = 0
     private(set) var writes: [String] = []
 
-    func put(_ path: String, _ text: String, reportedSize: Int? = nil) {
+    func put(_ path: String, _ text: String, reportedSize: Int? = nil, mtime: Date? = nil) {
         lock.withLock {
             counter += 1
             files[path] = (Data(text.utf8), "e\(counter)")
             reportedSizes[path] = reportedSize
+            mtimes[path] = mtime
         }
     }
 
@@ -662,7 +665,7 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
     func list(prefix: String, recursive: Bool) async throws -> VaultListing {
         lock.withLock {
             VaultListing(
-                files: files.map { VaultEntry(path: $0.key, size: reportedSizes[$0.key] ?? $0.value.data.count, mtime: Date(), etag: $0.value.etag) },
+                files: files.map { VaultEntry(path: $0.key, size: reportedSizes[$0.key] ?? $0.value.data.count, mtime: mtimes[$0.key] ?? Date(), etag: $0.value.etag) },
                 folders: []
             )
         }
@@ -686,6 +689,7 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
             }
             counter += 1
             files[path] = (data, "e\(counter)")
+            mtimes[path] = nil
             writes.append(path)
             return VaultEntry(path: path, size: data.count, mtime: mtime, etag: "e\(counter)")
         }
@@ -949,6 +953,52 @@ final class VaultSyncEngineTests: XCTestCase {
         XCTAssertEqual(vault.readText(copy), "iPad 版本")
         XCTAssertEqual(remote.text(copy), "iPad 版本", "衝突的本機版本也會上傳")
         XCTAssertEqual(remote.text("a.md"), "Obsidian 版本")
+    }
+
+    func testNewerLocalVersionWinsAConflict() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        // Obsidian 一小時前改過（這台裝置還沒同步到），之後在 iPad 上又改了：iPad 的版本比較新
+        remote.put("a.md", "Obsidian 舊版本", mtime: Date().addingTimeInterval(-3600))
+        try vault.writeText("iPad 最新版本", to: "a.md")
+
+        let report = try await engine.sync(remote: remote)
+        let copy = "a（較舊版本 \(conflictStamp)）.md"
+        XCTAssertEqual(report.conflicts, [copy])
+        XCTAssertEqual(vault.readText("a.md"), "iPad 最新版本")
+        XCTAssertEqual(remote.text("a.md"), "iPad 最新版本", "最新的版本留在原本的筆記")
+        XCTAssertEqual(vault.readText(copy), "Obsidian 舊版本")
+        XCTAssertEqual(remote.text(copy), "Obsidian 舊版本", "較舊的版本另存，不會遺失")
+        let again = try await engine.sync(remote: remote)
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testIdenticalEditsOnBothSidesAreNotAConflict() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        remote.put("a.md", "同樣的內容")
+        try vault.writeText("同樣的內容", to: "a.md")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.conflicts.isEmpty)
+        XCTAssertEqual(report.uploaded, 0)
+        let again = try await engine.sync(remote: remote)
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    func testRegeneratedImagesKeepOnlyTheNewerVersion() async throws {
+        remote.put("附件/ink-1.png", "old")
+        remote.put("附件/nb-1-p1.png", "old")
+        _ = try await engine.sync(remote: remote)
+        remote.put("附件/ink-1.png", "遠端較新")
+        try vault.writeText("本機較舊", to: "附件/ink-1.png")
+        remote.put("附件/nb-1-p1.png", "遠端較舊", mtime: Date().addingTimeInterval(-3600))
+        try vault.writeText("本機較新", to: "附件/nb-1-p1.png")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.conflicts.isEmpty, "依筆跡產生的圖片不另存衝突版本")
+        XCTAssertEqual(vault.readText("附件/ink-1.png"), "遠端較新")
+        XCTAssertEqual(remote.text("附件/nb-1-p1.png"), "本機較新")
+        XCTAssertTrue(VaultSyncEngine.isRegenerated("附件/nb-ab12-p3.png"))
+        XCTAssertFalse(VaultSyncEngine.isRegenerated("附件/照片.png"))
     }
 
     func testDeletionsPropagateOnlyWhenUnchanged() async throws {
