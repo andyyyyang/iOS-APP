@@ -82,54 +82,98 @@ enum GlobalSearch {
         var parcels: [LogisticsClient.Item] = []
     }
 
+    /// 篩選建議：從目前符合的資料整理出可以再加的關鍵字（廠區、課別、客戶、流程…），有幾筆。
+    struct Facet: Hashable, Sendable {
+        let text: String
+        let count: Int
+    }
+
+    /// 只選某一區（或沒有關鍵字、只選了區）時，一區最多列幾筆。
+    static let scopedLimit = 40
+
+    /// 搜尋用的欄位，以及可以拿來再篩選的欄位。
+    private struct Entry {
+        let target: Target
+        let fields: [String]
+        let facets: [String]
+    }
+
+    private static func entries(_ section: Section, in sources: Sources) -> [Entry] {
+        switch section {
+        case .contacts:
+            return sources.contacts.map { Entry(target: .contact($0), fields: [$0.name, $0.ext, $0.mvpn, $0.dept, $0.plant], facets: [$0.plant, $0.dept]) }
+        case .codes:
+            return sources.codes.map { Entry(target: .code($0), fields: [$0.code, $0.alias, $0.name, $0.fullName, $0.detail, $0.kind.rawValue], facets: [$0.kind.rawValue]) }
+        case .models:
+            return sources.models.map { Entry(target: .model($0), fields: [$0.code] + $0.aliases + [$0.customer, $0.detail], facets: [$0.customer]) }
+        case .cases:
+            return sources.cases.map { Entry(target: .caseItem($0), fields: [$0.caseNo, $0.sapNo, $0.product, $0.customer, $0.bpmRdmn, $0.file], facets: [$0.customer]) }
+        case .bpm:
+            return sources.bpm.map { Entry(target: .bpm($0), fields: [$0.idx, $0.subject, $0.processName, $0.currentStep], facets: [$0.processName]) }
+        case .people:
+            return sources.people.map { Entry(target: .person($0), fields: [$0.name, $0.english], facets: []) }
+        case .sops:
+            return sources.sops.map { Entry(target: .sop($0), fields: [$0.name, $0.file, $0.stage] + $0.tags + $0.tags.map { String($0.dropFirst()) }, facets: [$0.stage]) }
+        case .parcels:
+            return sources.parcels.map { Entry(target: .parcel($0), fields: [$0.trackingNumber, $0.note, $0.courierName, $0.latestEvent], facets: [$0.courierName]) }
+        }
+    }
+
     /// 依最符合的一筆排序各區（一樣時照固定順序：通訊錄、客戶與代碼、機種…）。
-    static func search(_ query: String, in sources: Sources) -> [Group] {
+    /// `scope`：只找這一區（每區上限放寬）；只選了區、沒有關鍵字時列出這一區的全部（前幾筆）。
+    static func search(_ query: String, in sources: Sources, scope: Section? = nil) -> [Group] {
         let text = query.trimmingCharacters(in: .whitespaces)
         let prepared = Query(text)
-        guard !prepared.tokens.isEmpty else { return [] }
+        guard !prepared.tokens.isEmpty || scope != nil else { return [] }
         var groups: [Group] = []
-
-        func append(_ section: Section, _ hits: [(hit: Hit, order: Int)]) {
-            guard !hits.isEmpty else { return }
-            let sorted = hits.sorted { $0.hit.score != $1.hit.score ? $0.hit.score > $1.hit.score : $0.order < $1.order }
-            groups.append(Group(section: section, hits: sorted.prefix(section.limit).map(\.hit), total: hits.count))
-        }
-
-        func add<Item>(_ section: Section, _ items: [Item], target: (Item) -> Target, fields: (Item) -> [String]) {
+        for section in scope.map({ [$0] }) ?? Section.allCases {
             var hits: [(hit: Hit, order: Int)] = []
-            for (order, item) in items.enumerated() {
-                if let score = rank(prepared, fields(item)) {
-                    hits.append((Hit(section: section, target: target(item), score: score), order))
+            for (order, entry) in entries(section, in: sources).enumerated() {
+                if prepared.tokens.isEmpty {
+                    hits.append((Hit(section: section, target: entry.target, score: 0), order))
+                } else if let score = rank(prepared, entry.fields) {
+                    hits.append((Hit(section: section, target: entry.target, score: score), order))
                 }
             }
-            append(section, hits)
-        }
-
-        add(.contacts, sources.contacts, target: Target.contact) { [$0.name, $0.ext, $0.mvpn, $0.dept, $0.plant] }
-        add(.codes, sources.codes, target: Target.code) { [$0.code, $0.alias, $0.name, $0.fullName, $0.detail] }
-        add(.cases, sources.cases, target: Target.caseItem) { [$0.caseNo, $0.sapNo, $0.product, $0.customer, $0.bpmRdmn, $0.file] }
-        add(.bpm, sources.bpm, target: Target.bpm) { [$0.idx, $0.subject, $0.processName, $0.currentStep] }
-        add(.people, sources.people, target: Target.person) { [$0.name, $0.english] }
-        add(.sops, sources.sops, target: Target.sop) { [$0.name, $0.file, $0.stage] + $0.tags + $0.tags.map { String($0.dropFirst()) } }
-        add(.parcels, sources.parcels, target: Target.parcel) { [$0.trackingNumber, $0.note, $0.courierName, $0.latestEvent] }
-
-        // 機種：代號、別名（開案號、SAP 料號、客戶料號…），再加上容錯比對（少打後綴、O/0 打錯）
-        var models: [(hit: Hit, order: Int)] = []
-        for (order, entry) in sources.models.enumerated() {
-            if let score = rank(prepared, [entry.code] + entry.aliases + [entry.customer, entry.detail]) {
-                models.append((Hit(section: .models, target: .model(entry), score: score), order))
+            // 機種再加上容錯比對（少打後綴、O/0 打錯）
+            if section == .models, prepared.tokens.count == 1 {
+                for match in ModelCatalog.match(text, in: sources.models, limit: 5) where match.score >= 0.8 {
+                    guard !hits.contains(where: { $0.hit.target == .model(match.entry) }) else { continue }
+                    hits.append((Hit(section: .models, target: .model(match.entry), score: Int(match.score * 100)), sources.models.count))
+                }
             }
+            guard !hits.isEmpty else { continue }
+            let sorted = hits.sorted { $0.hit.score != $1.hit.score ? $0.hit.score > $1.hit.score : $0.order < $1.order }
+            let limit = scope == nil ? section.limit : scopedLimit
+            groups.append(Group(section: section, hits: sorted.prefix(limit).map(\.hit), total: hits.count))
         }
-        if !text.contains(where: \.isWhitespace) {
-            for match in ModelCatalog.match(text, in: sources.models, limit: 5) where match.score >= 0.8 {
-                guard !models.contains(where: { $0.hit.target == .model(match.entry) }) else { continue }
-                models.append((Hit(section: .models, target: .model(match.entry), score: Int(match.score * 100)), sources.models.count))
-            }
-        }
-        append(.models, models)
-
         let order = Dictionary(uniqueKeysWithValues: Section.allCases.enumerated().map { ($1, $0) })
         return groups.sorted { $0.best != $1.best ? $0.best > $1.best : order[$0.section, default: 0] < order[$1.section, default: 0] }
+    }
+
+    /// 可以再加的關鍵字：目前符合的資料中出現的廠區、課別、客戶、流程…（能縮小範圍的才列，已經用了的不列），多的在前。
+    static func facets(_ query: String, in sources: Sources, scope: Section? = nil, limit: Int = 8) -> [Facet] {
+        let prepared = Query(query.trimmingCharacters(in: .whitespaces))
+        guard !prepared.tokens.isEmpty || scope != nil else { return [] }
+        let used = Set(prepared.tokens.map(\.text))
+        var best: [String: Int] = [:]
+        for section in scope.map({ [$0] }) ?? Section.allCases {
+            let matched = entries(section, in: sources).filter { prepared.tokens.isEmpty || rank(prepared, $0.fields) != nil }
+            guard matched.count > 1 else { continue }
+            var counts: [String: Int] = [:]
+            for entry in matched {
+                for facet in Set(entry.facets) where !facet.isEmpty {
+                    counts[facet, default: 0] += 1
+                }
+            }
+            for (facet, count) in counts where count < matched.count && !used.contains(facet.lowercased()) {
+                best[facet] = max(best[facet] ?? 0, count)
+            }
+        }
+        return best.map { Facet(text: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.text.localizedStandardCompare($1.text) == .orderedAscending }
+            .prefix(limit)
+            .map { $0 }
     }
 
     /// 比對分數；不符合時 nil。空白分開的每個關鍵字都要出現在某個欄位（「大園 業務」），

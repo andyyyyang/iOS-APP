@@ -73,6 +73,27 @@ final class GlobalSearchTests: XCTestCase {
         XCTAssertNil(GlobalSearch.search("   ", in: sources).first)
     }
 
+    func testFacetsSuggestKeywordsThatNarrowTheResults() {
+        // 「業務」符合兩個廠區的人：建議廠區（各 1 筆），課別每個人都一樣、不能縮小範圍就不列
+        let facets = GlobalSearch.facets("業務", in: sources).map(\.text)
+        XCTAssertTrue(facets.contains("大園一廠"))
+        XCTAssertTrue(facets.contains("大園二廠"))
+        XCTAssertFalse(facets.contains("業務課"))
+        // 加了廠區之後只剩一筆，沒有可以再加的
+        XCTAssertFalse(GlobalSearch.facets("業務 大園一廠", in: sources).map(\.text).contains("大園二廠"))
+        XCTAssertEqual(GlobalSearch.search("業務 大園一廠", in: sources).first { $0.section == .contacts }?.total, 1)
+    }
+
+    func testScopeOnlySearchesOneSectionAndCanBrowseIt() {
+        XCTAssertEqual(GlobalSearch.search("T12608029", in: sources, scope: .cases).map(\.section), [.cases])
+        // 只選了區、沒有關鍵字：列出這一區
+        let contacts = GlobalSearch.search("", in: sources, scope: .contacts)
+        XCTAssertEqual(contacts.first?.total, 3)
+        XCTAssertTrue(GlobalSearch.search("", in: sources).isEmpty)
+        // 在通訊錄裡，建議依廠區與課別篩選
+        XCTAssertTrue(GlobalSearch.facets("", in: sources, scope: .contacts).map(\.text).contains("業務課"))
+    }
+
     func testSectionsAreLimited() {
         let many = (0..<30).map { JentechContact(order: $0, plant: "華亞廠", dept: "業務課", rawName: "業務\($0)", ext: "\(1000 + $0)", mvpn: "") }
         let groups = GlobalSearch.search("業務", in: GlobalSearch.Sources(contacts: many))

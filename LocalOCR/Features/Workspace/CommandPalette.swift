@@ -11,9 +11,49 @@ struct CommandPalette: View {
     @State private var logistics = LogisticsStore.shared
     @State private var index = VaultIndexStore.shared
     @State private var sources = GlobalSearch.Sources()
+    /// 輸入中的文字（打空白或逗號就變成一個關鍵字）。
     @State private var query = ""
+    /// 已經加入的關鍵字：每一個都要符合，越加越精確。
+    @State private var keywords: [String] = []
+    @State private var scope: Scope?
     @State private var selection = 0
+    @AppStorage("search.recentKeywords") private var recentKeywordsRaw = ""
     @FocusState private var focused: Bool
+
+    /// 只看某一類結果。
+    private enum Scope: Hashable {
+        case section(GlobalSearch.Section)
+        case notes
+
+        static let all: [Scope] = GlobalSearch.Section.allCases.map(Scope.section) + [.notes]
+
+        var title: String {
+            switch self {
+            case .section(let section): return section.title
+            case .notes: return "筆記"
+            }
+        }
+
+        var section: GlobalSearch.Section? {
+            if case .section(let section) = self { return section }
+            return nil
+        }
+    }
+
+    /// 搜尋欄下方的建議：加入輸入中的字、只看某一類、再加一個篩選關鍵字、最近用過的關鍵字。
+    private struct Suggestion: Identifiable {
+        enum Action {
+            case add(String)
+            case scope(Scope)
+            case keyword(String)
+        }
+
+        let id: String
+        let title: String
+        var count: Int?
+        var systemImage: String?
+        let action: Action
+    }
 
     private struct Item: Identifiable {
         let id: String
@@ -46,7 +86,8 @@ struct CommandPalette: View {
     }
 
     var body: some View {
-        let sections = self.sections
+        let results = self.results
+        let sections = results.sections
         let items = sections.flatMap(\.items)
         let rows = Self.rows(sections)
         ZStack(alignment: .top) {
@@ -59,7 +100,7 @@ struct CommandPalette: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(DS.textSecondary)
-                    TextField("搜尋筆記、人名分機、客戶、機種、案件或指令", text: $query)
+                    TextField(keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…", text: $query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 17))
                         .focused($focused)
@@ -75,13 +116,17 @@ struct CommandPalette: View {
                 .padding(.horizontal, 16)
                 .frame(height: 52)
 
+                if scope != nil || !keywords.isEmpty || !results.suggestions.isEmpty {
+                    chipRow(results.suggestions)
+                }
+
                 Rectangle().fill(DS.hairline).frame(height: 1)
 
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) {
-                            if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                                Text("可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號")
+                            if searchText.isEmpty && scope == nil {
+                                Text("可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字")
                                     .font(.caption)
                                     .foregroundStyle(DS.textTertiary)
                                     .padding(.horizontal, 10)
@@ -101,7 +146,7 @@ struct CommandPalette: View {
                                 }
                             }
                             if items.isEmpty {
-                                Text("找不到「\(query)」")
+                                Text(searchText.isEmpty ? "沒有資料" : "找不到「\(searchText)」")
                                     .font(.subheadline)
                                     .foregroundStyle(DS.textTertiary)
                                     .padding(16)
@@ -124,6 +169,8 @@ struct CommandPalette: View {
         }
         .onAppear {
             query = ""
+            keywords = []
+            scope = nil
             selection = 0
             focused = true
         }
@@ -136,7 +183,18 @@ struct CommandPalette: View {
             if jentech.bpm == nil { await jentech.loadBpm() }
         }
         .task(id: sourcesVersion) { sources = currentSources() }
-        .onChange(of: query) { _, _ in selection = 0 }
+        .onChange(of: query) { _, value in
+            selection = 0
+            // 打了空白或逗號（輸入法選完字之後）：前面的字變成一個關鍵字，接著打下一個
+            if let last = value.last, Self.separators.contains(last) { commit(value) }
+        }
+        .onChange(of: keywords) { _, _ in selection = 0 }
+        .onChange(of: scope) { _, _ in selection = 0 }
+        .onKeyPress(.tab) {
+            guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return .ignored }
+            commit(query)
+            return .handled
+        }
         .onKeyPress(.downArrow) {
             selection = min(selection + 1, max(items.count - 1, 0))
             return .handled
@@ -217,40 +275,194 @@ struct CommandPalette: View {
 
     // MARK: - 結果
 
-    /// 沒有輸入時：最近的筆記與指令。有輸入時：符合的指令在最上面，筆記與業務快查各區依最符合的一筆排序。
-    private var sections: [Section] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        let commands = self.commands
-        if trimmed.isEmpty {
-            return [
+    private static let separators: Set<Character> = [" ", "　", ",", "，", "、"]
+
+    /// 所有關鍵字加上輸入中的字。
+    private var searchText: String {
+        (keywords + [query]).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    private var recentKeywords: [String] {
+        recentKeywordsRaw.split(separator: "\n").map(String.init)
+    }
+
+    /// 結果與建議一起算（同一份比對）。
+    private var results: (sections: [Section], suggestions: [Suggestion]) {
+        let text = searchText
+        let prepared = GlobalSearch.Query(text)
+        let typing = query.trimmingCharacters(in: .whitespaces)
+        var suggestions: [Suggestion] = []
+        if !typing.isEmpty {
+            suggestions.append(Suggestion(id: "add", title: "加入「\(typing)」", systemImage: "plus", action: .add(typing)))
+        }
+
+        // 什麼都還沒輸入：最近的筆記與指令，建議列出各類與最近用過的關鍵字
+        if prepared.tokens.isEmpty && scope == nil {
+            suggestions += Scope.all.map { Suggestion(id: "scope:\($0.title)", title: $0.title, action: .scope($0)) }
+            suggestions += recentKeywords.map { Suggestion(id: "recent:\($0)", title: $0, systemImage: "clock.arrow.circlepath", action: .keyword($0)) }
+            return ([
                 Section(id: "recent", title: "最近的筆記", items: store.notes.prefix(8).map(noteItem)),
                 Section(id: "commands", title: "指令", items: commands),
-            ]
+            ], suggestions)
         }
-        let strong = commands.filter { GlobalSearch.rank(trimmed, [$0.title, $0.detail]) != nil }
-        let strongIDs = Set(strong.map(\.id))
-        let weak = commands.filter { !strongIDs.contains($0.id) && Self.score($0.title, query: trimmed) != nil }
 
-        let noteMatches = store.notes
-            .compactMap { note in Self.score(note.title, query: trimmed).map { (note, $0) } }
-            .sorted { $0.1 > $1.1 }
-            .prefix(20)
         var ranked: [(score: Int, order: Int, section: Section)] = []
-        for (order, group) in GlobalSearch.search(trimmed, in: sources).enumerated() {
-            ranked.append((group.best, order, Section(id: group.section.rawValue, title: group.section.title, count: group.total, items: group.hits.map(hitItem))))
+        var counts: [(scope: Scope, count: Int)] = []
+        if scope != .notes {
+            for group in GlobalSearch.search(text, in: sources, scope: scope?.section) {
+                ranked.append((group.best, ranked.count, Section(id: group.section.rawValue, title: group.section.title, count: group.total, items: group.hits.map(hitItem))))
+                counts.append((Scope.section(group.section), group.total))
+            }
         }
-        if !noteMatches.isEmpty {
-            // 標題含有關鍵字的筆記跟業務快查一起排；只有字依序出現（模糊）的排在後面
-            let best = noteMatches.compactMap { GlobalSearch.rank(trimmed, [$0.0.title]) }.max() ?? 0
-            ranked.append((best, ranked.count, Section(id: "notes", title: "筆記", items: noteMatches.map { noteItem($0.0) })))
+        if scope == nil || scope == .notes {
+            let notes = matchingNotes(prepared, limit: scope == .notes ? GlobalSearch.scopedLimit : 20)
+            if !notes.items.isEmpty {
+                ranked.append((notes.best, ranked.count, Section(id: "notes", title: "筆記", count: notes.total, items: notes.items.map(noteItem))))
+                counts.append((Scope.notes, notes.total))
+            }
         }
 
-        var result: [Section] = []
-        if !strong.isEmpty { result.append(Section(id: "commands", title: "指令", items: Array(strong.prefix(3)))) }
-        result += ranked.sorted { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }.map(\.section)
-        let rest = Array(strong.dropFirst(3)) + weak
-        if !rest.isEmpty { result.append(Section(id: "more-commands", title: "其他指令", items: rest)) }
-        return result
+        var sections: [Section] = []
+        let commands = self.commands
+        if scope == nil {
+            // 指令名稱含有每個關鍵字才列（例如「通訊錄」「BPM」）
+            let matching = commands.filter { GlobalSearch.rank(prepared, [$0.title, $0.detail]) != nil }
+            if !matching.isEmpty { sections.append(Section(id: "commands", title: "指令", items: Array(matching.prefix(3)))) }
+        }
+        sections += ranked.sorted { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }.map(\.section)
+        if sections.isEmpty, scope == nil, keywords.isEmpty {
+            let fuzzy = commands.filter { Self.score($0.title, query: text) != nil }
+            if !fuzzy.isEmpty { sections.append(Section(id: "more-commands", title: "其他指令", items: fuzzy)) }
+        }
+
+        // 建議：結果分在哪幾類（點了只看那一類）、可以再加的篩選關鍵字（依目前的結果算）
+        if scope == nil, counts.count > 1 {
+            suggestions += counts.map { Suggestion(id: "scope:\($0.scope.title)", title: $0.scope.title, count: $0.count, action: .scope($0.scope)) }
+        }
+        if scope != .notes {
+            suggestions += GlobalSearch.facets(text, in: sources, scope: scope?.section).map {
+                Suggestion(id: "facet:\($0.text)", title: $0.text, count: $0.count, systemImage: "plus.circle", action: .keyword($0.text))
+            }
+        }
+        return (sections, suggestions)
+    }
+
+    /// 筆記：標題、資料夾或標籤含有每一個關鍵字（新的在前）；只有一個關鍵字而且找到的很少時，再加上字依序出現的。
+    private func matchingNotes(_ prepared: GlobalSearch.Query, limit: Int) -> (items: [NoteSummary], total: Int, best: Int) {
+        if prepared.tokens.isEmpty {
+            return (Array(store.notes.prefix(limit)), store.notes.count, 0)
+        }
+        var hits = store.notes
+            .compactMap { note in GlobalSearch.rank(prepared, [note.title, note.folder] + note.tags).map { (note: note, score: $0) } }
+            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.note.mtime > $1.note.mtime }
+        let best = hits.first?.score ?? 0
+        if prepared.tokens.count == 1, hits.count < 5 {
+            let found = Set(hits.map(\.note.path))
+            let fuzzy = store.notes
+                .filter { !found.contains($0.path) }
+                .compactMap { note in Self.score(note.title, query: prepared.tokens[0].text).map { (note: note, score: $0) } }
+                .sorted { $0.score > $1.score }
+                .prefix(10)
+            hits += fuzzy.map { (note: $0.note, score: 0) }
+        }
+        return (hits.prefix(limit).map(\.note), hits.count, best)
+    }
+
+    /// 已加入的條件（深色，可以移除）與建議（框線，點了加入）。
+    private func chipRow(_ suggestions: [Suggestion]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                if let scope {
+                    activeChip("只看 \(scope.title)") { self.scope = nil }
+                }
+                ForEach(Array(keywords.enumerated()), id: \.offset) { index, keyword in
+                    activeChip(keyword) {
+                        if keywords.indices.contains(index) { keywords.remove(at: index) }
+                    }
+                }
+                if (scope != nil || !keywords.isEmpty) && !suggestions.isEmpty {
+                    Rectangle().fill(DS.hairline).frame(width: 1, height: 18)
+                }
+                ForEach(suggestions) { suggestion in
+                    Button { apply(suggestion) } label: {
+                        HStack(spacing: 4) {
+                            if let image = suggestion.systemImage {
+                                Image(systemName: image).font(.system(size: 10, weight: .semibold))
+                            }
+                            Text(suggestion.title).font(.footnote.weight(.medium)).lineLimit(1)
+                            if let count = suggestion.count {
+                                Text("\(count)").font(.caption2.monospacedDigit()).foregroundStyle(DS.textTertiary)
+                            }
+                        }
+                        .foregroundStyle(DS.text)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(Capsule().strokeBorder(DS.cardBorder, lineWidth: 1))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if scope != nil || !keywords.isEmpty {
+                    Button("清除") {
+                        keywords = []
+                        scope = nil
+                        query = ""
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(DS.textSecondary)
+                    .buttonStyle(.plain)
+                    .padding(.leading, 4)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func activeChip(_ title: String, onRemove: @escaping () -> Void) -> some View {
+        Button(action: onRemove) {
+            HStack(spacing: 4) {
+                Text(title).font(.footnote.weight(.semibold)).lineLimit(1)
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(DS.onPrimary)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(DS.primary, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("移除 \(title)")
+    }
+
+    private func apply(_ suggestion: Suggestion) {
+        switch suggestion.action {
+        case .add(let text):
+            commit(text)
+        case .scope(let scope):
+            self.scope = scope
+        case .keyword(let keyword):
+            if !keywords.contains(keyword) { keywords.append(keyword) }
+            remember(keyword)
+        }
+        focused = true
+    }
+
+    /// 輸入中的字變成關鍵字（可以一次好幾個，用空白或逗號分開），輸入欄清空接著打下一個。
+    private func commit(_ text: String) {
+        let words = text.split { Self.separators.contains($0) }.map(String.init)
+        for word in words where !keywords.contains(word) {
+            keywords.append(word)
+            remember(word)
+        }
+        query = ""
+    }
+
+    /// 最近用過的關鍵字（最多 8 個）。
+    private func remember(_ keyword: String) {
+        var list = recentKeywords.filter { $0 != keyword }
+        list.insert(keyword, at: 0)
+        recentKeywordsRaw = list.prefix(8).joined(separator: "\n")
     }
 
     /// 資料有變（索引更新、通訊錄或 BPM 讀到了、物流清單更新）時重新取一次要搜尋的資料。
@@ -276,7 +488,7 @@ struct CommandPalette: View {
         switch hit.target {
         case .contact(let contact):
             let number = contact.copyValue
-            let searched = query
+            let searched = searchText
             let detail = [
                 contact.ext.isEmpty ? "" : "分機 \(contact.ext)",
                 contact.mvpn.isEmpty ? "" : "MVPN \(contact.mvpn)",
