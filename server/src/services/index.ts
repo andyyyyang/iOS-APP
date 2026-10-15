@@ -1,5 +1,6 @@
 import { AssistantService, type AssistantOptions } from "../assistant/service.js";
 import type { Classifier } from "../classifier/types.js";
+import { LogisticsService, type LogisticsOptions } from "../logistics/service.js";
 import type { VaultConfig } from "../config.js";
 import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
@@ -30,6 +31,8 @@ export interface Services {
   vaultIndex: VaultIndexService;
   /** Cloud AI runs over the vault (/v1/assistant). */
   assistant: AssistantService;
+  /** The logistics tracker over the vault's watch list (/v1/logistics). */
+  logistics: LogisticsService;
 }
 
 export function createServices({
@@ -41,6 +44,7 @@ export function createServices({
   obsidianPlugin,
   assistant = { model: null },
   recordOutputs = DEFAULT_RECORD_OUTPUTS,
+  logistics = {},
   now = Date.now,
 }: {
   store: Store;
@@ -57,6 +61,8 @@ export function createServices({
   assistant?: AssistantOptions;
   /** Scans → JSON record files in the vault (SCAN_RECORD_OUTPUTS); default: the FV60 record file, when it exists. */
   recordOutputs?: RecordOutput[];
+  /** Logistics tracker: courier API keys, watch list path, background refresh; default: T-Cat/SF only, no refresh. */
+  logistics?: LogisticsOptions;
   /** Clock in milliseconds (pairing code expiry). */
   now?: () => number;
 }): Services {
@@ -74,6 +80,7 @@ export function createServices({
     obsidianPlugin: obsidianPlugin ?? new ObsidianPluginService({ store, vault, now }),
     vaultIndex,
     assistant: new AssistantService({ vault: vaultService, vaultIndex, now }, assistant),
+    logistics: new LogisticsService({ vault: vaultService, vaultIndex, now }, logistics),
   };
 }
 

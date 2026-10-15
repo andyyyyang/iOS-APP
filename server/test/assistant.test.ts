@@ -849,6 +849,10 @@ describe("OpenAPI", () => {
       "/v1/assistant/runs/{id}",
       "/v1/assistant/runs/{id}/cancel",
       "/v1/assistant/runs/{id}/undo",
+      "/v1/logistics",
+      "/v1/logistics/items",
+      "/v1/logistics/items/{number}",
+      "/v1/logistics/linked",
     ]) {
       expect(res.body.paths[path], path).toBeDefined();
     }

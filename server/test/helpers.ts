@@ -5,6 +5,7 @@ import { bootstrapStore } from "../src/bootstrap.js";
 import type { AssistantOptions } from "../src/assistant/service.js";
 import type { ClassificationCandidate, Classifier, ClassifierResult } from "../src/classifier/types.js";
 import type { VaultConfig } from "../src/config.js";
+import type { LogisticsOptions } from "../src/logistics/service.js";
 import { createApp } from "../src/http/app.js";
 import { ObsidianPluginService, type FetchFn } from "../src/services/obsidian-plugin.js";
 import type { VaultChangeFeed } from "../src/services/vault-changes.js";
@@ -73,6 +74,8 @@ export async function setup(
     pluginMirror?: { fetch?: FetchFn; githubToken?: string; logger?: Pick<Console, "info" | "warn" | "error"> };
     /** Cloud AI (scripted model, fake Jev); default: off. */
     assistant?: AssistantOptions;
+    /** Logistics tracker (fake trackers); default: real trackers (never called by tests that don't add items). */
+    logistics?: LogisticsOptions;
   } = {},
 ): Promise<{
   app: Express;
@@ -94,6 +97,7 @@ export async function setup(
     obsidianPlugin,
     now: options.now,
     assistant: options.assistant,
+    logistics: options.logistics,
   });
   return { app, store };
 }

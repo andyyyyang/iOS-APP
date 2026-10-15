@@ -26,6 +26,7 @@ import {
 } from "../vault/remotely-save.js";
 import { VERSION } from "../version.js";
 import { assistantPaths, assistantSchemas } from "./openapi-assistant.js";
+import { logisticsPaths, logisticsSchemas } from "./openapi-logistics.js";
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: object) => ({ content: { "application/json": { schema } } });
@@ -541,6 +542,7 @@ export function buildOpenApi(serverUrl?: string) {
         },
       },
       ...assistantPaths,
+      ...logisticsPaths,
     },
     components: {
       securitySchemes: {
@@ -993,6 +995,7 @@ export function buildOpenApi(serverUrl?: string) {
           },
         },
         ...assistantSchemas,
+        ...logisticsSchemas,
       },
     },
   };

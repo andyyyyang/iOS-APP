@@ -33,6 +33,14 @@ async function main() {
     obsidianPlugin,
     assistant: createAssistantOptions(config),
     recordOutputs: config.scanRecordOutputs,
+    logistics: {
+      path: config.logisticsPath,
+      refreshMinutes: config.logisticsRefreshMinutes,
+      dhlApiKey: config.dhlApiKey,
+      track17ApiKey: config.track17ApiKey,
+    },
+    // background refresh of tracked shipments (06 日誌/物流追蹤/watchlist.json), when the vault is configured
+    onServices: (services) => services.logistics.start(),
   });
   // Mirrors the Obsidian plugin's GitHub releases into the bucket: shortly after startup, then every 30 minutes
   const stopPluginMirror = vault ? schedulePluginMirror(obsidianPlugin) : () => {};

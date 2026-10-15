@@ -30,6 +30,12 @@ LocalOCR iPhone App 的後端：REST API（`/v1`）、MCP（`/mcp`）與 Postgre
 | `POST /v1/assistant/route` | `{"text","context"?,"budget"?:"low\|medium\|high","deviceAvailable"?}` → `{"kind":"question\|edit\|task","route":"device\|cloud","confidence","provider":"jev\|heuristic","cloudAvailable"}`；有 `budget` 時另外回傳 `difficulty`（simple/moderate/hard）、`tier`（device/small/medium/large）、`model`、`effort`：判斷聊天要求在裝置上處理，還是交給哪一級的雲端模型 |
 | `GET /v1/assistant/models` | App「AI 功能」設定能選的東西：`{"tiers":{"small","medium","large"},"models":[{"id","name","family","releaseDate"}],"codeExecution","webSearch","maxTurns","issue"}`（`models` 是這把 API key 能用的模型，新的在前；`codeExecution`／`webSearch`／`maxTurns` 是伺服器的預設） |
 | `POST /v1/assistant/runs` | 開始雲端 AI 工作 `{"prompt","history"?,"rulesPath"?,"openNote"?,"transcriptPath"?,"timeZone"?,"tier"?,"effort"?,"model"?,"codeExecution"?,"webSearch"?,"maxTurns"?}` → 202 `{"id","status":"running","model"}`；`model` 是 App 設定中固定的模型（不在清單中時 400 `unknown_model`），`codeExecution`／`webSearch` 覆蓋伺服器的預設，`maxTurns` 只能比伺服器上限少；未設定 `ANTHROPIC_API_KEY` 時 503 `assistant_not_configured` |
+| `GET /v1/logistics` | 物流追蹤清單（vault 的 watchlist.json）與物流商、狀態、背景刷新狀態 `{"items","couriers","statuses","dhl","track17","refresh","path"}` |
+| `POST /v1/logistics/items` | 新增追蹤 `{"courier","number","note"?}` → 201 `{"item"}`（先查詢物流商再加到最前面；同一單號則更新） |
+| `PATCH`／`DELETE /v1/logistics/items/{number}` | 修改備註、狀態、結案（`archived: true` → 已送達）或恢復追蹤 `{"note"?,"status"?,"archived"?}` → `{"item"}`；刪除 → 204 |
+| `POST /v1/logistics/items/{number}/refresh`、`POST /v1/logistics/refresh` | 重新查詢一筆／所有追蹤中的單號（查詢失敗時保留原本的進度） |
+| `POST /v1/logistics/archive-delivered`、`DELETE /v1/logistics/archived` | 結案已送達 → `{"archived"}`；清空結案清單 → `{"removed"}` |
+| `GET /v1/logistics/linked` | Frontmatter 有物流單號（`tracking_no`、`tracking_number`、`waybill`、`tcat_no`、`sf_no`、`dhl_no`、`fedex_no`）的筆記 `{"notes":[...]}` |
 | `GET /v1/assistant/runs/{id}?after=&wait=` | 工作狀態與 `after` 之後的事件（長輪詢，`wait` 最多 25 秒）`{"id","status","model","events","answer","error","sources","edits","usage"}` |
 | `POST /v1/assistant/runs/{id}/cancel`／`/undo` | 取消工作 → `{"status"}`；復原修改 `{"editIds"?}` → `{"undone":[...],"failed":[{"id","reason"}]}` |
 | `GET /v1/openapi.json` | OpenAPI 3.1 規格，供自建 harness 產生客戶端 |
@@ -131,6 +137,10 @@ Claude 把 vault 當成電腦的檔案系統操作：`list_files`、`read_file`�
 | `ASSISTANT_MAX_TURNS` | 否 | 每個工作最多呼叫模型幾次，預設 `40` |
 | `ASSISTANT_CODE_EXECUTION` | 否 | Anthropic 程式沙盒，預設開啟；`0` 關閉 |
 | `ASSISTANT_WEB_SEARCH` | 否 | Anthropic 網路搜尋，預設關閉；`1` 開啟 |
+| `LOGISTICS_PATH` | 否 | 物流追蹤清單在 vault 中的路徑，預設 `06 日誌/物流追蹤/watchlist.json`（電腦上「物流追蹤中心」dataviewjs 工具用的同一個檔案） |
+| `LOGISTICS_REFRESH_MINUTES` | 否 | 每隔幾分鐘在背景刷新追蹤中的單號，預設 `120`，最少 15；`0` 關閉 |
+| `DHL_API_KEY` | 否 | DHL 官方 Shipment Tracking - Unified API 金鑰（免費，developer.dhl.com 以 Email 註冊）；設定後 DHL 單號會自動抓取完整軌跡 |
+| `TRACK17_API_KEY` | 否 | 17TRACK API 金鑰（api.17track.net）；設定後 FedEx、UPS、新竹、嘉里大榮、郵局等（以及沒有 DHL 金鑰時的 DHL）也會自動抓取 |
 
 參考 [`.env.example`](.env.example)。
 

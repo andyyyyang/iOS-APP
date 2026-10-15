@@ -32,6 +32,14 @@ export interface Config {
   assistantCodeExecution: boolean;
   /** ASSISTANT_WEB_SEARCH: Anthropic's web search (default off). */
   assistantWebSearch: boolean;
+  /** LOGISTICS_PATH: vault path of the logistics watch list (default 06 日誌/物流追蹤/watchlist.json). */
+  logisticsPath: string | undefined;
+  /** LOGISTICS_REFRESH_MINUTES: background refresh of tracked shipments (default 120; 0 = off). */
+  logisticsRefreshMinutes: number;
+  /** DHL_API_KEY: DHL Shipment Tracking - Unified API key (optional, free). Never logged. */
+  dhlApiKey: string | undefined;
+  /** TRACK17_API_KEY: 17TRACK API key for FedEx, UPS and other couriers (optional). Never logged. */
+  track17ApiKey: string | undefined;
 }
 
 export interface VaultConfig {
@@ -157,5 +165,18 @@ export function loadConfig(
     assistantMaxTurns: parseMaxTurns(env.ASSISTANT_MAX_TURNS),
     assistantCodeExecution: !isFalse(env.ASSISTANT_CODE_EXECUTION),
     assistantWebSearch: isTrue(env.ASSISTANT_WEB_SEARCH),
+    logisticsPath: nonEmpty(env.LOGISTICS_PATH)?.replace(/^\/+/, ""),
+    logisticsRefreshMinutes: parseRefreshMinutes(env.LOGISTICS_REFRESH_MINUTES),
+    dhlApiKey: nonEmpty(env.DHL_API_KEY),
+    track17ApiKey: nonEmpty(env.TRACK17_API_KEY) ?? nonEmpty(env.SEVENTEEN_TRACK_API_KEY),
   };
+}
+
+/** LOGISTICS_REFRESH_MINUTES: whole minutes, at least 15 (couriers' sites are polite to), 0 = off; default 120. */
+export function parseRefreshMinutes(value: string | undefined): number {
+  const trimmed = value?.trim();
+  if (!trimmed) return 120;
+  const minutes = Number(trimmed);
+  if (!Number.isInteger(minutes) || minutes < 0) throw new Error(`Invalid LOGISTICS_REFRESH_MINUTES: "${trimmed}" (whole minutes, 0 = off)`);
+  return minutes === 0 ? 0 : Math.max(15, minutes);
 }

@@ -2,6 +2,8 @@ import cors from "cors";
 import express, { type Express } from "express";
 import type { AssistantOptions } from "../assistant/service.js";
 import type { Classifier } from "../classifier/types.js";
+import type { LogisticsOptions } from "../logistics/service.js";
+import type { Services } from "../services/index.js";
 import type { VaultConfig } from "../config.js";
 import { mcpRouter } from "../mcp/route.js";
 import { createServices } from "../services/index.js";
@@ -12,6 +14,7 @@ import type { Store } from "../store/types.js";
 import type { VaultStore } from "../vault/types.js";
 import { VERSION } from "../version.js";
 import { assistantRouter } from "./routes/assistant.js";
+import { logisticsRouter } from "./routes/logistics.js";
 import { vaultIndexRouter } from "./routes/vault-index.js";
 import { requireApiKey } from "./auth.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
@@ -46,6 +49,10 @@ export interface AppOptions {
   assistant?: AssistantOptions;
   /** Scans → JSON record files in the vault (SCAN_RECORD_OUTPUTS); omitted = the FV60 record file, when it exists. */
   recordOutputs?: RecordOutput[];
+  /** Logistics tracker (/v1/logistics): courier API keys, watch list path, background refresh; omitted = defaults. */
+  logistics?: LogisticsOptions;
+  /** Receives the services once built (index.ts starts the logistics background refresh with it). */
+  onServices?: (services: Services) => void;
 }
 
 /** /pair: attempts per client IP per window. */
@@ -67,8 +74,11 @@ export function createApp({
   now = Date.now,
   assistant,
   recordOutputs,
+  logistics,
+  onServices,
 }: AppOptions): Express {
-  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, assistant, recordOutputs, now });
+  const services = createServices({ store, classifier, vault, vaultConfig, vaultChanges, obsidianPlugin, assistant, recordOutputs, logistics, now });
+  onServices?.(services);
   const auth = requireApiKey(apiKeys);
   const app = express();
   registerVaultStream(app, { services, apiKeys }); // for attachVaultStream(server, app)
@@ -110,6 +120,7 @@ export function createApp({
   v1.use("/templates", templatesRouter(services));
   v1.use(classifyRouter(services));
   v1.use("/assistant", assistantRouter(services));
+  v1.use("/logistics", logisticsRouter(services));
   app.use("/v1", v1);
 
   app.use("/mcp", auth, mcpRouter(services));
