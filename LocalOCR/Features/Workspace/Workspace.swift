@@ -74,7 +74,7 @@ enum WorkspaceTab: Hashable, Identifiable {
 
     var title: String {
         switch self {
-        case .start: return "知識庫"
+        case .start: return "AI 搜尋"
         case .note(let path): return ((path as NSString).lastPathComponent as NSString).deletingPathExtension
         case .folder(let path):
             guard !path.isEmpty else { return NotesSettings.vaultName.isEmpty ? "Vault" : NotesSettings.vaultName }
@@ -506,6 +506,22 @@ final class Workspace {
         guard let path = try? JournalFiles.create(in: target, title: "手寫日誌", paper: .lined, store: store) else { return }
         reveal(path: path)
         openNote(path)
+    }
+
+    /// 打開日誌筆記本：最近寫過的那一本（每天第一次打開會自動加上今天的一頁）；還沒有就建立一本。
+    func openJournal() {
+        if let path = Self.latestJournal(in: store.notes, defaultFolder: JournalFiles.defaultFolder(store: store, fallback: "")) {
+            openNote(path)
+        } else {
+            newJournal()
+        }
+    }
+
+    /// 最近修改的日誌筆記本。按需模式還沒下載的筆記不知道是不是日誌，預設資料夾中「手寫日誌」開頭的也算。
+    nonisolated static func latestJournal(in notes: [NoteSummary], defaultFolder: String) -> String? {
+        notes
+            .filter { $0.isJournal || (!$0.isLocal && $0.folder == defaultFolder && $0.title.hasPrefix("手寫日誌")) }
+            .max(by: { $0.mtime < $1.mtime })?.path
     }
 
     func createFolder(named name: String, in parent: String) {

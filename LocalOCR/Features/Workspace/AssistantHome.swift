@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 首頁：知識庫 AI。問問題或下指令，AI 在線上搜尋、閱讀、修改 vault（透過伺服器的 MCP，不下載），
+/// 首頁：AI 搜尋。問問題或下指令，AI 在線上搜尋、閱讀、修改 vault（透過伺服器的 MCP，不下載），
 /// 回答附上來源；改過的筆記可以復原。沒有對話時顯示建議問題與最近編輯的筆記。
 struct AssistantHome: View {
     @Environment(Workspace.self) private var workspace
@@ -86,43 +86,90 @@ struct AssistantHome: View {
 
     // MARK: 標題
 
+    /// 沒有對話時是「AI 搜尋」；對話中顯示這次對話的主題（第一個問題）。
     private var header: some View {
-        PageHeader("知識庫", subtitle: Date().formatted(.dateTime.month().day().weekday(.wide))) {
-            if !assistant.sessions.isEmpty {
-                Menu {
-                    ForEach(assistant.sessions.prefix(20)) { session in
-                        Button(session.title) { open(session) }
+        Group {
+            if let topic {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("AI 搜尋")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(DS.textTertiary)
+                        Text(topic)
+                            .font(.system(size: isCompact ? 19 : 22, weight: .semibold))
+                            .foregroundStyle(DS.text)
+                            .lineLimit(1)
                     }
-                    Divider()
-                    Button { workspace.open(.folder(KnowledgeAssistant.historyFolder)) } label: {
-                        Label("在資料夾中查看全部", systemImage: "folder")
-                    }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(DS.text)
-                        .frame(width: 34, height: 34)
-                        .background(DS.control, in: Circle())
+                    Spacer(minLength: 8)
+                    headerActions
                 }
-                .disabled(assistant.isWorking)
-                .accessibilityLabel("對話紀錄")
-            }
-            if !assistant.messages.isEmpty {
-                Button {
-                    assistant.newConversation()
-                    draft = ""
-                    notice = nil
-                } label: {
-                    Label("新對話", systemImage: "square.and.pencil")
-                        .font(.subheadline.weight(.medium))
+                .accessibilityElement(children: .contain)
+            } else {
+                PageHeader("AI 搜尋", subtitle: Date().formatted(.dateTime.month().day().weekday(.wide))) {
+                    headerActions
                 }
-                .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
-                .disabled(assistant.isWorking)
             }
         }
         .padding(.horizontal, gutter)
         .padding(.top, isCompact ? 18 : 22)
         .padding(.bottom, 10)
+    }
+
+    /// 這次對話的主題：第一個問題的第一行。
+    private var topic: String? {
+        guard let question = assistant.messages.first(where: { $0.role == .user })?.text else { return nil }
+        let line = question.split(whereSeparator: \.isNewline).first.map(String.init) ?? question
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    @ViewBuilder
+    private var headerActions: some View {
+        if !assistant.sessions.isEmpty {
+            Menu {
+                ForEach(assistant.sessions.prefix(20)) { session in
+                    Button(session.title) { open(session) }
+                }
+                Divider()
+                Button { workspace.open(.folder(KnowledgeAssistant.historyFolder)) } label: {
+                    Label("在資料夾中查看全部", systemImage: "folder")
+                }
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(DS.text)
+                    .frame(width: 34, height: 34)
+                    .background(DS.control, in: Circle())
+            }
+            .disabled(assistant.isWorking)
+            .accessibilityLabel("對話紀錄")
+        }
+        if !assistant.messages.isEmpty {
+            Button {
+                assistant.newConversation()
+                draft = ""
+                notice = nil
+            } label: {
+                if isCompact {
+                    // iPhone 只放圖示，讓主題多顯示幾個字
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(DS.text)
+                        .frame(width: 34, height: 34)
+                        .background(DS.control, in: Circle())
+                } else {
+                    Label("新對話", systemImage: "square.and.pencil")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(DS.text)
+                        .padding(.horizontal, 14)
+                        .frame(height: 34)
+                        .background(DS.control, in: Capsule())
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(assistant.isWorking)
+            .accessibilityLabel("新對話")
+        }
     }
 
     // MARK: 沒有對話時
@@ -143,6 +190,7 @@ struct AssistantHome: View {
                 statusLines
                 suggestions
             }
+            journalCard
             if !assistant.sessions.isEmpty {
                 history
             }
@@ -293,6 +341,39 @@ struct AssistantHome: View {
         }
     }
 
+    /// 日誌筆記本的入口：打開最近的那一本（今天的一頁），還沒有就建立。
+    private var journalCard: some View {
+        let exists = Workspace.latestJournal(in: store.notes, defaultFolder: JournalFiles.defaultFolder(store: store, fallback: "")) != nil
+        return Button { workspace.openJournal() } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "book.closed")
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(DS.text)
+                    .frame(width: 42, height: 42)
+                    .background(DS.card.opacity(0.7), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("日誌筆記本")
+                        .font(.headline)
+                        .foregroundStyle(DS.text)
+                    Text(exists ? "打開今天（\(Date().formatted(.dateTime.month().day()))）的一頁，寫 #機種代號 會連到機種主卡" : "一頁一頁手寫、依日期自動整理，寫 #機種代號 會連到機種主卡")
+                        .font(.subheadline)
+                        .foregroundStyle(DS.onPastelSecondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+                Text(exists ? "打開" : "建立")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.onPrimary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                    .background(DS.primary, in: Capsule())
+            }
+            .pastelCard(.lavender, padding: 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(CardPressStyle())
+    }
+
     private var pairingCard: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
@@ -439,9 +520,10 @@ struct AssistantHome: View {
     /// 原本首頁浮動工具列的新增動作。
     private var createMenu: some View {
         Menu {
+            Button { workspace.openJournal() } label: { Label("日誌筆記本（今天）", systemImage: "book.closed") }
+            Divider()
             Button { workspace.newTextNote() } label: { Label("新增筆記", systemImage: "doc.text") }
             Button { workspace.newNotebook() } label: { Label("新增手寫筆記", systemImage: "pencil") }
-            Button { workspace.newJournal() } label: { Label("新增日誌筆記本", systemImage: "book.closed") }
             Button { workspace.newTaskNote() } label: { Label("新增待辦清單", systemImage: "checkmark.square") }
             Button {
                 folderName = ""

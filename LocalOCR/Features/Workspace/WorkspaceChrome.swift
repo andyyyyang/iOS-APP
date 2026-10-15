@@ -194,6 +194,7 @@ struct Ribbon: View {
     var onAction: (() -> Void)?
 
     @Environment(Workspace.self) private var workspace
+    @State private var store = NotesStore.shared
 
     private var isVertical: Bool { axis == .vertical }
 
@@ -231,6 +232,7 @@ struct Ribbon: View {
             }
         }
         separator
+        button("日誌筆記本", "book.closed", isActive: isJournalActive) { run { workspace.openJournal() } }
         button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
         button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
         button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
@@ -242,6 +244,11 @@ struct Ribbon: View {
 
     private var settingsButton: some View {
         button("設定", WorkspaceTab.settings.systemImage, isActive: workspace.active == .settings) { run { workspace.open(.settings) } }
+    }
+
+    private var isJournalActive: Bool {
+        guard let path = workspace.activeNotePath else { return false }
+        return store.notes.first { $0.path == path }?.isJournal == true
     }
 
     private func isPanelActive(_ mode: LeftPanelMode) -> Bool {

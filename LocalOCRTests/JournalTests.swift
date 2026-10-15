@@ -3,6 +3,21 @@ import XCTest
 @testable import LocalOCR
 
 final class JournalTests: XCTestCase {
+    // MARK: 打開日誌筆記本
+
+    func testOpensTheMostRecentJournal() {
+        let folder = "06 日誌/手寫日誌"
+        let older = NotesStore.summarize(path: "\(folder)/手寫日誌.md", mtime: Date(timeIntervalSince1970: 100), text: "---\nlocalocr-notebook: jn-old\n---\n")
+        let newer = NotesStore.summarize(path: "工作/手寫日誌 2.md", mtime: Date(timeIntervalSince1970: 200), text: "---\nlocalocr-notebook: jn-new\n---\n")
+        let handwriting = NotesStore.summarize(path: "工作/手寫.md", mtime: Date(timeIntervalSince1970: 300), text: "---\nlocalocr-notebook: nb-1\n---\n")
+        let plain = NotesStore.summarize(path: "\(folder)/手寫日誌 說明.md", mtime: Date(timeIntervalSince1970: 400), text: "內容")
+        XCTAssertEqual(Workspace.latestJournal(in: [older, newer, handwriting, plain], defaultFolder: folder), newer.path)
+        // 還沒下載（不知道是不是日誌）：預設資料夾中「手寫日誌」開頭的也算
+        let remote = NotesStore.remoteSummary(path: "\(folder)/手寫日誌 3.md", mtime: Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(Workspace.latestJournal(in: [older, remote], defaultFolder: folder), remote.path)
+        XCTAssertNil(Workspace.latestJournal(in: [handwriting, plain], defaultFolder: folder))
+    }
+
     // MARK: 機種清單與模糊比對
 
     private let notes: [VaultIndex.Note] = [

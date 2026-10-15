@@ -164,6 +164,7 @@ struct CommandPalette: View {
 
     private var commands: [Item] {
         var items: [Item] = [
+            Item(id: "journal", title: "打開日誌筆記本", detail: "今天的一頁", systemImage: "book.closed", isCommand: true, action: { workspace.openJournal() }),
             Item(id: "new-note", title: "新增筆記", detail: "", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
             Item(id: "new-notebook", title: "新增手寫筆記", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.newNotebook() }),
             Item(id: "new-journal", title: "新增日誌筆記本", detail: "一頁一頁、依日期整理、#機種標記", systemImage: "book.closed", isCommand: true, action: { workspace.newJournal() }),
