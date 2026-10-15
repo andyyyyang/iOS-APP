@@ -90,6 +90,10 @@ struct FileExplorer: View {
     @State private var folderPrompt: String?
     @State private var folderName = ""
     @State private var moving: NoteSummary?
+    /// 拖曳中、手指停在上面的資料夾（"" 是最上層）。
+    @State private var dropTarget: String?
+    @State private var hoverExpand: Task<Void, Never>?
+    @State private var toast: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -115,6 +119,7 @@ struct FileExplorer: View {
                             .foregroundStyle(DS.textTertiary)
                             .padding(14)
                     }
+                    topLevelDropZone
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 16)
@@ -124,9 +129,10 @@ struct FileExplorer: View {
         }
         .quickLookPreview($previewURL)
         .sheet(item: $moving) { note in
-            MoveToFolderSheet(note: note) { folder in workspace.moveNote(note.path, toFolder: folder) }
+            MoveToFolderSheet(note: note) { folder in move([note.path], into: folder) }
                 .presentationDetents([.medium, .large])
         }
+        .toast($toast)
         .alert("新增資料夾", isPresented: Binding(get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })) {
             TextField("名稱", text: $folderName)
             Button("取消", role: .cancel) {}
@@ -175,7 +181,7 @@ struct FileExplorer: View {
         switch row.kind {
         case .folder(let folder):
             let expanded = workspace.isExpanded(folder)
-            TreeRow(depth: row.depth, isSelected: workspace.active == .folder(folder)) {
+            TreeRow(depth: row.depth, isSelected: workspace.active == .folder(folder), isDropTarget: dropTarget == folder) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(DS.textTertiary)
@@ -200,6 +206,12 @@ struct FileExplorer: View {
                 Divider()
                 Button { workspace.open(.folder(folder)) } label: { Label("在分頁中開啟", systemImage: "rectangle.on.rectangle") }
             }
+            // 把筆記或檔案拖到資料夾上：搬進這個資料夾（停一下會自動展開）
+            .dropDestination(for: String.self) { items, _ in
+                drop(items, into: folder)
+            } isTargeted: { targeted in
+                hover(folder, targeted: targeted)
+            }
         case .note(let note):
             let selected = workspace.activeNotePath == note.path
             TreeRow(depth: row.depth, isSelected: selected) {
@@ -213,13 +225,20 @@ struct FileExplorer: View {
             } action: {
                 workspace.openNote(note.path)
             }
+            .draggable(TreeDrag.payload(note.path)) {
+                TreeDragPreview(systemImage: note.isNotebook ? "pencil" : "doc", title: note.title)
+            }
+            // 拖到筆記上：搬到這則筆記所在的資料夾（同 Obsidian）
+            .dropDestination(for: String.self) { items, _ in
+                drop(items, into: note.folder)
+            } isTargeted: { targeted in
+                hover(note.folder, targeted: targeted)
+            }
             .contextMenu {
                 if let url = NotesSettings.obsidianURL(for: note.path) {
                     Link(destination: url) { Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app") }
                 }
-                if note.isLocal {
-                    Button { moving = note } label: { Label("搬移到…", systemImage: "folder") }
-                }
+                Button { moving = note } label: { Label("搬移到…", systemImage: "folder") }
                 Button(role: .destructive) { workspace.pendingDelete = note } label: { Label("刪除", systemImage: "trash") }
             }
         case .file(let file):
@@ -245,6 +264,14 @@ struct FileExplorer: View {
                     }
                 }
             }
+            .draggable(TreeDrag.payload(file.path)) {
+                TreeDragPreview(systemImage: file.systemImage, title: file.name)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                drop(items, into: file.folder)
+            } isTargeted: { targeted in
+                hover(file.folder, targeted: targeted)
+            }
             .contextMenu {
                 if file.isLocal {
                     ShareLink(item: LocalVault.shared.url(for: file.path)) { Label("分享", systemImage: "square.and.arrow.up") }
@@ -259,6 +286,99 @@ struct FileExplorer: View {
     private func promptFolder(in parent: String) {
         folderName = ""
         folderPrompt = parent
+    }
+
+    // MARK: 拖曳搬移
+
+    /// 清單最下面的空白：拖到這裡移到最上層。
+    private var topLevelDropZone: some View {
+        let targeted = dropTarget == ""
+        return Text(targeted ? "放開以移到最上層" : " ")
+            .font(.footnote)
+            .foregroundStyle(DS.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 120)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(targeted ? DS.textTertiary : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            }
+            .contentShape(Rectangle())
+            .padding(.top, 8)
+            .dropDestination(for: String.self) { items, _ in
+                drop(items, into: "")
+            } isTargeted: { targeted in
+                hover("", targeted: targeted)
+            }
+    }
+
+    private func drop(_ items: [String], into folder: String) -> Bool {
+        hoverExpand?.cancel()
+        dropTarget = nil
+        let paths = items.compactMap(TreeDrag.path(from:)).filter { ($0 as NSString).deletingLastPathComponent != folder }
+        guard !paths.isEmpty else { return false }
+        move(paths, into: folder)
+        return true
+    }
+
+    private func move(_ paths: [String], into folder: String) {
+        Task {
+            var moved = 0
+            for path in paths {
+                if await workspace.moveNote(path, toFolder: folder) != nil { moved += 1 }
+            }
+            let name = NotesStore.folderTitle(folder)
+            toast = moved > 0 ? "已搬到「\(name)」" : "沒有搬移（可能是網路中斷或已有同名檔案）"
+        }
+    }
+
+    /// 手指停在資料夾上：標示出來，停約 0.7 秒自動展開（可以一路拖進子資料夾）。
+    private func hover(_ folder: String, targeted: Bool) {
+        if targeted {
+            dropTarget = folder
+            hoverExpand?.cancel()
+            guard !folder.isEmpty, !workspace.isExpanded(folder) else { return }
+            hoverExpand = Task {
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !Task.isCancelled, dropTarget == folder, !workspace.isExpanded(folder) else { return }
+                withAnimation(.snappy(duration: 0.2)) { workspace.toggleFolder(folder) }
+            }
+        } else if dropTarget == folder {
+            dropTarget = nil
+            hoverExpand?.cancel()
+        }
+    }
+}
+
+/// 檔案樹拖曳的內容：檔案路徑加上前綴（其他 App 拖進來的文字不會被當成檔案）。
+enum TreeDrag {
+    static let prefix = "localocr-vault-file:"
+
+    static func payload(_ path: String) -> String { prefix + path }
+
+    static func path(from item: String) -> String? {
+        guard item.hasPrefix(prefix) else { return nil }
+        let path = String(item.dropFirst(prefix.count))
+        return path.isEmpty ? nil : path
+    }
+}
+
+/// 拖曳時跟著手指的小卡片。
+private struct TreeDragPreview: View {
+    let systemImage: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12))
+                .foregroundStyle(DS.textSecondary)
+            Text(title)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(DS.text)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(DS.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 
@@ -319,6 +439,8 @@ private struct MoveToFolderSheet: View {
 private struct TreeRow<Content: View>: View {
     let depth: Int
     let isSelected: Bool
+    /// 拖曳時手指停在這個資料夾上。
+    var isDropTarget = false
     @ViewBuilder var content: () -> Content
     var action: () -> Void
 
@@ -337,7 +459,7 @@ private struct TreeRow<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? DS.card : (isHovering ? DS.card.opacity(0.6) : Color.clear))
+                    .fill(isDropTarget ? DS.Pastel.sky.color : (isSelected ? DS.card : (isHovering ? DS.card.opacity(0.6) : Color.clear)))
                     .shadow(color: .black.opacity(isSelected ? 0.06 : 0), radius: 1, y: 1)
             }
             .contentShape(Rectangle())

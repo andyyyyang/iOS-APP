@@ -509,14 +509,21 @@ final class Workspace {
         }
     }
 
-    /// 側欄的「搬移到」：搬到另一個資料夾，開著的分頁跟著換到新位置。
-    func moveNote(_ path: String, toFolder folder: String) {
-        guard let target = try? store.move(path, toFolder: folder), target != path else { return }
+    /// 側欄的拖曳搬移與「搬移到」：搬到另一個資料夾，開著的分頁跟著換到新位置。
+    /// 還沒下載的檔案先下載再搬。回傳新的路徑；失敗時是 nil。
+    @discardableResult
+    func moveNote(_ path: String, toFolder folder: String) async -> String? {
+        guard (path as NSString).deletingLastPathComponent != folder else { return nil }
+        if !store.vault.exists(path) {
+            guard (try? await VaultSyncCenter.shared.download(path)) != nil else { return nil }
+        }
+        guard let target = try? store.move(path, toFolder: folder), target != path else { return nil }
         renameNote(from: path, to: target)
         if !folder.isEmpty, !expandedFolders.contains(folder) {
             expandedFolders.insert(folder)
             defaults.set(Array(expandedFolders), forKey: Key.expanded)
         }
+        return target
     }
 
     func delete(_ note: NoteSummary) {
