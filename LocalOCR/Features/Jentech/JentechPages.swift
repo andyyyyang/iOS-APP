@@ -3,38 +3,6 @@ import SwiftUI
 // 業務快查與物流中心的各頁（移植自 Obsidian 插件 jentech-tools 的頁籤）：
 // 看板首頁、通訊錄、代碼查詢、案件查詢、BPM 追蹤、SOP 導覽（編輯卡片在 JentechCardsPage.swift）。
 
-/// 底部的短暫提示（複製、儲存的結果）。
-struct ToastModifier: ViewModifier {
-    @Binding var message: String?
-
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .bottom) {
-            if let message {
-                Text(message)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(DS.onPrimary)
-                    .lineLimit(2)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(DS.primary, in: Capsule(style: .continuous))
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: message) {
-                        try? await Task.sleep(for: .seconds(1.8))
-                        withAnimation { self.message = nil }
-                    }
-            }
-        }
-    }
-}
-
-extension View {
-    func toast(_ message: Binding<String?>) -> some View {
-        modifier(ToastModifier(message: message))
-    }
-}
-
 /// 工具頁的捲動內容：卡片清單、iPad 上限寬。
 struct ToolScroll<Content: View>: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
