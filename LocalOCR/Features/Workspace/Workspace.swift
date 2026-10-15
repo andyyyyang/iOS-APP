@@ -9,6 +9,7 @@ enum WorkspaceTab: Hashable, Identifiable {
     case graph
     case tasks
     case drawings
+    case logistics
     case scan
     case history
     case settings
@@ -21,6 +22,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .graph: return "graph"
         case .tasks: return "tasks"
         case .drawings: return "drawings"
+        case .logistics: return "logistics"
         case .scan: return "scan"
         case .history: return "history"
         case .settings: return "settings"
@@ -41,6 +43,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case "graph": self = .graph
         case "tasks": self = .tasks
         case "drawings": self = .drawings
+        case "logistics": self = .logistics
         case "scan": self = .scan
         case "history": self = .history
         case "settings": self = .settings
@@ -58,6 +61,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .graph: return "關聯圖"
         case .tasks: return "待辦"
         case .drawings: return "圖面"
+        case .logistics: return "物流追蹤"
         case .scan: return "掃描"
         case .history: return "掃描紀錄"
         case .settings: return "設定"
@@ -72,6 +76,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .graph: return "point.3.connected.trianglepath.dotted"
         case .tasks: return "checkmark.square"
         case .drawings: return "square.stack.3d.up"
+        case .logistics: return "shippingbox"
         case .scan: return "viewfinder"
         case .history: return "clock"
         case .settings: return "slider.horizontal.3"
@@ -179,6 +184,8 @@ final class Workspace {
     var editRequest: EditRequest?
     /// Apple Intelligence 對各筆記的整理結果（切換面板時保留）。
     var insights: [String: NoteInsights] = [:]
+    /// 已有原生版本的工具筆記（例如物流追蹤中心）中，使用者要看原始內容的那些。
+    private(set) var sourceNotes: Set<String> = []
 
     /// 上一頁（像瀏覽器）：之前看過的頁面。`closesCurrent` 表示目前的分頁是從那一頁開出來的，回去時關掉它（或原地換回）。
     private struct BackEntry {
@@ -383,6 +390,11 @@ final class Workspace {
             leftMode = mode
             setLeftOpen(true)
         }
+    }
+
+    /// 工具筆記改看原始的 Markdown（不再以原生頁面取代）。
+    func showSource(of path: String) {
+        sourceNotes.insert(path)
     }
 
     func showRight(_ mode: RightPanelMode) {

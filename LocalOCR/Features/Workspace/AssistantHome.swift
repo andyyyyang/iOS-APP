@@ -387,6 +387,7 @@ struct AssistantHome: View {
             Button { workspace.open(.tasks) } label: { Label("所有待辦", systemImage: "checkmark.square") }
             Button { workspace.open(.graph) } label: { Label("關聯圖", systemImage: WorkspaceTab.graph.systemImage) }
             Button { workspace.open(.drawings) } label: { Label("圖面瀏覽", systemImage: WorkspaceTab.drawings.systemImage) }
+            Button { workspace.open(.logistics) } label: { Label("物流追蹤", systemImage: WorkspaceTab.logistics.systemImage) }
             Button { Task { await sync.syncNow() } } label: { Label("立即同步", systemImage: "arrow.triangle.2.circlepath") }
         } label: {
             Image(systemName: "plus")

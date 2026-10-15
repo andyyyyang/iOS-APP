@@ -213,6 +213,7 @@ struct Ribbon: View {
             button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
             button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
             button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
+            button("物流追蹤", WorkspaceTab.logistics.systemImage, isActive: workspace.active == .logistics) { run { workspace.open(.logistics) } }
             separator
             button("掃描文件", WorkspaceTab.scan.systemImage, isActive: workspace.active == .scan) { run { workspace.open(.scan) } }
             button("相機", "camera") { run { workspace.showsCamera = true } }
@@ -354,6 +355,8 @@ struct WorkspaceTabContent: View {
             TasksPage()
         case .drawings:
             DrawingsPage()
+        case .logistics:
+            LogisticsPage()
         case .scan:
             ScanView(selectedTab: toolSelection)
         case .history:
@@ -394,6 +397,9 @@ struct NoteDetailRouter: View {
                 ?? NotesStore.summarize(path: path, mtime: Date(), text: LocalVault.shared.readText(path) ?? "")
             if let id = summary.notebookID {
                 NotebookEditorView(initialPath: path, notebookID: id, onPathChange: { workspace.renameNote(from: path, to: $0) })
+            } else if !workspace.sourceNotes.contains(path), LogisticsLogic.isToolNote(path: path, text: LocalVault.shared.readText(path)) {
+                // 電腦上的「物流追蹤中心」dataviewjs 工具（要用 Python）：在 App 中開原生的物流追蹤
+                LogisticsPage(sourceNote: path)
             } else {
                 NoteView(
                     initialPath: path,
