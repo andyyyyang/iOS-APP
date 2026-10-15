@@ -75,6 +75,11 @@ struct WorkspaceView: View {
         }
         .onChange(of: sync.revision) { _, _ in Task { await store.reload() } }
         .onChange(of: sync.pendingFiles) { _, _ in Task { await store.reload() } }
+        // 開啟 Markdown 筆記時，右側欄自動切到這則筆記的手寫備忘（手寫筆記本身不必）
+        .onChange(of: workspace.activeNotePath, initial: true) { _, path in
+            guard let path, NotesSettings.autoInkMemo, !isNotebook(path) else { return }
+            workspace.rightMode = .memo
+        }
         // 開著的筆記不會在按需模式整理空間時被移除
         .onChange(of: workspace.tabs, initial: true) { _, tabs in
             sync.openPaths = Set(tabs.compactMap { tab -> String? in
@@ -92,6 +97,12 @@ struct WorkspaceView: View {
             }
             if sync.isConfigured { await sync.syncNow() }
         }
+    }
+
+    private func isNotebook(_ path: String) -> Bool {
+        if let note = store.notes.first(where: { $0.path == path }) { return note.isNotebook }
+        guard let text = LocalVault.shared.readText(path) else { return false }
+        return NotesStore.summarize(path: path, mtime: Date(), text: text).isNotebook
     }
 
     private var massDeletionMessage: String {

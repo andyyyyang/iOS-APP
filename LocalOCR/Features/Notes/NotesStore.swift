@@ -448,6 +448,7 @@ final class NotesStore {
         guard NotebookMarkdown.fileName(for: title) != current else { return path }
         let target = uniquePath(folder: folder, title: title)
         try vault.move(path, to: target)
+        InkMemo.follow(from: path, to: target, vault: vault)
         changed()
         return target
     }
@@ -464,6 +465,7 @@ final class NotesStore {
             target = uniquePath(folder: folder, title: (name as NSString).deletingPathExtension, extension: ext.isEmpty ? "md" : ext)
         }
         try vault.move(path, to: target)
+        InkMemo.follow(from: path, to: target, vault: vault)
         changed()
         return target
     }

@@ -11,6 +11,12 @@ enum NotesSettings {
         static let migratedDefaultFolder = "notes.migratedDefaultFolder"
         static let lastPaper = "notes.lastPaper"
         static let limitsLineWidth = "notes.limitsLineWidth"
+        static let autoInkMemo = "notes.autoInkMemo"
+    }
+
+    /// 開啟 Markdown 筆記時右側欄自動切到手寫備忘；預設開啟。
+    static var autoInkMemo: Bool {
+        UserDefaults.standard.object(forKey: Key.autoInkMemo) as? Bool ?? true
     }
 
     /// 筆記內容限制在易讀的行寬（760）；預設關閉：跟著畫面全寬自適應。
@@ -314,6 +320,10 @@ struct InkBlock: Codable, Equatable {
     var height: CGFloat
     var paper: PaperStyle
     var drawing: Data
+    /// 畫布寬度；沒有記錄時是手寫筆記的寬度（`CanvasLayout.width`）。側欄的手寫備忘比較窄。
+    var width: CGFloat?
+
+    var canvasWidth: CGFloat { width ?? CanvasLayout.width }
 
     var pkDrawing: PKDrawing {
         get { (try? PKDrawing(data: drawing)) ?? PKDrawing() }
@@ -362,6 +372,6 @@ enum InkFiles {
     }
 
     static func image(for block: InkBlock) -> UIImage {
-        PaperRenderer.canvasImage(drawing: block.pkDrawing, rect: CGRect(x: 0, y: 0, width: CanvasLayout.width, height: block.height), paper: block.paper, scale: 2)
+        PaperRenderer.canvasImage(drawing: block.pkDrawing, rect: CGRect(x: 0, y: 0, width: block.canvasWidth, height: block.height), paper: block.paper, scale: 2)
     }
 }

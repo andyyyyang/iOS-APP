@@ -97,6 +97,7 @@ enum PaperRenderer {
 final class CanvasPaperView: UIView {
     private var segmentLayers: [CALayer] = []
     private var paper: PaperStyle?
+    private var width: CGFloat = CanvasLayout.width
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -111,18 +112,19 @@ final class CanvasPaperView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(paper: PaperStyle, height: CGFloat) {
-        if paper != self.paper {
+    func configure(paper: PaperStyle, height: CGFloat, width: CGFloat = CanvasLayout.width) {
+        if paper != self.paper || width != self.width {
             segmentLayers.forEach { $0.removeFromSuperlayer() }
             segmentLayers = []
             self.paper = paper
+            self.width = width
         }
         let count = max(Int(ceil(height / CanvasLayout.segmentHeight)), 1)
         while segmentLayers.count > count {
             segmentLayers.removeLast().removeFromSuperlayer()
         }
         while segmentLayers.count < count {
-            let rect = CGRect(x: 0, y: CGFloat(segmentLayers.count) * CanvasLayout.segmentHeight, width: CanvasLayout.width, height: CanvasLayout.segmentHeight)
+            let rect = CGRect(x: 0, y: CGFloat(segmentLayers.count) * CanvasLayout.segmentHeight, width: width, height: CanvasLayout.segmentHeight)
             let segment = CAShapeLayer()
             segment.frame = rect
             segment.path = PaperRenderer.canvasPatternPath(for: paper, rect: rect)
@@ -137,7 +139,7 @@ final class CanvasPaperView: UIView {
             layer.addSublayer(segment)
             segmentLayers.append(segment)
         }
-        bounds = CGRect(x: 0, y: 0, width: CanvasLayout.width, height: CGFloat(count) * CanvasLayout.segmentHeight)
+        bounds = CGRect(x: 0, y: 0, width: width, height: CGFloat(count) * CanvasLayout.segmentHeight)
     }
 }
 
@@ -153,6 +155,10 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
     /// 目前的畫布高度（邏輯座標）。打開期間只會變長，畫面不會因為擦掉筆跡而跳動。
     private var canvasHeight: CGFloat = 0
     private var lastWidth: CGFloat = 0
+    /// 畫布的邏輯寬度（筆跡座標）；顯示時縮放到符合畫面寬度。側欄的手寫備忘用比較窄的畫布，字才不會太細。
+    private var canvasWidth = CanvasLayout.width
+    /// 出現時就取得焦點、顯示 Apple Pencil 工具列（側欄的手寫備忘要等開始書寫才顯示）。
+    var activatesOnAppear = true
 
     var onDrawingChange: ((PKDrawing) -> Void)?
 
@@ -186,7 +192,9 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        canvasView.becomeFirstResponder()
+        if activatesOnAppear {
+            canvasView.becomeFirstResponder()
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -212,11 +220,16 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
     }
 
     private func fitScale(for width: CGFloat) -> CGFloat {
-        width / CanvasLayout.width
+        width / canvasWidth
     }
 
     /// 載入筆跡與紙張；`minimumSegments` 是上次的畫布長度（段數）。
-    func configure(drawing: PKDrawing, minimumSegments: Int, paper: PaperStyle) {
+    func configure(drawing: PKDrawing, minimumSegments: Int, paper: PaperStyle, width: CGFloat = CanvasLayout.width) {
+        if width != canvasWidth {
+            canvasWidth = width
+            lastWidth = 0
+            view.setNeedsLayout()
+        }
         if canvasView.drawing != drawing {
             canvasView.drawing = drawing
         }
@@ -231,9 +244,9 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
         let zoom = max(canvasView.zoomScale, 0.01)
         let viewport = canvasView.bounds.height / zoom
         canvasHeight = max(canvasHeight, CanvasLayout.height(for: canvasView.drawing, minimum: max(minimumHeight, viewport)))
-        paperView.configure(paper: paper, height: canvasHeight)
+        paperView.configure(paper: paper, height: canvasHeight, width: canvasWidth)
         paperView.transform = CGAffineTransform(scaleX: zoom, y: zoom)
-        let size = CGSize(width: CanvasLayout.width * zoom, height: canvasHeight * zoom)
+        let size = CGSize(width: canvasWidth * zoom, height: canvasHeight * zoom)
         if canvasView.contentSize != size {
             canvasView.contentSize = size
         }
@@ -282,6 +295,11 @@ final class CanvasNotebookHandle {
     fileprivate weak var controller: CanvasNotebookController?
 
     var currentDrawing: PKDrawing? { controller?.canvasView.drawing }
+
+    /// 換掉畫布上的筆跡（其他裝置改過、清除）。
+    func replace(_ drawing: PKDrawing) {
+        controller?.canvasView.drawing = drawing
+    }
 }
 
 /// SwiftUI 包裝。`revision` 改變時（換紙張、重新載入）才重新設定畫布；書寫時筆跡由畫布回報，不會反覆重設。
@@ -292,11 +310,14 @@ struct CanvasNotebook: UIViewControllerRepresentable {
     let handle: CanvasNotebookHandle
     let revision: Int
     var onDrawingChange: (PKDrawing) -> Void
+    var width: CGFloat = CanvasLayout.width
+    var activatesOnAppear = true
 
     func makeUIViewController(context: Context) -> CanvasNotebookController {
         let controller = CanvasNotebookController()
+        controller.activatesOnAppear = activatesOnAppear
         controller.loadViewIfNeeded()
-        controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper)
+        controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper, width: width)
         handle.controller = controller
         context.coordinator.revision = revision
         return controller
@@ -306,7 +327,7 @@ struct CanvasNotebook: UIViewControllerRepresentable {
         controller.onDrawingChange = onDrawingChange
         if context.coordinator.revision != revision {
             context.coordinator.revision = revision
-            controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper)
+            controller.configure(drawing: drawing(), minimumSegments: minimumSegments, paper: paper, width: width)
         }
     }
 

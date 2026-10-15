@@ -155,6 +155,7 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
 
 /// 右側欄的內容（目前筆記的資訊）。
 enum RightPanelMode: String, CaseIterable, Identifiable {
+    case memo
     case outline
     case links
     case properties
@@ -164,6 +165,7 @@ enum RightPanelMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .memo: return "手寫"
         case .outline: return "大綱"
         case .links: return "連結"
         case .properties: return "屬性"

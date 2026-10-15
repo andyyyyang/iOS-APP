@@ -43,7 +43,8 @@ struct InkBlockEditorView: View {
                         paper: block.paper,
                         handle: handle,
                         revision: revision,
-                        onDrawingChange: { _ in hasChanges = true }
+                        onDrawingChange: { _ in hasChanges = true },
+                        width: block.canvasWidth
                     )
                     .ignoresSafeArea(edges: .bottom)
                 } else {

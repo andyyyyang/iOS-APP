@@ -6,6 +6,7 @@ struct NotesSettingsView: View {
     @AppStorage(NotesSettings.Key.downloadPolicy) private var downloadPolicy = VaultDownloadPolicy.onDemand.rawValue
     @AppStorage(NotesSettings.Key.vaultName) private var vaultName = ""
     @AppStorage(NotesSettings.Key.limitsLineWidth) private var limitsLineWidth = false
+    @AppStorage(NotesSettings.Key.autoInkMemo) private var autoInkMemo = true
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
     @State private var sync = VaultSyncCenter.shared
@@ -46,10 +47,11 @@ struct NotesSettingsView: View {
 
             Section {
                 Toggle("限制行寬（易讀寬度）", isOn: $limitsLineWidth)
+                Toggle("開啟筆記時右側欄顯示手寫備忘", isOn: $autoInkMemo)
             } header: {
                 Text("版面")
             } footer: {
-                Text("關閉時筆記內容跟著畫面全寬自適應（表格與 Dataview 也會用滿寬度）；開啟時每行最寬約 760 點，在大螢幕上比較好讀。")
+                Text("關閉行寬限制時筆記內容跟著畫面全寬自適應（表格與 Dataview 也會用滿寬度）；開啟時每行最寬約 760 點，在大螢幕上比較好讀。手寫備忘每則筆記一份，存在附件資料夾（ink-memo-筆記名稱），可以插入筆記讓 Obsidian 也看得到。")
             }
 
             Section {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 右側欄：開著筆記時是它的大綱、連結、屬性與 AI 整理；其他時候是所有待辦（粉彩卡片）。
+/// 右側欄：開著筆記時是它的手寫備忘、大綱、連結、屬性與 AI 整理；其他時候是所有待辦（粉彩卡片）。
 struct RightSidebar: View {
     @Environment(Workspace.self) private var workspace
     @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
@@ -11,6 +11,7 @@ struct RightSidebar: View {
                 ModePicker(modes: RightPanelMode.allCases.filter { $0 != .ai || showsAIPanel })
                 Group {
                     switch workspace.rightMode {
+                    case .memo: InkMemoPanel(path: path).id(path)
                     case .outline: OutlinePanel(path: path)
                     case .links: LinksPanel(path: path)
                     case .properties: PropertiesPanel(path: path)
