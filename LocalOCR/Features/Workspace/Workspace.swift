@@ -10,6 +10,13 @@ enum WorkspaceTab: Hashable, Identifiable {
     case tasks
     case drawings
     case logistics
+    case hub
+    case contacts
+    case codes
+    case cases
+    case bpm
+    case cards
+    case sop
     case scan
     case history
     case settings
@@ -23,6 +30,13 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "tasks"
         case .drawings: return "drawings"
         case .logistics: return "logistics"
+        case .hub: return "hub"
+        case .contacts: return "contacts"
+        case .codes: return "codes"
+        case .cases: return "cases"
+        case .bpm: return "bpm"
+        case .cards: return "cards"
+        case .sop: return "sop"
         case .scan: return "scan"
         case .history: return "history"
         case .settings: return "settings"
@@ -44,6 +58,13 @@ enum WorkspaceTab: Hashable, Identifiable {
         case "tasks": self = .tasks
         case "drawings": self = .drawings
         case "logistics": self = .logistics
+        case "hub": self = .hub
+        case "contacts": self = .contacts
+        case "codes": self = .codes
+        case "cases": self = .cases
+        case "bpm": self = .bpm
+        case "cards": self = .cards
+        case "sop": self = .sop
         case "scan": self = .scan
         case "history": self = .history
         case "settings": self = .settings
@@ -62,6 +83,13 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "待辦"
         case .drawings: return "圖面"
         case .logistics: return "物流追蹤"
+        case .hub: return "業務快查"
+        case .contacts: return "通訊錄"
+        case .codes: return "代碼查詢"
+        case .cases: return "案件查詢"
+        case .bpm: return "BPM 追蹤"
+        case .cards: return "編輯卡片"
+        case .sop: return "SOP 導覽"
         case .scan: return "掃描"
         case .history: return "掃描紀錄"
         case .settings: return "設定"
@@ -77,6 +105,13 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "checkmark.square"
         case .drawings: return "square.stack.3d.up"
         case .logistics: return "shippingbox"
+        case .hub: return "truck.box"
+        case .contacts: return "phone"
+        case .codes: return "tag"
+        case .cases: return "doc.text.magnifyingglass"
+        case .bpm: return "chart.bar.doc.horizontal"
+        case .cards: return "person.text.rectangle"
+        case .sop: return "books.vertical"
         case .scan: return "viewfinder"
         case .history: return "clock"
         case .settings: return "slider.horizontal.3"

@@ -8,6 +8,7 @@ struct LogisticsPage: View {
         case active
         case archived
         case linked
+        case shipments
         case settings
     }
 
@@ -27,6 +28,9 @@ struct LogisticsPage: View {
     @State private var deleting: LogisticsClient.Item?
     @State private var confirmsClear = false
     @State private var showsScanner = false
+    @State private var shipmentFile: String?
+    @State private var shipments: [JentechShipment] = []
+    @State private var shipmentError: String?
 
     // 新增追蹤
     @State private var courier = "t-cat"
@@ -46,6 +50,7 @@ struct LogisticsPage: View {
         .task { await store.ensureLoaded() }
         .onChange(of: tab) { _, tab in
             if tab == .linked { Task { await store.loadLinked() } }
+            if tab == .shipments { Task { await loadShipments() } }
         }
         .onChange(of: number) { _, value in
             if !courierPicked, let guess = LogisticsLogic.guessCourier(value) { courier = guess }
@@ -111,6 +116,7 @@ struct LogisticsPage: View {
                 (value: Tab.active, title: (isCompact ? "追蹤 " : "追蹤中 ") + "\(store.active.count)"),
                 (value: Tab.archived, title: (isCompact ? "結案 " : "已結案 ") + "\(store.archived.count)"),
                 (value: Tab.linked, title: isCompact ? "筆記" : "筆記單號"),
+                (value: Tab.shipments, title: isCompact ? "名冊" : "託運名冊"),
                 (value: Tab.settings, title: "設定"),
             ], selection: $tab)
             if tab == .active {
@@ -189,6 +195,7 @@ struct LogisticsPage: View {
                 case .active: activeList
                 case .archived: archivedList
                 case .linked: linkedList
+                case .shipments: shipmentList
                 case .settings: settingsView
                 }
             }
@@ -199,7 +206,11 @@ struct LogisticsPage: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable {
-            if tab == .linked { await store.loadLinked() } else { await store.load() }
+            switch tab {
+            case .linked: await store.loadLinked()
+            case .shipments: await loadShipments()
+            default: await store.load()
+            }
         }
     }
 
@@ -429,6 +440,87 @@ struct LogisticsPage: View {
                     }
                 }
                 .card(padding: 14)
+            }
+        }
+    }
+
+    // MARK: 託運名冊
+
+    private func loadShipments() async {
+        await JentechStore.shared.ensureIndex()
+        let files = JentechStore.shared.shipmentFiles
+        if shipmentFile == nil || !files.contains(shipmentFile ?? "") { shipmentFile = files.first }
+        guard let file = shipmentFile else {
+            shipments = []
+            shipmentError = nil
+            return
+        }
+        do {
+            shipments = try await JentechStore.shared.loadShipments(file)
+            shipmentError = nil
+        } catch {
+            shipmentError = error.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private var shipmentList: some View {
+        let files = JentechStore.shared.shipmentFiles
+        if files.count > 1 {
+            Menu {
+                ForEach(files, id: \.self) { file in
+                    Button((file as NSString).lastPathComponent) {
+                        shipmentFile = file
+                        Task { await loadShipments() }
+                    }
+                }
+            } label: {
+                FilterChip(title: ((shipmentFile ?? "") as NSString).lastPathComponent, isActive: true, systemImage: "doc.text")
+            }
+        }
+        if let error = shipmentError {
+            Text(error).font(.footnote).foregroundStyle(DS.warning)
+        }
+        let rows = shipments.filter { query.isEmpty || [$0.recipient, $0.address, $0.orderNo, $0.item, $0.mobile, $0.phone].contains(where: { $0.localizedCaseInsensitiveContains(query) }) }
+        if files.isEmpty {
+            EmptyStateView(title: "沒有託運名冊", message: "黑貓 ezprint 的批次託運單 CSV（檔名含 ezprint）放進 vault 後會出現在這裡。")
+        } else if rows.isEmpty {
+            EmptyStateView(title: shipments.isEmpty ? "名冊是空的" : "沒有符合的收件人")
+        } else {
+            Text("\(((shipmentFile ?? "") as NSString).lastPathComponent)：共 \(shipments.count) 筆收件人")
+                .font(.footnote)
+                .foregroundStyle(DS.textSecondary)
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(row.recipient).font(.subheadline.weight(.semibold)).foregroundStyle(DS.text)
+                        Spacer()
+                        if !row.orderNo.isEmpty {
+                            Text(row.orderNo).font(.system(.caption, design: .monospaced)).foregroundStyle(DS.textSecondary)
+                        }
+                    }
+                    Text(row.address).font(.footnote).foregroundStyle(DS.text).textSelection(.enabled)
+                    HStack(spacing: 6) {
+                        ForEach([row.mobile, row.phone].filter { !$0.isEmpty }, id: \.self) { number in
+                            if let dial = JentechLogic.dialable(number), let url = URL(string: "tel:\(dial)") {
+                                Button {
+                                    openURL(url)
+                                } label: {
+                                    Label(number, systemImage: "phone")
+                                }
+                                .buttonStyle(SmallPillStyle())
+                            }
+                        }
+                        CopyButton(value: row.address, label: "地址")
+                        Spacer(minLength: 0)
+                    }
+                    if !row.item.isEmpty || !row.shipDate.isEmpty {
+                        Text([row.item, row.shipDate.isEmpty ? "" : "出貨 \(row.shipDate)"].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(DS.textSecondary)
+                    }
+                }
+                .card(padding: 12)
             }
         }
     }
