@@ -10,8 +10,7 @@ struct ContentView: View {
 
     var body: some View {
         // 像 Obsidian 的工作區：筆記是主角，掃描、相機、紀錄是附加的工具
-        WorkspaceView()
-            .ignoresSafeArea(.keyboard)
+        WorkspaceRoot()
             .environment(workspace)
             .tint(DS.primary)
             .preferredColorScheme((AppAppearance(rawValue: appearance) ?? .light).colorScheme)

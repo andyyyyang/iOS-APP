@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// App 的主畫面外框（ContentView 與鍵盤版面測試共用）：鍵盤出現時整個工作區不動。
+struct WorkspaceRoot: View {
+    var body: some View {
+        WorkspaceView()
+            .ignoresSafeArea(.keyboard)
+    }
+}
+
 /// App 的主畫面，版面邏輯同 Obsidian：
 /// 黑色頂部列（左側欄開關與 vault 名稱｜分頁｜搜尋與右側欄開關）、黑色功能列，
 /// 下面是左側欄（檔案、搜尋、標籤）、中間的分頁內容、右側欄（大綱、連結、屬性、AI；首頁時是待辦）。
