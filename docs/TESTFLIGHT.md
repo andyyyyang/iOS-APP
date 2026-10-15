@@ -15,7 +15,7 @@
 [App Store Connect](https://appstoreconnect.apple.com/apps) → 我的 App → **+** → 新增 App：
 
 - 平台：iOS
-- 名稱：例如「本機 OCR」（App Store 上必須唯一，被佔用就換一個）
+- 名稱：例如「記得」（App Store 上必須唯一，被佔用就換一個）
 - 主要語言：繁體中文
 - 套件識別碼：選擇上一步的 `com.andyyyyang.LocalOCR`
 - SKU：例如 `localocr`

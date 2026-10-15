@@ -157,7 +157,7 @@ struct VaultIndex: Codable, Sendable, Equatable {
 }
 
 /// 索引的快取與更新：存在這台裝置上（下次打開 App 立刻可用），伺服器有變動時重新取得（用 ETag，沒變時不重傳）。
-/// 只用在 vault 放在 LocalOCR 伺服器時（WebDAV 的內容伺服器看不到）。
+/// 只用在 vault 放在同步伺服器時（WebDAV 的內容伺服器看不到）。
 @MainActor
 @Observable
 final class VaultIndexStore {

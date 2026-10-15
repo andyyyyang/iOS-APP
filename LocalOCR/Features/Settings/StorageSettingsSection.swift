@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 設定 → 筆記與 Obsidian 的「同步空間」：LocalOCR 伺服器（Railway Bucket）或自己的 WebDAV。
+/// 設定 → 筆記與 Obsidian 的「同步空間」：同步伺服器（Railway Bucket）或自己的 WebDAV。
 struct StorageSettingsSection: View {
     @State private var sync = VaultSyncCenter.shared
     @State private var storage = VaultBackend.storage
@@ -61,7 +61,7 @@ struct StorageSettingsSection: View {
                 Button("改用自己的 WebDAV…") { showsWebDAVForm = true }
             }
             if storage == .webdav {
-                Button("改回 LocalOCR 伺服器") { pendingSwitch = .server }
+                Button("改回同步伺服器") { pendingSwitch = .server }
                     .disabled(isSwitching)
             }
             if isSwitching {
@@ -78,10 +78,10 @@ struct StorageSettingsSection: View {
         } header: {
             Text("同步空間")
         } footer: {
-            Text("vault 可以放在 LocalOCR 伺服器（Railway Bucket，電腦用 Remotely Save 的 S3 同步）或自己的 WebDAV（例如 Railway 上的 WebDAV，電腦用 Remotely Save 的 WebDAV 同步，資料夾預設是 vault 名稱）。WebDAV 本身沒有推送：有配對 LocalOCR 伺服器時仍會即時通知其他裝置，沒有時每分鐘同步一次。切換時會先上傳這台裝置上的修改，再從新的空間重新取得檔案，兩邊的檔案不會混在一起。")
+            Text("vault 可以放在同步伺服器（Railway Bucket，電腦用 Remotely Save 的 S3 同步）或自己的 WebDAV（例如 Railway 上的 WebDAV，電腦用 Remotely Save 的 WebDAV 同步，資料夾預設是 vault 名稱）。WebDAV 本身沒有推送：有配對同步伺服器時仍會即時通知其他裝置，沒有時每分鐘同步一次。切換時會先上傳這台裝置上的修改，再從新的空間重新取得檔案，兩邊的檔案不會混在一起。")
         }
         .confirmationDialog(
-            pendingSwitch == .server ? "改回 LocalOCR 伺服器？" : "改用這個 WebDAV？",
+            pendingSwitch == .server ? "改回同步伺服器？" : "改用這個 WebDAV？",
             isPresented: Binding(get: { pendingSwitch != nil }, set: { if !$0 { pendingSwitch = nil } }),
             titleVisibility: .visible
         ) {

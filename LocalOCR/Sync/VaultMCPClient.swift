@@ -1,6 +1,6 @@
 import Foundation
 
-/// LocalOCR 伺服器的 MCP（Streamable HTTP、無狀態、JSON 回應）：AI 透過它在線上搜尋、讀取與修改 vault，
+/// 同步伺服器的 MCP（Streamable HTTP、無狀態、JSON 回應）：AI 透過它在線上搜尋、讀取與修改 vault，
 /// 不必把筆記下載到這台裝置。工具與 Claude 等 agent 使用的相同（vault_search、vault_read、vault_list、vault_write）。
 struct VaultMCPClient: Sendable {
     let baseURL: URL

@@ -49,7 +49,7 @@ struct AssistantSettingsSection: View {
         } header: {
             Text("首頁 AI")
         } footer: {
-            Text("首頁的 AI 透過 LocalOCR 伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
+            Text("首頁的 AI 透過同步伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
         }
         .task { await assistant.loadRules() }
     }

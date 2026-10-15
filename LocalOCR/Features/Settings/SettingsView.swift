@@ -113,7 +113,7 @@ struct SettingsView: View {
                 } header: {
                     Text("伺服器")
                 } footer: {
-                    Text("連接 Railway 上的 LocalOCR 伺服器後，掃描結果可同步到 Obsidian，並透過 MCP 提供給 Claude Code 等 harness 使用。")
+                    Text("連接 Railway 上的同步伺服器後，掃描結果可同步到 Obsidian，並透過 MCP 提供給 Claude Code 等 harness 使用。")
                 }
 
                 Section {

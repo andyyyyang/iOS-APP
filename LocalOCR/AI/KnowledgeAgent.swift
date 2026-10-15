@@ -6,7 +6,7 @@ import FoundationModels
 
 // MARK: - 知識庫 AI（首頁）
 //
-// 像 Cowork：在首頁問問題或下指令，裝置端的 Apple Intelligence 透過 LocalOCR 伺服器的 MCP
+// 像 Cowork：在首頁問問題或下指令，裝置端的 Apple Intelligence 透過同步伺服器的 MCP
 // 在線上搜尋、閱讀、修改 vault（不下載到這台裝置），回答時附上來源筆記；修改過的筆記可以復原。
 // 每次對話前讀取 vault 的編輯規則，修改時照著做。
 

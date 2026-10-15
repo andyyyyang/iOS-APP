@@ -268,7 +268,7 @@ final class KnowledgeAssistant {
 
     private func answer(_ question: String, openNote: String?, context: String?) async {
         guard let mcp = VaultMCPClient.configured() else {
-            finish("需要先與 LocalOCR 伺服器配對（設定 → 筆記與 Obsidian），AI 才能在線上搜尋你的 vault。", isError: true)
+            finish("需要先與同步伺服器配對（設定 → 筆記與 Obsidian），AI 才能在線上搜尋你的 vault。", isError: true)
             return
         }
         await prepare()

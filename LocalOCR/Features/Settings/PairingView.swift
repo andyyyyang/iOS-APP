@@ -23,7 +23,7 @@ struct PairingView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("在電腦的 Obsidian 按 Ctrl+P（Mac 為 ⌘P），執行「LocalOCR：配對 iPhone／iPad」，畫面會顯示 QR Code 與配對碼（10 分鐘內有效）。")
+                    Text("在電腦的 Obsidian 按 Ctrl+P（Mac 為 ⌘P），執行「LocalOCR Sync：配對 iPhone／iPad」，畫面會顯示 QR Code 與配對碼（10 分鐘內有效）。")
                     Text("配對後，筆記會在這台裝置、Railway 空間與 Obsidian 之間雙向同步。")
                         .foregroundStyle(.secondary)
                 }

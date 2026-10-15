@@ -1,4 +1,4 @@
-# 本機 OCR（LocalOCR）
+# 記得（LocalOCR）
 
 原生 Swift 的 iPhone／iPad **Markdown 筆記本 App**，與你的 **Obsidian vault** 雙向同步：
 

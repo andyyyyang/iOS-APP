@@ -232,7 +232,7 @@ final class DrawingsLibrary {
 
     private func fetch() async {
         guard let remote = VaultBackend.current() else {
-            error = "需要先與 LocalOCR 伺服器配對，才能讀取圖面資料。"
+            error = "需要先與同步伺服器配對，才能讀取圖面資料。"
             return
         }
         isLoading = true
@@ -342,7 +342,7 @@ final class DrawingsLibrary {
                 merged[key] = text
             }
             let body: [String: Any] = [
-                "note": "圖面瀏覽器的規格筆記（LocalOCR App），鍵是「出貨客戶/圖號」",
+                "note": "圖面瀏覽器的規格筆記（記得 App），鍵是「出貨客戶/圖號」",
                 "notes": merged,
             ]
             let data = try JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys])

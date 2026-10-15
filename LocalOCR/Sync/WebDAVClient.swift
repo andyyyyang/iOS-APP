@@ -400,7 +400,7 @@ enum WebDAVSettings {
     }
 }
 
-/// vault 存在哪裡：LocalOCR 伺服器（Railway Bucket，Remotely Save 用 S3 同步）或自己的 WebDAV。
+/// vault 存在哪裡：同步伺服器（Railway Bucket，Remotely Save 用 S3 同步）或自己的 WebDAV。
 enum VaultStorage: String, CaseIterable, Identifiable {
     case server
     case webdav
@@ -409,7 +409,7 @@ enum VaultStorage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .server: return "LocalOCR 伺服器"
+        case .server: return "同步伺服器"
         case .webdav: return "WebDAV"
         }
     }

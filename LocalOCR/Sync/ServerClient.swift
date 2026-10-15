@@ -90,7 +90,7 @@ struct ServerError: LocalizedError {
     }
 }
 
-/// LocalOCR 伺服器的 REST 客戶端（規格見 docs/API.md）。
+/// 同步伺服器的 REST 客戶端（規格見 docs/API.md）。
 struct ServerClient {
     let baseURL: URL
     let apiKey: String

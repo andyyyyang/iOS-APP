@@ -41,7 +41,7 @@ struct NotesSettingsView: View {
             } header: {
                 Text("配對")
             } footer: {
-                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
+                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR Sync：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
             }
 
             StorageSettingsSection()
@@ -101,7 +101,7 @@ struct NotesSettingsView: View {
             } header: {
                 Text("同步")
             } footer: {
-                Text("與伺服器保持即時推送的連線（WebSocket），不輪詢：正在編輯的筆記停手後約 1 秒上傳，電腦的 Obsidian（LocalOCR 插件 1.5.0 以上）收到通知後立即用 Remotely Save 同步；電腦上修改並上傳後，伺服器也會立刻通知這台裝置。打開 App 與重新連線時會同步一次；兩邊同時修改同一個檔案時會保留兩份。")
+                Text("與伺服器保持即時推送的連線（WebSocket），不輪詢：正在編輯的筆記停手後約 1 秒上傳，電腦的 Obsidian（LocalOCR Sync 插件 1.5.0 以上）收到通知後立即用 Remotely Save 同步；電腦上修改並上傳後，伺服器也會立刻通知這台裝置。打開 App 與重新連線時會同步一次；兩邊同時修改同一個檔案時會保留兩份。")
             }
 
             Section {

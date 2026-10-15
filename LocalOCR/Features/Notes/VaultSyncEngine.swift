@@ -758,7 +758,7 @@ final class VaultSyncCenter {
         try? FileManager.default.createDirectory(at: vault.root, withIntermediateDirectories: true)
     }
 
-    /// 目前的同步空間（LocalOCR 伺服器或 WebDAV）已設定。
+    /// 目前的同步空間（同步伺服器或 WebDAV）已設定。
     var isConfigured: Bool { VaultBackend.current() != nil }
 
     /// 啟動時先用上次記下的遠端清單列出檔案（按需模式下大部分檔案不在這台裝置上），不必等同步完成。
@@ -972,8 +972,8 @@ final class VaultSyncCenter {
         startLiveUpdates()
     }
 
-    /// vault 存在 WebDAV 時，自己上傳或刪除了檔案就通知 LocalOCR 伺服器（有配對時），電腦的 Obsidian 會立即同步。
-    /// 存在 LocalOCR 伺服器時不必：伺服器自己知道。
+    /// vault 存在 WebDAV 時，自己上傳或刪除了檔案就通知同步伺服器（有配對時），電腦的 Obsidian 會立即同步。
+    /// 存在同步伺服器時不必：伺服器自己知道。
     private func reportToServer(_ paths: [String]) {
         guard VaultBackend.storage == .webdav, let client = VaultClient.configured() else { return }
         Task { try? await client.reportChanges(paths: paths) }
@@ -1019,7 +1019,7 @@ final class VaultSyncCenter {
             while !Task.isCancelled {
                 guard let self else { return }
                 guard let client = VaultClient.configured() else {
-                    // 沒有配對 LocalOCR 伺服器（只用 WebDAV）：WebDAV 沒有推送，每分鐘同步一次
+                    // 沒有配對同步伺服器（只用 WebDAV）：WebDAV 沒有推送，每分鐘同步一次
                     try? await Task.sleep(for: .seconds(60))
                     await self.syncNow()
                     continue

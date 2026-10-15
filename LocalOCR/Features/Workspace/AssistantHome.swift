@@ -217,7 +217,7 @@ struct AssistantHome: View {
             }
             // AI 執行位置（裝置端／雲端預算）在輸入列上切換
             if VaultBackend.storage == .webdav {
-                statusLine("externaldrive.badge.icloud", "AI 搜尋的是 LocalOCR 伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
+                statusLine("externaldrive.badge.icloud", "AI 搜尋的是同步伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
             }
         }
     }
@@ -380,7 +380,7 @@ struct AssistantHome: View {
                 Text("與 Obsidian 配對")
                     .font(.headline)
                     .foregroundStyle(DS.text)
-                Text("在電腦的 Obsidian 執行「LocalOCR：配對 iPhone／iPad」並掃描 QR Code。配對後 AI 才能在線上搜尋與整理你的 vault。")
+                Text("在電腦的 Obsidian 執行「LocalOCR Sync：配對 iPhone／iPad」並掃描 QR Code。配對後 AI 才能在線上搜尋與整理你的 vault。")
                     .font(.subheadline)
                     .foregroundStyle(DS.onPastelSecondary)
             }
