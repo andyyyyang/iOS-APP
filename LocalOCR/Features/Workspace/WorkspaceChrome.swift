@@ -198,33 +198,50 @@ struct Ribbon: View {
     private var isVertical: Bool { axis == .vertical }
 
     var body: some View {
-        let layout = isVertical ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 4))
-        layout {
-            ForEach(LeftPanelMode.allCases) { mode in
-                button(mode.title, mode.systemImage, highlighted: isPanelActive(mode)) {
-                    if isVertical {
-                        workspace.showLeft(mode)
-                    } else {
-                        workspace.leftMode = mode
-                    }
+        if isVertical {
+            VStack(spacing: 4) {
+                // 上方的按鈕可以捲動：一排固定高度的按鈕（約 580 點）在矮的畫面（iPad 橫向打開鍵盤、台前調度的小視窗）
+                // 放不下時會把整個版面撐高，SwiftUI 置中排版就把頂部列一起往上推
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 4) { mainButtons }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                SyncIndicator()
+                settingsButton
+            }
+        } else {
+            HStack(spacing: 4) {
+                mainButtons
+                separator
+                SyncIndicator()
+                settingsButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var mainButtons: some View {
+        ForEach(LeftPanelMode.allCases) { mode in
+            button(mode.title, mode.systemImage, highlighted: isPanelActive(mode)) {
+                if isVertical {
+                    workspace.showLeft(mode)
+                } else {
+                    workspace.leftMode = mode
                 }
             }
-            separator
-            button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
-            button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
-            button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
-            separator
-            button("掃描文件", WorkspaceTab.scan.systemImage, isActive: workspace.active == .scan) { run { workspace.open(.scan) } }
-            button("相機", "camera") { run { workspace.showsCamera = true } }
-            button("掃描紀錄", WorkspaceTab.history.systemImage, isActive: workspace.active == .history) { run { workspace.open(.history) } }
-            if isVertical {
-                Spacer(minLength: 16)
-            } else {
-                separator
-            }
-            SyncIndicator()
-            button("設定", WorkspaceTab.settings.systemImage, isActive: workspace.active == .settings) { run { workspace.open(.settings) } }
         }
+        separator
+        button("關聯圖", WorkspaceTab.graph.systemImage, isActive: workspace.active == .graph) { run { workspace.open(.graph) } }
+        button("待辦", WorkspaceTab.tasks.systemImage, isActive: workspace.active == .tasks) { run { workspace.open(.tasks) } }
+        button("圖面", WorkspaceTab.drawings.systemImage, isActive: workspace.active == .drawings) { run { workspace.open(.drawings) } }
+        separator
+        button("掃描文件", WorkspaceTab.scan.systemImage, isActive: workspace.active == .scan) { run { workspace.open(.scan) } }
+        button("相機", "camera") { run { workspace.showsCamera = true } }
+        button("掃描紀錄", WorkspaceTab.history.systemImage, isActive: workspace.active == .history) { run { workspace.open(.history) } }
+    }
+
+    private var settingsButton: some View {
+        button("設定", WorkspaceTab.settings.systemImage, isActive: workspace.active == .settings) { run { workspace.open(.settings) } }
     }
 
     private func isPanelActive(_ mode: LeftPanelMode) -> Bool {

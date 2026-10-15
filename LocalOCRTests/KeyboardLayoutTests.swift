@@ -66,6 +66,41 @@ final class KeyboardLayoutTests: XCTestCase {
         try await measure(appWindow, focusing: input, label: "app-window-\(type(of: input))", checksInput: false)
     }
 
+    /// iPad 橫向打開鍵盤後，鍵盤上方只剩約 450 點（台前調度的小視窗更矮）。版面中只要有固定高度比這高的內容
+    /// （例如一整排固定的按鈕），SwiftUI 就會把整個版面置中排版，頂部列跟著往上推。各種畫面都要放得進 320 點高。
+    func testWorkspaceFitsInAShortSpace() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad 的版面") }
+        try LocalVault.shared.writeText("# 鍵盤版面測試\n\n內容", to: notePath)
+        let cases: [(WorkspaceTab, LeftPanelMode, RightPanelMode)] = [
+            (.note(notePath), .files, .memo),
+            (.note(notePath), .tools, .outline),
+            (.note(notePath), .search, .ai),
+            (.note(notePath), .tags, .properties),
+            (.start, .files, .outline),
+            (.contacts, .tools, .outline),
+            (.logistics, .files, .outline),
+            (.settings, .files, .outline),
+        ]
+        for (tab, left, right) in cases {
+            let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
+            workspace.open(tab)
+            workspace.showLeft(left)
+            workspace.setRightOpen(true)
+            workspace.rightMode = right
+            let host = UIHostingController(
+                rootView: WorkspaceRoot()
+                    .environment(workspace)
+                    .environment(TemplateLibrary.shared)
+                    .environment(ScanDraft())
+                    .environment(\.horizontalSizeClass, .regular)
+                    .modelContainer(for: ScanRecord.self, inMemory: true)
+            )
+            let size = host.sizeThatFits(in: CGSize(width: 1376, height: 320))
+            print("[probe] fit \(tab.id) left=\(left) right=\(right): \(size)")
+            XCTAssertLessThanOrEqual(size.height, 321, "\(tab.id)（左：\(left)，右：\(right)）需要 \(Int(size.height)) 點高，放不進 320 點：矮的畫面打開鍵盤時整個版面會被往上推")
+        }
+    }
+
     // MARK: - 量測
 
     private func measure(_ window: UIWindow, focusing input: UIView, label: String, checksInput: Bool = true) async throws {
