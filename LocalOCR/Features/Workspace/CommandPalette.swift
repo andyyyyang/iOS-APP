@@ -298,8 +298,12 @@ struct CommandPalette: View {
 
         // 什麼都還沒輸入：最近的筆記與指令，建議列出各類與最近用過的關鍵字
         if prepared.tokens.isEmpty && scope == nil {
-            suggestions += Scope.all.map { Suggestion(id: "scope:\($0.title)", title: $0.title, action: .scope($0)) }
-            suggestions += recentKeywords.map { Suggestion(id: "recent:\($0)", title: $0, systemImage: "clock.arrow.circlepath", action: .keyword($0)) }
+            for scope in Scope.all {
+                suggestions.append(Suggestion(id: "scope:" + scope.title, title: scope.title, action: Suggestion.Action.scope(scope)))
+            }
+            for keyword in recentKeywords {
+                suggestions.append(Suggestion(id: "recent:" + keyword, title: keyword, systemImage: "clock.arrow.circlepath", action: Suggestion.Action.keyword(keyword)))
+            }
             return ([
                 Section(id: "recent", title: "最近的筆記", items: store.notes.prefix(8).map(noteItem)),
                 Section(id: "commands", title: "指令", items: commands),
@@ -329,7 +333,11 @@ struct CommandPalette: View {
             let matching = commands.filter { GlobalSearch.rank(prepared, [$0.title, $0.detail]) != nil }
             if !matching.isEmpty { sections.append(Section(id: "commands", title: "指令", items: Array(matching.prefix(3)))) }
         }
-        sections += ranked.sorted { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }.map(\.section)
+        let ordered = ranked.sorted { (a: (score: Int, order: Int, section: Section), b: (score: Int, order: Int, section: Section)) -> Bool in
+            if a.score != b.score { return a.score > b.score }
+            return a.order < b.order
+        }
+        sections += ordered.map(\.section)
         if sections.isEmpty, scope == nil, keywords.isEmpty {
             let fuzzy = commands.filter { Self.score($0.title, query: text) != nil }
             if !fuzzy.isEmpty { sections.append(Section(id: "more-commands", title: "其他指令", items: fuzzy)) }
@@ -337,11 +345,13 @@ struct CommandPalette: View {
 
         // 建議：結果分在哪幾類（點了只看那一類）、可以再加的篩選關鍵字（依目前的結果算）
         if scope == nil, counts.count > 1 {
-            suggestions += counts.map { Suggestion(id: "scope:\($0.scope.title)", title: $0.scope.title, count: $0.count, action: .scope($0.scope)) }
+            for (scope, count) in counts {
+                suggestions.append(Suggestion(id: "scope:" + scope.title, title: scope.title, count: count, action: Suggestion.Action.scope(scope)))
+            }
         }
         if scope != .notes {
-            suggestions += GlobalSearch.facets(text, in: sources, scope: scope?.section).map {
-                Suggestion(id: "facet:\($0.text)", title: $0.text, count: $0.count, systemImage: "plus.circle", action: .keyword($0.text))
+            for facet in GlobalSearch.facets(text, in: sources, scope: scope?.section) {
+                suggestions.append(Suggestion(id: "facet:" + facet.text, title: facet.text, count: facet.count, systemImage: "plus.circle", action: Suggestion.Action.keyword(facet.text)))
             }
         }
         return (sections, suggestions)
@@ -352,18 +362,24 @@ struct CommandPalette: View {
         if prepared.tokens.isEmpty {
             return (Array(store.notes.prefix(limit)), store.notes.count, 0)
         }
-        var hits = store.notes
-            .compactMap { note in GlobalSearch.rank(prepared, [note.title, note.folder] + note.tags).map { (note: note, score: $0) } }
-            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.note.mtime > $1.note.mtime }
+        var hits: [(note: NoteSummary, score: Int)] = []
+        for note in store.notes {
+            if let score = GlobalSearch.rank(prepared, [note.title, note.folder] + note.tags) { hits.append((note, score)) }
+        }
+        hits.sort { (a: (note: NoteSummary, score: Int), b: (note: NoteSummary, score: Int)) -> Bool in
+            if a.score != b.score { return a.score > b.score }
+            return a.note.mtime > b.note.mtime
+        }
         let best = hits.first?.score ?? 0
         if prepared.tokens.count == 1, hits.count < 5 {
             let found = Set(hits.map(\.note.path))
-            let fuzzy = store.notes
-                .filter { !found.contains($0.path) }
-                .compactMap { note in Self.score(note.title, query: prepared.tokens[0].text).map { (note: note, score: $0) } }
-                .sorted { $0.score > $1.score }
-                .prefix(10)
-            hits += fuzzy.map { (note: $0.note, score: 0) }
+            let word = prepared.tokens[0].text
+            var fuzzy: [(note: NoteSummary, score: Int)] = []
+            for note in store.notes where !found.contains(note.path) {
+                if let score = Self.score(note.title, query: word) { fuzzy.append((note, score)) }
+            }
+            fuzzy.sort { $0.score > $1.score }
+            for item in fuzzy.prefix(10) { hits.append((item.note, 0)) }
         }
         return (hits.prefix(limit).map(\.note), hits.count, best)
     }
@@ -489,12 +505,9 @@ struct CommandPalette: View {
         case .contact(let contact):
             let number = contact.copyValue
             let searched = searchText
-            let detail = [
-                contact.ext.isEmpty ? "" : "分機 \(contact.ext)",
-                contact.mvpn.isEmpty ? "" : "MVPN \(contact.mvpn)",
-                contact.dept,
-                contact.plant,
-            ].filter { !$0.isEmpty }.joined(separator: " · ")
+            let ext: String = contact.ext.isEmpty ? "" : "分機 " + contact.ext
+            let mvpn: String = contact.mvpn.isEmpty ? "" : "MVPN " + contact.mvpn
+            let detail = Self.joined([ext, mvpn, contact.dept, contact.plant])
             return Item(id: hit.id, title: contact.name, detail: detail, systemImage: "person.crop.circle", trailing: AnyView(contactButtons(contact))) {
                 if !number.isEmpty {
                     UIPasteboard.general.string = number
@@ -505,55 +518,64 @@ struct CommandPalette: View {
                 }
             }
         case .code(let code):
-            let name = code.kind == .customer ? code.fullName : code.name
+            let name: String = code.kind == .customer ? code.fullName : code.name
             return Item(
-                id: hit.id, title: "\(code.displayCode)  \(name)",
-                detail: ([code.kind.rawValue] + (code.detail.isEmpty ? [] : [code.detail])).joined(separator: " · "),
+                id: hit.id, title: code.displayCode + "  " + name,
+                detail: Self.joined([code.kind.rawValue, code.detail]),
                 systemImage: code.kind == .customer ? "building.2" : "number",
                 trailing: AnyView(CopyButton(value: code.code))
             ) { workspace.openNote(code.path) }
         case .model(let entry):
             return Item(
                 id: hit.id, title: entry.code,
-                detail: (["機種主卡", entry.customer, entry.detail].filter { !$0.isEmpty }).joined(separator: " · "),
+                detail: Self.joined(["機種主卡", entry.customer, entry.detail]),
                 systemImage: "cpu",
                 trailing: AnyView(CopyButton(value: entry.code))
             ) { workspace.openNote(entry.path) }
         case .caseItem(let item):
+            let number: String = item.caseNo.isEmpty ? item.file : item.caseNo
+            let sap: String = item.sapNo.isEmpty ? "" : "SAP " + item.sapNo
             return Item(
-                id: hit.id, title: [item.caseNo.isEmpty ? item.file : item.caseNo, item.product].filter { !$0.isEmpty }.joined(separator: "  "),
-                detail: [item.sapNo.isEmpty ? "" : "SAP \(item.sapNo)", item.customer, item.created].filter { !$0.isEmpty }.joined(separator: " · "),
+                id: hit.id, title: Self.joined([number, item.product], separator: "  "),
+                detail: Self.joined([sap, item.customer, item.created]),
                 systemImage: WorkspaceTab.cases.systemImage,
                 trailing: AnyView(CopyButton(value: item.caseNo.isEmpty ? item.sapNo : item.caseNo))
             ) { workspace.openNote(item.path) }
         case .bpm(let item):
-            let stuck = item.daysStuck.map { $0 > 0 ? "卡 \($0) 天" : "" } ?? ""
+            let days = item.daysStuck ?? 0
+            let stuck: String = days > 0 ? "卡 \(days) 天" : ""
+            let title: String = item.subject.isEmpty ? item.processName : item.subject
             return Item(
-                id: hit.id, title: item.subject.isEmpty ? item.processName : item.subject,
-                detail: [item.processName, item.currentStep, stuck].filter { !$0.isEmpty }.joined(separator: " · "),
+                id: hit.id, title: title,
+                detail: Self.joined([item.processName, item.currentStep, stuck]),
                 systemImage: WorkspaceTab.bpm.systemImage
             ) { workspace.open(.bpm) }
         case .person(let card):
             return Item(
-                id: hit.id, title: card.english.isEmpty ? card.name : "\(card.name)  \(card.english)",
+                id: hit.id, title: Self.joined([card.name, card.english], separator: "  "),
                 detail: "人員卡", systemImage: "person.text.rectangle"
             ) { workspace.openNote(card.path) }
         case .sop(let sop):
             return Item(
                 id: hit.id, title: sop.name,
-                detail: ([sop.stage] + sop.tags.prefix(3)).joined(separator: " · "),
+                detail: Self.joined([sop.stage] + Array(sop.tags.prefix(3))),
                 systemImage: WorkspaceTab.sop.systemImage
             ) {
                 if let path = jentech.path(forNote: sop.file) { workspace.openNote(path) } else { workspace.openLink(sop.file) }
             }
         case .parcel(let item):
             return Item(
-                id: hit.id, title: "\(item.courierName) \(item.trackingNumber)",
-                detail: [item.note, item.latestEvent].filter { !$0.isEmpty }.joined(separator: " · "),
+                id: hit.id, title: Self.joined([item.courierName, item.trackingNumber], separator: " "),
+                detail: Self.joined([item.note, item.latestEvent]),
                 systemImage: WorkspaceTab.logistics.systemImage,
                 trailing: AnyView(CopyButton(value: item.trackingNumber))
             ) { workspace.open(.logistics) }
         }
+    }
+
+    /// 非空的部分用「 · 」連起來。
+    private static func joined(_ parts: [String], separator: String = " · ") -> String {
+        parts.filter { !$0.isEmpty }.joined(separator: separator)
     }
 
     /// 聯絡人右側：有人員筆記時開啟、撥打 MVPN、複製分機（沒有分機時複製 MVPN）。

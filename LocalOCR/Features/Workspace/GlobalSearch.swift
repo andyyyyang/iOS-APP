@@ -143,12 +143,18 @@ enum GlobalSearch {
                 }
             }
             guard !hits.isEmpty else { continue }
-            let sorted = hits.sorted { $0.hit.score != $1.hit.score ? $0.hit.score > $1.hit.score : $0.order < $1.order }
+            let sorted = hits.sorted { (a: (hit: Hit, order: Int), b: (hit: Hit, order: Int)) -> Bool in
+                if a.hit.score != b.hit.score { return a.hit.score > b.hit.score }
+                return a.order < b.order
+            }
             let limit = scope == nil ? section.limit : scopedLimit
             groups.append(Group(section: section, hits: sorted.prefix(limit).map(\.hit), total: hits.count))
         }
-        let order = Dictionary(uniqueKeysWithValues: Section.allCases.enumerated().map { ($1, $0) })
-        return groups.sorted { $0.best != $1.best ? $0.best > $1.best : order[$0.section, default: 0] < order[$1.section, default: 0] }
+        let order: [Section: Int] = Dictionary(uniqueKeysWithValues: Section.allCases.enumerated().map { index, section in (section, index) })
+        return groups.sorted { (a: Group, b: Group) -> Bool in
+            if a.best != b.best { return a.best > b.best }
+            return order[a.section, default: 0] < order[b.section, default: 0]
+        }
     }
 
     /// 可以再加的關鍵字：目前符合的資料中出現的廠區、課別、客戶、流程…（能縮小範圍的才列，已經用了的不列），多的在前。
@@ -170,10 +176,15 @@ enum GlobalSearch {
                 best[facet] = max(best[facet] ?? 0, count)
             }
         }
-        return best.map { Facet(text: $0.key, count: $0.value) }
-            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.text.localizedStandardCompare($1.text) == .orderedAscending }
-            .prefix(limit)
-            .map { $0 }
+        let facets: [Facet] = best.map { key, value in Facet(text: key, count: value) }
+        let sorted = facets.sorted(by: Self.facetOrder)
+        return Array(sorted.prefix(limit))
+    }
+
+    /// 多的在前，一樣多時依名稱。
+    private static func facetOrder(_ a: Facet, _ b: Facet) -> Bool {
+        if a.count != b.count { return a.count > b.count }
+        return a.text.localizedStandardCompare(b.text) == .orderedAscending
     }
 
     /// 比對分數；不符合時 nil。空白分開的每個關鍵字都要出現在某個欄位（「大園 業務」），
