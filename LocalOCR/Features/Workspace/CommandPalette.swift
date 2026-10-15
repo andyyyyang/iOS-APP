@@ -1,10 +1,16 @@
 import SwiftUI
 
-/// 指令面板（⌘K）：搜尋筆記並開啟，或執行指令。上下鍵選擇、Return 執行、Esc 關閉。
+/// 指令面板（⌘K、頂部列的放大鏡）：全域搜尋。筆記、指令，以及業務快查的通訊錄、客戶與代碼、機種、開案案件、
+/// BPM、人員、SOP、物流單號都在這裡直接找，結果分區列出，列上就能複製、撥打或開啟。上下鍵選擇、Return 執行、Esc 關閉。
 struct CommandPalette: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.openURL) private var openURL
     @State private var store = NotesStore.shared
+    @State private var jentech = JentechStore.shared
+    @State private var logistics = LogisticsStore.shared
+    @State private var index = VaultIndexStore.shared
+    @State private var sources = GlobalSearch.Sources()
     @State private var query = ""
     @State private var selection = 0
     @FocusState private var focused: Bool
@@ -12,14 +18,37 @@ struct CommandPalette: View {
     private struct Item: Identifiable {
         let id: String
         let title: String
-        let detail: String
+        var detail: String = ""
         let systemImage: String
-        let isCommand: Bool
+        var isCommand = false
+        /// 列右側的按鈕（複製、撥打、開啟筆記）。
+        var trailing: AnyView?
         let action: () -> Void
     }
 
+    private struct Section: Identifiable {
+        let id: String
+        var title: String?
+        var count: Int?
+        let items: [Item]
+    }
+
+    private enum Row: Identifiable {
+        case header(String, title: String, count: Int?)
+        case item(Item, index: Int)
+
+        var id: String {
+            switch self {
+            case .header(let id, _, _): return "header:" + id
+            case .item(let item, _): return item.id
+            }
+        }
+    }
+
     var body: some View {
-        let items = results
+        let sections = self.sections
+        let items = sections.flatMap(\.items)
+        let rows = Self.rows(sections)
         ZStack(alignment: .top) {
             Color.black.opacity(0.25)
                 .ignoresSafeArea()
@@ -30,7 +59,7 @@ struct CommandPalette: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(DS.textSecondary)
-                    TextField("搜尋筆記或輸入指令", text: $query)
+                    TextField("搜尋筆記、人名分機、客戶、機種、案件或指令", text: $query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 17))
                         .focused($focused)
@@ -51,13 +80,25 @@ struct CommandPalette: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                row(item, isSelected: index == selection)
-                                    .id(index)
-                                    .onTapGesture {
-                                        selection = index
-                                        run(items)
-                                    }
+                            if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                                Text("可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號")
+                                    .font(.caption)
+                                    .foregroundStyle(DS.textTertiary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.top, 6)
+                            }
+                            ForEach(rows) { row in
+                                switch row {
+                                case .header(_, let title, let count):
+                                    sectionHeader(title, count: count)
+                                case .item(let item, let index):
+                                    self.row(item, isSelected: index == selection)
+                                        .id(index)
+                                        .onTapGesture {
+                                            selection = index
+                                            run(items)
+                                        }
+                                }
                             }
                             if items.isEmpty {
                                 Text("找不到「\(query)」")
@@ -68,13 +109,13 @@ struct CommandPalette: View {
                         }
                         .padding(6)
                     }
-                    .frame(maxHeight: 420)
+                    .frame(maxHeight: sizeClass == .compact ? 440 : 560)
                     .onChange(of: selection) { _, value in
                         withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(value) }
                     }
                 }
             }
-            .frame(maxWidth: 620)
+            .frame(maxWidth: 680)
             .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
             .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
@@ -86,6 +127,15 @@ struct CommandPalette: View {
             selection = 0
             focused = true
         }
+        // 業務快查的資料：通訊錄與 BPM 讀一次後留著，索引與物流超過一分鐘才重新取得
+        .task {
+            async let index: Void = jentech.ensureIndex()
+            async let contacts: Void = jentech.loadContacts()
+            async let parcels: Void = logistics.ensureLoaded()
+            _ = await (index, contacts, parcels)
+            if jentech.bpm == nil { await jentech.loadBpm() }
+        }
+        .task(id: sourcesVersion) { sources = currentSources() }
         .onChange(of: query) { _, _ in selection = 0 }
         .onKeyPress(.downArrow) {
             selection = min(selection + 1, max(items.count - 1, 0))
@@ -99,6 +149,35 @@ struct CommandPalette: View {
             close()
             return .handled
         }
+    }
+
+    private static func rows(_ sections: [Section]) -> [Row] {
+        var rows: [Row] = []
+        var index = 0
+        for section in sections where !section.items.isEmpty {
+            if let title = section.title { rows.append(.header(section.id, title: title, count: section.count)) }
+            for item in section.items {
+                rows.append(.item(item, index: index))
+                index += 1
+            }
+        }
+        return rows
+    }
+
+    private func sectionHeader(_ title: String, count: Int?) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(DS.textSecondary)
+            if let count {
+                Text("\(count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(DS.textTertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 3)
     }
 
     private func row(_ item: Item, isSelected: Bool) -> some View {
@@ -121,6 +200,9 @@ struct CommandPalette: View {
                 }
             }
             Spacer(minLength: 0)
+            if let trailing = item.trailing {
+                trailing
+            }
             if item.isCommand {
                 Text("指令")
                     .font(.caption2.weight(.medium))
@@ -135,20 +217,157 @@ struct CommandPalette: View {
 
     // MARK: - 結果
 
-    private var results: [Item] {
+    /// 沒有輸入時：最近的筆記與指令。有輸入時：符合的指令在最上面，筆記與業務快查各區依最符合的一筆排序。
+    private var sections: [Section] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        let commands = self.commands.filter { trimmed.isEmpty || Self.score($0.title, query: trimmed) != nil }
-        let notes: [Item]
+        let commands = self.commands
         if trimmed.isEmpty {
-            notes = store.notes.prefix(8).map(noteItem)
-        } else {
-            notes = store.notes
-                .compactMap { note in Self.score(note.title, query: trimmed).map { (note, $0) } }
-                .sorted { $0.1 > $1.1 }
-                .prefix(30)
-                .map { noteItem($0.0) }
+            return [
+                Section(id: "recent", title: "最近的筆記", items: store.notes.prefix(8).map(noteItem)),
+                Section(id: "commands", title: "指令", items: commands),
+            ]
         }
-        return trimmed.isEmpty ? notes + commands : Array(commands.prefix(4)) + notes + Array(commands.dropFirst(4))
+        let strong = commands.filter { GlobalSearch.rank(trimmed, [$0.title, $0.detail]) != nil }
+        let strongIDs = Set(strong.map(\.id))
+        let weak = commands.filter { !strongIDs.contains($0.id) && Self.score($0.title, query: trimmed) != nil }
+
+        let noteMatches = store.notes
+            .compactMap { note in Self.score(note.title, query: trimmed).map { (note, $0) } }
+            .sorted { $0.1 > $1.1 }
+            .prefix(20)
+        var ranked: [(score: Int, order: Int, section: Section)] = []
+        for (order, group) in GlobalSearch.search(trimmed, in: sources).enumerated() {
+            ranked.append((group.best, order, Section(id: group.section.rawValue, title: group.section.title, count: group.total, items: group.hits.map(hitItem))))
+        }
+        if !noteMatches.isEmpty {
+            // 標題含有關鍵字的筆記跟業務快查一起排；只有字依序出現（模糊）的排在後面
+            let best = noteMatches.compactMap { GlobalSearch.rank(trimmed, [$0.0.title]) }.max() ?? 0
+            ranked.append((best, ranked.count, Section(id: "notes", title: "筆記", items: noteMatches.map { noteItem($0.0) })))
+        }
+
+        var result: [Section] = []
+        if !strong.isEmpty { result.append(Section(id: "commands", title: "指令", items: Array(strong.prefix(3)))) }
+        result += ranked.sorted { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }.map(\.section)
+        let rest = Array(strong.dropFirst(3)) + weak
+        if !rest.isEmpty { result.append(Section(id: "more-commands", title: "其他指令", items: rest)) }
+        return result
+    }
+
+    /// 資料有變（索引更新、通訊錄或 BPM 讀到了、物流清單更新）時重新取一次要搜尋的資料。
+    private var sourcesVersion: String {
+        "\(index.updatedAt?.timeIntervalSince1970 ?? 0)|\(index.notes.count)|\(jentech.contacts.count)|\(jentech.bpm?.fetchedAt ?? "")|\(logistics.items.count)"
+    }
+
+    private func currentSources() -> GlobalSearch.Sources {
+        GlobalSearch.Sources(
+            contacts: jentech.contacts,
+            codes: jentech.codes,
+            models: ModelCatalog.entries(from: Array(index.notes.values)),
+            cases: jentech.cases,
+            bpm: jentech.bpm?.items ?? [],
+            people: jentech.cards.filter { $0.kind == .person },
+            sops: JentechLogic.sops,
+            parcels: logistics.items
+        )
+    }
+
+    /// 業務快查的一筆：點一下做最常用的事（複製分機、開啟筆記或工具頁），右側有複製與撥打。
+    private func hitItem(_ hit: GlobalSearch.Hit) -> Item {
+        switch hit.target {
+        case .contact(let contact):
+            let number = contact.copyValue
+            let searched = query
+            let detail = [
+                contact.ext.isEmpty ? "" : "分機 \(contact.ext)",
+                contact.mvpn.isEmpty ? "" : "MVPN \(contact.mvpn)",
+                contact.dept,
+                contact.plant,
+            ].filter { !$0.isEmpty }.joined(separator: " · ")
+            return Item(id: hit.id, title: contact.name, detail: detail, systemImage: "person.crop.circle", trailing: AnyView(contactButtons(contact))) {
+                if !number.isEmpty {
+                    UIPasteboard.general.string = number
+                    jentech.remember(searched)
+                    workspace.toast = "已複製：\(contact.name) \(number)"
+                } else if let target = contact.linkTarget {
+                    workspace.openLink(target)
+                }
+            }
+        case .code(let code):
+            let name = code.kind == .customer ? code.fullName : code.name
+            return Item(
+                id: hit.id, title: "\(code.displayCode)  \(name)",
+                detail: ([code.kind.rawValue] + (code.detail.isEmpty ? [] : [code.detail])).joined(separator: " · "),
+                systemImage: code.kind == .customer ? "building.2" : "number",
+                trailing: AnyView(CopyButton(value: code.code))
+            ) { workspace.openNote(code.path) }
+        case .model(let entry):
+            return Item(
+                id: hit.id, title: entry.code,
+                detail: (["機種主卡", entry.customer, entry.detail].filter { !$0.isEmpty }).joined(separator: " · "),
+                systemImage: "cpu",
+                trailing: AnyView(CopyButton(value: entry.code))
+            ) { workspace.openNote(entry.path) }
+        case .caseItem(let item):
+            return Item(
+                id: hit.id, title: [item.caseNo.isEmpty ? item.file : item.caseNo, item.product].filter { !$0.isEmpty }.joined(separator: "  "),
+                detail: [item.sapNo.isEmpty ? "" : "SAP \(item.sapNo)", item.customer, item.created].filter { !$0.isEmpty }.joined(separator: " · "),
+                systemImage: WorkspaceTab.cases.systemImage,
+                trailing: AnyView(CopyButton(value: item.caseNo.isEmpty ? item.sapNo : item.caseNo))
+            ) { workspace.openNote(item.path) }
+        case .bpm(let item):
+            let stuck = item.daysStuck.map { $0 > 0 ? "卡 \($0) 天" : "" } ?? ""
+            return Item(
+                id: hit.id, title: item.subject.isEmpty ? item.processName : item.subject,
+                detail: [item.processName, item.currentStep, stuck].filter { !$0.isEmpty }.joined(separator: " · "),
+                systemImage: WorkspaceTab.bpm.systemImage
+            ) { workspace.open(.bpm) }
+        case .person(let card):
+            return Item(
+                id: hit.id, title: card.english.isEmpty ? card.name : "\(card.name)  \(card.english)",
+                detail: "人員卡", systemImage: "person.text.rectangle"
+            ) { workspace.openNote(card.path) }
+        case .sop(let sop):
+            return Item(
+                id: hit.id, title: sop.name,
+                detail: ([sop.stage] + sop.tags.prefix(3)).joined(separator: " · "),
+                systemImage: WorkspaceTab.sop.systemImage
+            ) {
+                if let path = jentech.path(forNote: sop.file) { workspace.openNote(path) } else { workspace.openLink(sop.file) }
+            }
+        case .parcel(let item):
+            return Item(
+                id: hit.id, title: "\(item.courierName) \(item.trackingNumber)",
+                detail: [item.note, item.latestEvent].filter { !$0.isEmpty }.joined(separator: " · "),
+                systemImage: WorkspaceTab.logistics.systemImage,
+                trailing: AnyView(CopyButton(value: item.trackingNumber))
+            ) { workspace.open(.logistics) }
+        }
+    }
+
+    /// 聯絡人右側：有人員筆記時開啟、撥打 MVPN、複製分機（沒有分機時複製 MVPN）。
+    private func contactButtons(_ contact: JentechContact) -> some View {
+        HStack(spacing: 6) {
+            if let target = contact.linkTarget {
+                Button {
+                    close()
+                    workspace.openLink(target)
+                } label: {
+                    Image(systemName: "doc.text")
+                }
+                .buttonStyle(CircleIconButtonStyle(size: 30))
+                .accessibilityLabel("開啟 \(contact.name) 的筆記")
+            }
+            if let number = JentechLogic.dialable(contact.mvpn), let url = URL(string: "tel:\(number)") {
+                Button {
+                    openURL(url)
+                } label: {
+                    Image(systemName: "phone.fill")
+                }
+                .buttonStyle(CircleIconButtonStyle(size: 30))
+                .accessibilityLabel("撥打 MVPN \(contact.mvpn)")
+            }
+            CopyButton(value: contact.copyValue)
+        }
     }
 
     private func noteItem(_ note: NoteSummary) -> Item {

@@ -214,6 +214,8 @@ final class Workspace {
     private(set) var expandedFolders: Set<String> = []
 
     var showsPalette = false
+    /// 畫面底部的短暫提示（例如在全域搜尋複製了分機）。
+    var toast: String?
     var showsCamera = false
     var showsPairing = false
     var pendingDelete: NoteSummary?

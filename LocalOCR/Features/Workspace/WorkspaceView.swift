@@ -49,6 +49,7 @@ struct WorkspaceView: View {
             }
         }
         .ignoresSafeArea(.keyboard)
+        .toast($workspace.toast)
         .animation(.easeOut(duration: 0.18), value: workspace.showsPalette)
         .background { KeyboardShortcuts() }
         .fullScreenCover(isPresented: $workspace.showsCamera) {
