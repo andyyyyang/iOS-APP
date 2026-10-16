@@ -185,9 +185,7 @@ struct JtDayView: View {
                         Image(systemName: "clock").font(.system(size: 10)).foregroundStyle(DS.textTertiary)
                     }
                 }
-                let detail = [item.subtitle, item.customer, item.progress.isEmpty ? "" : "進度 \(item.progress)", item.location, item.mailSender.isEmpty ? "" : "信件：\(item.mailSender)"]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: " · ")
+                let detail = detailText(item)
                 if !detail.isEmpty {
                     Text(detail).font(.caption).foregroundStyle(DS.textSecondary).lineLimit(2)
                 }
@@ -214,6 +212,14 @@ struct JtDayView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+    }
+
+    private func detailText(_ item: JtCalItem) -> String {
+        var parts: [String] = [item.subtitle, item.customer]
+        if !item.progress.isEmpty { parts.append("進度 " + item.progress) }
+        parts.append(item.location)
+        if !item.mailSender.isEmpty { parts.append("信件：" + item.mailSender) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private func icon(for kind: String) -> String {
@@ -300,8 +306,9 @@ struct JtWipView: View {
     @State private var showsHidden = false
 
     var body: some View {
-        let rows = store.displayWipRows.filter { row in
-            (showsHidden || !row.hidden) && (query.isEmpty || [row.label, row.customerName, row.pns.joined(separator: " ")].contains { $0.localizedCaseInsensitiveContains(query) })
+        let rows = store.displayWipRows.filter { (row: JtWipRow) -> Bool in
+            if row.hidden && !showsHidden { return false }
+            return matches(row)
         }
         let ordered = rows.filter(\.pinned) + rows.filter { !$0.pinned }
         ToolScroll {
@@ -320,6 +327,13 @@ struct JtWipView: View {
         }
     }
 
+    private func matches(_ row: JtWipRow) -> Bool {
+        let text = query.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return true }
+        let fields: [String] = [row.label, row.customerName, row.pns.joined(separator: " ")]
+        return fields.contains { $0.localizedCaseInsensitiveContains(text) }
+    }
+
     private func wipRow(_ row: JtWipRow) -> some View {
         HStack(spacing: 10) {
             Circle().fill(JtPalette.wipColor(row.state)).frame(width: 10, height: 10)
@@ -331,7 +345,7 @@ struct JtWipView: View {
                         .foregroundStyle(row.hidden ? DS.textTertiary : DS.text)
                         .lineLimit(1)
                 }
-                Text([row.customerName, row.pns.joined(separator: "、"), row.rowCount > 0 ? "\(row.rowCount) 筆" : ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                Text(wipDetail(row))
                     .font(.caption)
                     .foregroundStyle(DS.textSecondary)
                     .lineLimit(2)
@@ -355,6 +369,12 @@ struct JtWipView: View {
     }
 }
 
+private func wipDetail(_ row: JtWipRow) -> String {
+    var parts: [String] = [row.customerName, row.pns.joined(separator: "、")]
+    if row.rowCount > 0 { parts.append("\(row.rowCount) 筆") }
+    return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+}
+
 // MARK: - 機台
 
 struct JtMachinesView: View {
@@ -367,14 +387,8 @@ struct JtMachinesView: View {
     ]
 
     var body: some View {
-        let machines = (store.wip?.machines ?? []).filter { machine in
-            let matchesFilter: Bool
-            switch filter {
-            case "mine": matchesFilter = machine.isMine
-            case "all": matchesFilter = true
-            default: matchesFilter = machine.group == filter
-            }
-            return matchesFilter && (query.isEmpty || [machine.eqp, machine.customer, machine.summary, machine.lot].contains { $0.localizedCaseInsensitiveContains(query) })
+        let machines = (store.wip?.machines ?? []).filter { (machine: JtMachine) -> Bool in
+            shows(machine)
         }
         ToolScroll {
             ScrollView(.horizontal) {
@@ -402,6 +416,18 @@ struct JtMachinesView: View {
                 Text("看板更新於 \(fetched)").font(.caption).foregroundStyle(DS.textTertiary)
             }
         }
+    }
+
+    private func shows(_ machine: JtMachine) -> Bool {
+        switch filter {
+        case "mine": if !machine.isMine { return false }
+        case "all": break
+        default: if machine.group != filter { return false }
+        }
+        let text = query.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return true }
+        let fields: [String] = [machine.eqp, machine.customer, machine.summary, machine.lot]
+        return fields.contains { $0.localizedCaseInsensitiveContains(text) }
     }
 
     private func machineCard(_ machine: JtMachine) -> some View {
@@ -521,20 +547,31 @@ struct JtAlertsView: View {
     ]
 
     var body: some View {
-        let data = store.dashboard ?? [:]
-        let known = Set(Self.titles.map(\.key))
-        let extra = data.keys.filter { !known.contains($0) && !data.jtObjects($0).isEmpty }.sorted()
-        let sections: [(title: String, rows: [JtListRow])] = (Self.titles + extra.map { (key: $0, title: $0) }).map { entry in
-            (entry.title, jtFiltered(JtListRow.rows(data.jtObjects(entry.key)), query))
-        }.filter { !$0.rows.isEmpty }
+        let list = sections()
         ToolScroll {
-            if sections.isEmpty {
+            if list.isEmpty {
                 EmptyStateView(title: "沒有通知")
             }
-            ForEach(sections, id: \.title) { section in
+            ForEach(list, id: \.title) { section in
                 JtListSection(title: section.title, rows: section.rows, tint: section.title == "待處理" ? DS.warning : DS.textSecondary)
             }
         }
+    }
+
+    /// 已知的段落依固定順序，其他非空的清單接在後面（JT 加了新的通知種類也看得到）。
+    private func sections() -> [(title: String, rows: [JtListRow])] {
+        let data = store.dashboard ?? [:]
+        let known = Set(Self.titles.map(\.key))
+        var entries = Self.titles
+        for key in data.keys.sorted() where !known.contains(key) && !data.jtObjects(key).isEmpty {
+            entries.append((key: key, title: key))
+        }
+        var result: [(title: String, rows: [JtListRow])] = []
+        for entry in entries {
+            let rows = jtFiltered(JtListRow.rows(data.jtObjects(entry.key)), query)
+            if !rows.isEmpty { result.append((title: entry.title, rows: rows)) }
+        }
+        return result
     }
 }
 
