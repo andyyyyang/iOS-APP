@@ -336,9 +336,19 @@ final class JtSyncStore {
             for field in fields.keys where Self.shows(op, clock: clock("cases", entity, field)) {
                 switch field {
                 case "status": item.status = fields.jtString(field)
-                case "etd": item.etd = fields.jtString(field)
+                case "etd":
+                    let value = fields.jtString(field)
+                    // bar 的結束就是 ETD：JT 確認前先畫在新的日期，尾端字改成新日期
+                    if item.end == item.etd { item.end = value }
+                    item.etd = value
+                    item.stat = JtDates.monthDay(value)
+                    item.daysToEtd = nil
                 case "note": item.note = fields.jtString(field)
                 case "project": item.project = fields.jtString(field)
+                case "endUser":
+                    let value = fields.jtString(field)
+                    if value != original.endUserName { item.endUserDomain = "" }
+                    item.endUserName = value
                 default: break
                 }
             }

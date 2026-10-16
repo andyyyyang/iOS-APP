@@ -269,4 +269,138 @@ final class JtTests: XCTestCase {
         let path = JtSyncStore.opPath(client: second.client, editedAt: try XCTUnwrap(second.pending.first?.editedAt), opId: try XCTUnwrap(second.pending.first?.opId))
         XCTAssertTrue(path.hasPrefix(".jt/ops/"))
     }
+
+    // MARK: - 甘特
+
+    private func casesFixture() throws -> JtCases {
+        JtCases(try XCTUnwrap(JtSnapshot(data: snapshot(Self.casesSnapshot))).data)
+    }
+
+    func testDayNumbersRoundTripWithoutTimeZones() {
+        XCTAssertEqual(JtDayNumber.number("1970-01-01"), 0)
+        XCTAssertEqual(JtDayNumber.number("1970-01-02T09:30"), 1, "有時間的字串只看日期")
+        XCTAssertNil(JtDayNumber.number("2026-13-01"))
+        XCTAssertNil(JtDayNumber.number("10/16"))
+        let day = try? XCTUnwrap(JtDayNumber.number("2026-10-16"))
+        XCTAssertEqual(day.map(JtDayNumber.string), "2026-10-16")
+        XCTAssertEqual(day.map(JtDayNumber.weekday), 5, "2026-10-16 是星期五")
+        XCTAssertEqual(JtDayNumber.number("2024-03-01").map { $0 - (JtDayNumber.number("2024-02-28") ?? 0) }, 2, "閏年")
+        XCTAssertEqual(JtDayNumber.civil(JtDayNumber.fromCivil(year: 2027, month: 1, day: 31)).month, 1)
+        XCTAssertEqual(JtDates.monthDay("2026-11-02"), "11/2")
+    }
+
+    func testFilterTabsHideClosedCasesFromAll() throws {
+        let cases = try casesFixture().cases
+        let open = try XCTUnwrap(cases.first { $0.id == "outlook-1" })
+        let done = try XCTUnwrap(cases.first { $0.id == "outlook-2" })
+        XCTAssertTrue(JtGanttFilter.all.includes(open))
+        XCTAssertFalse(JtGanttFilter.all.includes(done), "完成的案件在「全部」自動隱藏")
+        XCTAssertTrue(JtGanttFilter.closed.includes(done))
+        XCTAssertTrue(JtGanttFilter.attention.includes(open))
+        XCTAssertFalse(JtGanttFilter.ready.includes(open))
+    }
+
+    func testGanttRowsFollowJtLayoutsWithFiltersAndCollapsedGroups() throws {
+        let fixture = try casesFixture()
+        let byId = Dictionary(uniqueKeysWithValues: fixture.cases.map { ($0.id, $0) })
+        let grouped = try XCTUnwrap(fixture.layouts["customer"])
+
+        let all = JtGanttModel.rows(layout: grouped, cases: byId, include: JtGanttFilter.all.includes, collapsed: [], expandAll: false)
+        XCTAssertEqual(all.map(\.id), ["group:grp:customer:Amkor", "case:outlook-1"])
+        guard case .group(let group) = all[0], case .item(_, let indent, let sameCustomer) = all[1] else { return XCTFail("列的種類不對") }
+        XCTAssertEqual(group.members.count, 1, "標題列的件數只算顯示的案件")
+        XCTAssertEqual(group.attention, 1)
+        XCTAssertTrue(indent)
+        XCTAssertTrue(sameCustomer, "組內客戶都一樣：改顯示終端客戶")
+
+        let closed = JtGanttModel.rows(layout: grouped, cases: byId, include: JtGanttFilter.closed.includes, collapsed: [], expandAll: true)
+        XCTAssertEqual(closed.map(\.id), ["group:grp:customer:Amkor", "case:outlook-2"])
+
+        let folded = JtGanttModel.rows(layout: grouped, cases: byId, include: JtGanttFilter.all.includes, collapsed: ["grp:customer:Amkor"], expandAll: false)
+        XCTAssertEqual(folded.map(\.id), ["group:grp:customer:Amkor"])
+        let searching = JtGanttModel.rows(layout: grouped, cases: byId, include: { $0.matches("cv90") }, collapsed: ["grp:customer:Amkor"], expandAll: true)
+        XCTAssertEqual(searching.map(\.id), ["group:grp:customer:Amkor", "case:outlook-1"], "搜尋時全部展開")
+
+        let flat = JtGanttModel.rows(layout: try XCTUnwrap(fixture.layouts["etd-asc"]), cases: byId, include: JtGanttFilter.all.includes, collapsed: [], expandAll: false)
+        guard case .item(_, let flatIndent, _) = try XCTUnwrap(flat.first) else { return XCTFail() }
+        XCTAssertEqual(flat.count, 1)
+        XCTAssertFalse(flatIndent, "出貨排序不分組、不縮排")
+
+        let none = JtGanttModel.rows(layout: grouped, cases: byId, include: { _ in false }, collapsed: [], expandAll: false)
+        XCTAssertTrue(none.isEmpty, "組裡沒有要顯示的案件時標題也不畫")
+        XCTAssertEqual(JtGanttModel.fallbackLayout(fixture.cases).map(\.id), ["case:outlook-2", "case:outlook-1"])
+    }
+
+    func testBarGeometryExtendsAttentionToTodayAndFollowsEtdDrag() throws {
+        let item = try XCTUnwrap(try casesFixture().cases.first { $0.id == "outlook-1" })
+        let timeline = JtTimeline.make(cases: [item], today: "2026-10-16", dayWidth: 10)
+        XCTAssertEqual(JtDayNumber.string(timeline.firstDay), "2026-09-09", "今天 −30 天再往前 7 天")
+        let bar = JtBarGeometry(item: item, timeline: timeline)
+        XCTAssertEqual(bar.x0, 110)
+        XCTAssertEqual(bar.x1, 500, "結束那天整天都畫")
+        XCTAssertEqual(bar.progressX, 380, "進度填到 progressDate")
+        XCTAssertEqual(bar.flagX, 500)
+
+        let dragged = JtBarGeometry(item: item, timeline: timeline, dragDays: 3)
+        XCTAssertEqual(dragged.flagX, 530)
+        XCTAssertEqual(dragged.x1, 530, "bar 的結束就是 ETD：跟著旗子動")
+        XCTAssertEqual(dragged.etd, "2026-10-31")
+
+        var late = item
+        late.end = "2026-10-01"
+        late.etd = "2026-10-01"
+        XCTAssertEqual(JtBarGeometry(item: late, timeline: timeline).x1, 380, "需要注意的案件延伸到今天")
+    }
+
+    func testMarkersCloseTogetherMergeIntoACount() {
+        let timeline = JtTimeline(firstDay: JtDayNumber.number("2026-10-01") ?? 0, days: 60, dayWidth: 4, todayDay: JtDayNumber.number("2026-10-16") ?? 0)
+        let markers = [
+            JtMarker(id: "a", type: "品檢", title: "", date: "2026-10-05", originalDate: "", done: true),
+            JtMarker(id: "b", type: "模具", title: "T1", date: "2026-10-06", originalDate: "", done: false),
+            JtMarker(id: "c", type: "包裝", title: "", date: "2026-10-25", originalDate: "", done: false),
+        ]
+        let dots = JtMarkerDot.clusters(markers, timeline: timeline, isClosed: false)
+        XCTAssertEqual(dots.map(\.count), [2, 1])
+        XCTAssertTrue(dots[0].overdue, "沒完成又過了日期＝逾期")
+        XCTAssertFalse(dots[0].done)
+        XCTAssertEqual(dots[0].titles, ["品檢", "T1"])
+        XCTAssertFalse(dots[1].overdue)
+        XCTAssertEqual(dots[1].x, CGFloat(24) * 4 + 2)
+        XCTAssertFalse(JtMarkerDot.clusters(markers, timeline: timeline, isClosed: true)[0].overdue, "結案的案件不標逾期")
+    }
+
+    func testTimelineHeaderTicksMatchTheDesktopWeekScale() {
+        let timeline = JtTimeline(firstDay: JtDayNumber.number("2026-09-28") ?? 0, days: 40, dayWidth: 14, todayDay: JtDayNumber.number("2026-10-16") ?? 0)
+        let ticks = JtTimelineHeader.ticks(timeline: timeline, scale: .week, from: 0, to: timeline.width)
+        XCTAssertEqual(ticks.filter(\.isMonth).map(\.label), ["October", "November"])
+        XCTAssertEqual(ticks.filter { !$0.isMonth }.map(\.label), ["29", "01", "08", "15", "22", "29", "01"])
+        XCTAssertEqual(JtTimelineHeader.stickyMonth(timeline: timeline, offset: 14 * 4), "October 2026", "捲到月中：左緣標出是哪個月")
+        XCTAssertNil(JtTimelineHeader.stickyMonth(timeline: timeline, offset: 0), "下個月的標籤快到左緣時讓位")
+        XCTAssertNil(JtTimelineHeader.stickyMonth(timeline: timeline, offset: 14 * 3), "月初本身就有標籤")
+        XCTAssertEqual(JtTimelineHeader.ticks(timeline: timeline, scale: .day, from: 0, to: 14 * 3).filter { !$0.isMonth }.count, 5)
+    }
+
+    func testLogoInitialsAndColorsMatchTheDesktop() {
+        XCTAssertEqual(JtLogo.initials("AMD-Xilinx"), "AX")
+        XCTAssertEqual(JtLogo.initials("Amkor"), "AM")
+        XCTAssertEqual(JtLogo.initials("Qualcomm (QCT)"), "QU", "括號內的字不算")
+        XCTAssertEqual(JtLogo.hueDegrees("Amkor"), 146)
+        XCTAssertEqual(JtLogo.hueDegrees("AMD-Xilinx"), 53)
+        XCTAssertEqual(JtLogo.hueDegrees("Qualcomm"), 13)
+        XCTAssertNil(JtLogo.url(" "))
+        XCTAssertEqual(JtLogo.url("amkor.com")?.absoluteString, "https://icons.duckduckgo.com/ip3/amkor.com.ico")
+    }
+
+    func testEtdAndEndUserEditsShowBeforeJtConfirms() throws {
+        let store = makeStore()
+        XCTAssertTrue(store.apply(kind: "cases", data: snapshot(Self.casesSnapshot)))
+        store.setCase("outlook-1", ["etd": "2026-11-02", "endUser": "Nvidia"])
+        let shown = try XCTUnwrap(store.displayCase("outlook-1"))
+        XCTAssertEqual(shown.etd, "2026-11-02")
+        XCTAssertEqual(shown.end, "2026-11-02", "bar 的結束跟著新的 ETD")
+        XCTAssertEqual(shown.stat, "11/2")
+        XCTAssertNil(shown.daysToEtd)
+        XCTAssertEqual(shown.endUserName, "Nvidia")
+        XCTAssertEqual(shown.endUserDomain, "", "換了終端客戶：舊的 logo 網域不再適用")
+    }
 }

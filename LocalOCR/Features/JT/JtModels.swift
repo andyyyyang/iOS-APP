@@ -149,6 +149,8 @@ struct JtMeta {
     let owners: [JtOwner]
     let customerDomains: [String: String]
     let groupModes: [(mode: String, label: String)]
+    /// 終端客戶的候選名單（指定終端客戶時選）。
+    let endUsers: [String]
 
     static let defaultModes: [(mode: String, label: String)] = [
         ("etd-asc", "出貨"), ("owner", "業務"), ("status", "狀態"), ("customer", "客戶"), ("project", "專案"),
@@ -174,6 +176,10 @@ struct JtMeta {
             domains[customer.jtString("name")] = domain
         }
         customerDomains = domains
+        endUsers = ((data["endUsers"] as? [Any]) ?? []).compactMap { item -> String? in
+            if let name = item as? String { return name }
+            return (item as? JtObject)?.jtString("name")
+        }.filter { !$0.isEmpty }
         let modes = data.jtObjects("groupModes").map { (mode: $0.jtString("mode"), label: $0.jtString("label")) }.filter { !$0.mode.isEmpty }
         groupModes = modes.isEmpty ? Self.defaultModes : modes
     }
@@ -232,12 +238,12 @@ struct JtCase: Identifiable {
     let customName: String?
     var status: String
     let tone: String
-    let stat: String
+    var stat: String
     let start: String
-    let end: String
+    var end: String
     var etd: String
     let etdFrom: String
-    let daysToEtd: Int?
+    var daysToEtd: Int?
     let progressDate: String
     let schedule: String
     let scheduleDays: Int?
@@ -249,8 +255,8 @@ struct JtCase: Identifiable {
     var milestones: [JtMilestone]
     var note: String
     var project: String
-    let endUserName: String
-    let endUserDomain: String
+    var endUserName: String
+    var endUserDomain: String
     let wip: JtCaseWip?
     var comments: [JtComment]
 
@@ -627,6 +633,13 @@ enum JtDates {
         return string(moved)
     }
 
+    /// 「10/16」
+    static func monthDay(_ text: String) -> String {
+        guard let day = JtDayNumber.number(text) else { return text }
+        let parts = JtDayNumber.civil(day)
+        return "\(parts.month)/\(parts.day)"
+    }
+
     /// 「10/16（四）」
     static func short(_ text: String) -> String {
         guard let date = date(text) else { return text }
@@ -635,6 +648,59 @@ enum JtDates {
         let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
         let weekday = weekdays[((parts.weekday ?? 1) - 1) % 7]
         return "\(parts.month ?? 0)/\(parts.day ?? 0)（\(weekday)）"
+    }
+}
+
+/// 日期換成 1970-01-01 起算的第幾天（整數運算，不受時區影響）：甘特每畫一列都要換算很多次，不用 DateFormatter。
+enum JtDayNumber {
+    static func number(_ text: String) -> Int? {
+        let bytes = Array(text.utf8.prefix(10))
+        guard bytes.count == 10, bytes[4] == 45, bytes[7] == 45 else { return nil }
+        func value(_ range: Range<Int>) -> Int? {
+            var result = 0
+            for index in range {
+                let digit = Int(bytes[index]) - 48
+                guard digit >= 0, digit <= 9 else { return nil }
+                result = result * 10 + digit
+            }
+            return result
+        }
+        guard let year = value(0..<4), let month = value(5..<7), let day = value(8..<10),
+              (1...12).contains(month), (1...31).contains(day) else { return nil }
+        return fromCivil(year: year, month: month, day: day)
+    }
+
+    static func fromCivil(year: Int, month: Int, day: Int) -> Int {
+        let y = month <= 2 ? year - 1 : year
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yearOfEra = y - era * 400
+        let shiftedMonth = (month + 9) % 12
+        let dayOfYear = (153 * shiftedMonth + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        return era * 146_097 + dayOfEra - 719_468
+    }
+
+    static func civil(_ number: Int) -> (year: Int, month: Int, day: Int) {
+        let z = number + 719_468
+        let era = (z >= 0 ? z : z - 146_096) / 146_097
+        let dayOfEra = z - era * 146_097
+        let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146_096) / 365
+        let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+        let shiftedMonth = (5 * dayOfYear + 2) / 153
+        let day = dayOfYear - (153 * shiftedMonth + 2) / 5 + 1
+        let month = shiftedMonth < 10 ? shiftedMonth + 3 : shiftedMonth - 9
+        let year = yearOfEra + era * 400 + (month <= 2 ? 1 : 0)
+        return (year, month, day)
+    }
+
+    static func string(_ number: Int) -> String {
+        let parts = civil(number)
+        return String(format: "%04d-%02d-%02d", parts.year, parts.month, parts.day)
+    }
+
+    /// 0＝星期日。
+    static func weekday(_ number: Int) -> Int {
+        ((number + 4) % 7 + 7) % 7
     }
 }
 
@@ -653,6 +719,9 @@ extension Color {
 }
 
 enum JtPalette {
+    /// 今天的軸線與日期膠囊（藍底白字，淺色深色都讀得清楚）。
+    static let today = Color(red: 0.25, green: 0.47, blue: 0.96)
+
     /// 在製狀態：run 綠、stuck 玫瑰紅、wait 琥珀、idle 灰。
     static func wipColor(_ state: String) -> Color {
         switch state {
