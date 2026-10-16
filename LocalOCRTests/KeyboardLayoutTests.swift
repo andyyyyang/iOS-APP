@@ -12,6 +12,7 @@ final class KeyboardLayoutTests: XCTestCase {
     private let notePath = "鍵盤版面測試/鍵盤版面測試.md"
 
     override func tearDown() async throws {
+        PaletteModel.shared.reset()
         window?.endEditing(true)
         window?.isHidden = true
         window = nil
@@ -50,7 +51,8 @@ final class KeyboardLayoutTests: XCTestCase {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.open(.contacts)
         let window = try host(workspace)
-        let field = try await waitFor { Self.find(UITextField.self, in: window) }
+        // 工具頁自己的搜尋欄（不是頂部列的全域搜尋欄）
+        let field = try await waitFor { Self.find(UITextField.self, in: window) { !($0 is SearchTextField) } }
         try await measure(window, focusing: field, label: "tool-search")
     }
 
@@ -91,7 +93,8 @@ final class KeyboardLayoutTests: XCTestCase {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.showsPalette = true
         let window = try host(workspace)
-        let field = try await waitFor { Self.find(SearchTextField.self, in: window) }
+        // 置中面板的搜尋欄出現就開始輸入（iPad 頂部列也有一個搜尋欄）
+        let field = try await waitFor { Self.find(SearchTextField.self, in: window) { $0.isFirstResponder } }
         try await Task.sleep(for: .milliseconds(800))
         let fieldFrame = field.convert(field.bounds, to: window)
         let listArea = CGRect(x: 0, y: fieldFrame.maxY + 48, width: window.bounds.width, height: 260)
@@ -114,6 +117,72 @@ final class KeyboardLayoutTests: XCTestCase {
         field.sendActions(for: .editingChanged)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(field.text ?? "", "", "打空白後輸入欄要清空")
+    }
+
+    /// iPad 頂部列的搜尋欄可以直接輸入（Apple Pencil 隨手寫也是寫進這個欄位）：一開始輸入，結果列表就在下面展開、
+    /// 跟著輸入更新，頂部列不被蓋住；關閉後欄位清空、結束輸入。
+    func testTopBarSearchFieldOpensTheResultsList() async throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("頂部列只在 iPad") }
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
+        workspace.setRightOpen(true)
+        let window = try host(workspace)
+        let field = try await waitFor { Self.find(SearchTextField.self, in: window) }
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertFalse(workspace.showsPalette, "還沒輸入就打開了列表")
+        let fieldFrame = field.convert(field.bounds, to: window)
+        print("[probe] top bar search field \(fieldFrame)")
+        XCTAssertLessThan(fieldFrame.minY, window.safeAreaInsets.top + 52, "搜尋欄不在頂部列")
+        // 頂部列以下（列表與變暗的背景）、搜尋欄正下方（結果列表）
+        let belowBar = CGRect(x: 0, y: fieldFrame.maxY + 20, width: window.bounds.width, height: 300)
+        let listArea = CGRect(x: max(fieldFrame.maxX - 420, 0), y: fieldFrame.maxY + 16, width: min(420, fieldFrame.maxX), height: 200)
+        let closed = Self.render(window)
+
+        // 隨手寫：還沒點欄位就寫進字，也要展開列表、字不能被清掉
+        field.text = "zzqx"
+        field.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertTrue(workspace.showsPalette, "輸入後沒有展開結果列表")
+        XCTAssertEqual(PaletteModel.shared.presentation, .attached, "列表要接在頂部列的搜尋欄下面")
+        XCTAssertEqual(field.text ?? "", "zzqx", "寫進的字被清掉了")
+        XCTAssertEqual(PaletteModel.shared.query, "zzqx")
+        XCTAssertTrue(field.isFirstResponder || field.becomeFirstResponder(), "搜尋欄無法輸入")
+        let typed = Self.render(window)
+        let opened = Self.difference(closed, typed, in: belowBar, scale: window.screen.scale)
+        print("[probe] top bar list area changed after typing: \(String(format: "%.1f", opened * 100))%")
+
+        // 再改字：列表跟著更新
+        field.text = "通訊"
+        field.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .milliseconds(800))
+        let retyped = Self.render(window)
+        let updated = Self.difference(typed, retyped, in: listArea, scale: window.screen.scale)
+        print("[probe] top bar list changed after retyping: \(String(format: "%.1f", updated * 100))%")
+        for (image, suffix) in [(closed, "closed"), (typed, "typed"), (retyped, "retyped")] {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "top-bar-search-\(suffix)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertGreaterThan(opened, 0.1, "輸入後頂部列下面沒有出現結果列表")
+        XCTAssertGreaterThan(updated, 0.02, "改字後結果列表沒有更新")
+        // 頂部列的搜尋欄沒有被列表蓋住：還在原位、還是最上層可以點的
+        let center = CGPoint(x: fieldFrame.midX, y: fieldFrame.midY)
+        let hit = window.hitTest(center, with: nil)
+        XCTAssertTrue(hit === field || hit?.isDescendant(of: field) == true, "頂部列的搜尋欄被列表蓋住（點到的是 \(String(describing: hit.map { type(of: $0) }))）")
+
+        // 空一格：前面的字變成關鍵字
+        field.insertText(" ")
+        field.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(PaletteModel.shared.keywords, ["通訊"])
+        XCTAssertEqual(field.text ?? "", "")
+
+        // 關閉：欄位清空、結束輸入
+        workspace.showsPalette = false
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(field.isFirstResponder, "關閉列表後搜尋欄還在輸入")
+        XCTAssertEqual(PaletteModel.shared.keywords, [])
+        XCTAssertEqual(PaletteModel.shared.presentation, .centered)
     }
 
     /// iPad 橫向打開鍵盤後，鍵盤上方只剩約 450 點（台前調度的小視窗更矮）。版面中只要有固定高度比這高的內容
@@ -218,10 +287,10 @@ final class KeyboardLayoutTests: XCTestCase {
         throw XCTSkip("畫面沒有在時間內出現")
     }
 
-    static func find<T: UIView>(_ type: T.Type, in view: UIView) -> T? {
-        if let match = view as? T, !match.isHidden, match.window != nil { return match }
+    static func find<T: UIView>(_ type: T.Type, in view: UIView, where matches: (T) -> Bool = { _ in true }) -> T? {
+        if let match = view as? T, !match.isHidden, match.window != nil, matches(match) { return match }
         for subview in view.subviews {
-            if let match = find(type, in: subview) { return match }
+            if let match = find(type, in: subview, where: matches) { return match }
         }
         return nil
     }

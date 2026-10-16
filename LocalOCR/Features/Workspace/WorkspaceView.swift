@@ -58,6 +58,10 @@ struct WorkspaceView: View {
         .toast($workspace.toast)
         .persistentSystemOverlays(workspace.isFullScreen ? .hidden : .automatic)
         .animation(.easeOut(duration: 0.18), value: workspace.showsPalette)
+        // 面板關閉（不論從哪裡關）：清掉搜尋，下次從頭開始
+        .onChange(of: workspace.showsPalette) { _, shown in
+            if !shown { PaletteModel.shared.reset() }
+        }
         .animation(.smooth(duration: 0.3), value: workspace.isFullScreen)
         .background { KeyboardShortcuts() }
         .fullScreenCover(isPresented: $workspace.showsCamera) {

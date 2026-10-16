@@ -33,23 +33,7 @@ struct TopBar: View {
 
             HStack(spacing: 8) {
                 if workspace.isRightOpen {
-                    Button {
-                        workspace.showsPalette = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
-                            Text("搜尋筆記或指令")
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(DS.onInkDim)
-                        .padding(.horizontal, 12)
-                        .frame(height: 34)
-                        .background(DS.inkField, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                    TopBarSearchField()
                 } else {
                     Button {
                         workspace.showsPalette = true
@@ -73,6 +57,69 @@ struct TopBar: View {
             .frame(width: workspace.isRightOpen ? workspace.rightWidth : 96, alignment: .trailing)
         }
         .frame(height: 52)
+    }
+}
+
+/// 頂部列的搜尋欄：可以直接打字，或用 Apple Pencil 在上面手寫（隨手寫）；一開始輸入，結果列表就在下面展開，
+/// 邊寫邊更新。Return 開啟選取的那一列、上下鍵選擇、空一格再加一個關鍵字、Esc 收起。
+private struct TopBarSearchField: View {
+    @Environment(Workspace.self) private var workspace
+    @State private var model = PaletteModel.shared
+
+    /// 結果列表正接在這個搜尋欄下面。
+    private var isActive: Bool { workspace.showsPalette && model.presentation == .attached }
+
+    private var placeholder: String {
+        isActive && (!model.keywords.isEmpty || model.scope != nil) ? "再加一個關鍵字…" : "搜尋筆記或指令"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundStyle(isActive ? DS.onInk : DS.onInkDim)
+                .frame(width: 18, height: 34)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    open()
+                    model.focusToken += 1
+                }
+            PaletteSearchField(
+                text: Binding(
+                    get: { model.presentation == .attached ? model.query : "" },
+                    set: { model.query = $0 }
+                ),
+                placeholder: placeholder,
+                focusToken: model.focusToken,
+                onSubmit: { model.submitToken += 1 },
+                onSeparator: { model.commit($0) },
+                onDeleteWhenEmpty: { model.removeLastCondition() },
+                onArrow: { model.selection += $0 },
+                onTab: { model.commitTyping() },
+                onEscape: { workspace.showsPalette = false },
+                autofocus: false,
+                isActive: isActive,
+                tone: .ink,
+                onBegin: { open() },
+                onWriting: { model.isWriting = $0 }
+            )
+            .frame(height: 34)
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .frame(height: 34)
+        .background(DS.inkField, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                .strokeBorder(DS.onInk.opacity(isActive ? 0.45 : 0), lineWidth: 1)
+        }
+    }
+
+    /// 展開結果列表（接在搜尋欄下面）。
+    private func open() {
+        guard !isActive else { return }
+        model.presentation = .attached
+        workspace.showsPalette = true
     }
 }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 指令面板（⌘K、頂部列的放大鏡）：全域搜尋。筆記、指令，以及業務快查的通訊錄、客戶與代碼、機種、開案案件、
 /// BPM、人員、SOP、物流單號都在這裡直接找，結果分區列出，列上就能複製、撥打或開啟。上下鍵選擇、Return 執行、Esc 關閉。
+/// iPad 右側欄打開時，頂部列的搜尋欄可以直接打字或用 Apple Pencil 手寫，結果列表接在搜尋欄下面展開（`attached`）。
 struct CommandPalette: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -11,18 +12,37 @@ struct CommandPalette: View {
     @State private var logistics = LogisticsStore.shared
     @State private var index = VaultIndexStore.shared
     @State private var sources = GlobalSearch.Sources()
+    /// 搜尋的狀態（頂部列的搜尋欄也用同一份）。
+    @State private var model = PaletteModel.shared
+    @AppStorage(PaletteModel.recentKey) private var recentKeywordsRaw = ""
+
     /// 輸入中的文字（打空白或逗號就變成一個關鍵字）。
-    @State private var query = ""
+    private var query: String {
+        get { model.query }
+        nonmutating set { model.query = newValue }
+    }
+
     /// 已經加入的關鍵字：每一個都要符合，越加越精確。
-    @State private var keywords: [String] = []
-    @State private var scope: Scope?
-    @State private var selection = 0
-    @AppStorage("search.recentKeywords") private var recentKeywordsRaw = ""
-    /// 改變時讓搜尋欄重新成為輸入焦點（點了建議之後接著打字）。
-    @State private var focusToken = 0
+    private var keywords: [String] {
+        get { model.keywords }
+        nonmutating set { model.keywords = newValue }
+    }
+
+    private var scope: Scope? {
+        get { model.scope }
+        nonmutating set { model.scope = newValue }
+    }
+
+    private var selection: Int {
+        get { model.selection }
+        nonmutating set { model.selection = newValue }
+    }
+
+    /// 結果列表接在頂部列的搜尋欄下面。
+    private var isAttached: Bool { model.presentation == .attached }
 
     /// 只看某一類結果。
-    private enum Scope: Hashable {
+    enum Scope: Hashable {
         case section(GlobalSearch.Section)
         case notes
 
@@ -91,97 +111,55 @@ struct CommandPalette: View {
         let sections = results.sections
         let items = sections.flatMap(\.items)
         let rows = Self.rows(sections)
-        ZStack(alignment: .top) {
-            Color.black.opacity(0.25)
-                .ignoresSafeArea()
-                .onTapGesture { close() }
-
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(DS.textSecondary)
-                    PaletteSearchField(
-                        text: $query,
-                        placeholder: keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…",
-                        focusToken: focusToken,
-                        onSubmit: { run(items) },
-                        onSeparator: { commit($0) },
-                        onDeleteWhenEmpty: { removeLastCondition() },
-                        onArrow: { delta in selection = min(max(selection + delta, 0), max(items.count - 1, 0)) },
-                        onTab: { if !query.trimmingCharacters(in: .whitespaces).isEmpty { commit(query) } },
-                        onEscape: { close() }
-                    )
-                    .frame(height: 52)
-                    Button("取消") { close() }
-                        .font(.subheadline)
-                        .foregroundStyle(DS.textSecondary)
-                        .buttonStyle(.plain)
-                        .keyboardShortcut(.cancelAction)
-                }
-                .padding(.horizontal, 16)
-                .frame(height: 52)
-
-                if scope != nil || !keywords.isEmpty || !results.suggestions.isEmpty {
-                    chipRow(results.suggestions)
-                }
-
-                Rectangle().fill(DS.hairline).frame(height: 1)
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        // 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）
-                        VStack(alignment: .leading, spacing: 1) {
-                            if searchText.isEmpty && scope == nil {
-                                Text("可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字")
-                                    .font(.caption)
-                                    .foregroundStyle(DS.textTertiary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.top, 6)
-                            }
-                            ForEach(rows) { row in
-                                switch row {
-                                case .header(_, let title, let count):
-                                    sectionHeader(title, count: count)
-                                case .item(let item, let index):
-                                    self.row(item, isSelected: index == selection)
-                                        .id(item.id)
-                                        .onTapGesture {
-                                            selection = index
-                                            run(items)
-                                        }
-                                }
-                            }
-                            if items.isEmpty {
-                                Text(searchText.isEmpty ? "沒有資料" : "找不到「\(searchText)」")
-                                    .font(.subheadline)
-                                    .foregroundStyle(DS.textTertiary)
-                                    .padding(16)
-                            }
-                        }
-                        .padding(6)
-                        .id(searchText + "|" + (scope?.title ?? ""))
+        Group {
+            if isAttached {
+                // 不蓋住頂部列：搜尋欄要能繼續打字或手寫
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: 52)
+                        .allowsHitTesting(false)
+                    ZStack(alignment: .topTrailing) {
+                        Color.black.opacity(0.12)
+                            .ignoresSafeArea(edges: .bottom)
+                            .onTapGesture { close() }
+                        panel(results: results, items: items, rows: rows, maxHeight: 460)
+                            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+                            .clipShape(RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+                            .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+                            .frame(maxWidth: 560)
+                            .padding(.leading, 12)
+                            .padding(.trailing, 10)
+                            .padding(.top, 4)
                     }
-                    .frame(maxHeight: sizeClass == .compact ? 440 : 560)
-                    .onChange(of: selection) { _, value in
-                        guard items.indices.contains(value) else { return }
-                        withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(items[value].id) }
+                    // 手寫時列表不接受點擊（筆畫不會誤點到結果或關掉列表）
+                    .allowsHitTesting(!model.isWriting)
+                }
+            } else {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.25)
+                        .ignoresSafeArea()
+                        .onTapGesture { close() }
+
+                    VStack(spacing: 0) {
+                        fieldRow(items: items)
+                        panel(results: results, items: items, rows: rows, maxHeight: sizeClass == .compact ? 440 : 560)
                     }
+                    .frame(maxWidth: 680)
+                    .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
+                    .padding(.horizontal, 12)
+                    .padding(.top, sizeClass == .compact ? 8 : 64)
                 }
             }
-            .frame(maxWidth: 680)
-            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
-            .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
-            .padding(.horizontal, 12)
-            .padding(.top, sizeClass == .compact ? 8 : 64)
         }
         .onAppear {
-            query = ""
-            keywords = []
-            scope = nil
-            selection = 0
+            // 從頂部列的搜尋欄打開時保留已經寫的字
+            if !isAttached { model.reset() }
         }
+        // 頂部列的搜尋欄按了 Return
+        .onChange(of: model.submitToken) { _, _ in run(items) }
         // 業務快查的資料：通訊錄與 BPM 讀一次後留著，索引與物流超過一分鐘才重新取得
         .task {
             async let index: Void = jentech.ensureIndex()
@@ -194,6 +172,105 @@ struct CommandPalette: View {
         .onChange(of: query) { _, _ in selection = 0 }
         .onChange(of: keywords) { _, _ in selection = 0 }
         .onChange(of: scope) { _, _ in selection = 0 }
+        // 頂部列的上下鍵不知道有幾列：超出時拉回來
+        .onChange(of: selection) { _, value in
+            let clamped = min(max(value, 0), max(items.count - 1, 0))
+            if clamped != value { selection = clamped }
+        }
+        // 頂部列的搜尋欄不見了（收起右側欄、全螢幕、視窗變窄）
+        .onChange(of: workspace.isRightOpen) { _, _ in if isAttached { close() } }
+        .onChange(of: workspace.isFullScreen) { _, _ in if isAttached { close() } }
+        .onChange(of: sizeClass) { _, _ in if isAttached { close() } }
+    }
+
+    /// 置中面板上方的搜尋欄。
+    private func fieldRow(items: [Item]) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(DS.textSecondary)
+            PaletteSearchField(
+                text: Binding(get: { model.query }, set: { model.query = $0 }),
+                placeholder: keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…",
+                focusToken: model.focusToken,
+                onSubmit: { run(items) },
+                onSeparator: { model.commit($0) },
+                onDeleteWhenEmpty: { model.removeLastCondition() },
+                onArrow: { delta in selection = min(max(selection + delta, 0), max(items.count - 1, 0)) },
+                onTab: { model.commitTyping() },
+                onEscape: { close() }
+            )
+            .frame(height: 52)
+            Button("取消") { close() }
+                .font(.subheadline)
+                .foregroundStyle(DS.textSecondary)
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 52)
+    }
+
+    private var hint: String {
+        if isAttached {
+            return "可以直接打字或用 Apple Pencil 寫：人名、分機、客戶、機種、開案號、BPM、SOP、物流單號；空一格再加一個關鍵字"
+        }
+        return "可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字"
+    }
+
+    /// 建議與結果列表（置中的面板與頂部列下面的列表共用）。
+    private func panel(results: (sections: [Section], suggestions: [Suggestion]), items: [Item], rows: [Row], maxHeight: CGFloat) -> some View {
+        let showsChips = scope != nil || !keywords.isEmpty || !results.suggestions.isEmpty
+        return VStack(spacing: 0) {
+            if showsChips {
+                chipRow(results.suggestions)
+                    .padding(.top, isAttached ? 8 : 0)
+            }
+            if showsChips || !isAttached {
+                Rectangle().fill(DS.hairline).frame(height: 1)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    // 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）
+                    VStack(alignment: .leading, spacing: 1) {
+                        if searchText.isEmpty && scope == nil {
+                            Text(hint)
+                                .font(.caption)
+                                .foregroundStyle(DS.textTertiary)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 6)
+                        }
+                        ForEach(rows) { row in
+                            switch row {
+                            case .header(_, let title, let count):
+                                sectionHeader(title, count: count)
+                            case .item(let item, let index):
+                                self.row(item, isSelected: index == selection)
+                                    .id(item.id)
+                                    .onTapGesture {
+                                        selection = index
+                                        run(items)
+                                    }
+                            }
+                        }
+                        if items.isEmpty {
+                            Text(searchText.isEmpty ? "沒有資料" : "找不到「\(searchText)」")
+                                .font(.subheadline)
+                                .foregroundStyle(DS.textTertiary)
+                                .padding(16)
+                        }
+                    }
+                    .padding(6)
+                    .id(searchText + "|" + (scope?.title ?? ""))
+                }
+                .frame(maxHeight: maxHeight)
+                .onChange(of: selection) { _, value in
+                    guard items.indices.contains(value) else { return }
+                    withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(items[value].id) }
+                }
+            }
+        }
     }
 
     private static func rows(_ sections: [Section]) -> [Row] {
@@ -261,8 +338,6 @@ struct CommandPalette: View {
     }
 
     // MARK: - 結果
-
-    private static let separators: Set<Character> = [" ", "　", ",", "，", "、"]
 
     /// 所有關鍵字加上輸入中的字。
     private var searchText: String {
@@ -410,6 +485,7 @@ struct CommandPalette: View {
                         keywords = []
                         scope = nil
                         query = ""
+                        model.focusToken += 1
                     }
                     .font(.footnote)
                     .foregroundStyle(DS.textSecondary)
@@ -441,40 +517,14 @@ struct CommandPalette: View {
     private func apply(_ suggestion: Suggestion) {
         switch suggestion.action {
         case .add(let text):
-            commit(text)
+            model.commit(text)
         case .scope(let scope):
             self.scope = scope
         case .keyword(let keyword):
             if !keywords.contains(keyword) { keywords.append(keyword) }
-            remember(keyword)
+            model.remember(keyword)
         }
-        focusToken += 1
-    }
-
-    /// 輸入中的字變成關鍵字（可以一次好幾個，用空白或逗號分開），輸入欄清空接著打下一個。
-    private func commit(_ text: String) {
-        let words = text.split { Self.separators.contains($0) }.map(String.init)
-        for word in words where !keywords.contains(word) {
-            keywords.append(word)
-            remember(word)
-        }
-        query = ""
-    }
-
-    /// 搜尋欄是空的時按刪除鍵：拿掉最後一個關鍵字（沒有關鍵字時拿掉「只看」）。
-    private func removeLastCondition() {
-        if !keywords.isEmpty {
-            keywords.removeLast()
-        } else if scope != nil {
-            scope = nil
-        }
-    }
-
-    /// 最近用過的關鍵字（最多 8 個）。
-    private func remember(_ keyword: String) {
-        var list = recentKeywords.filter { $0 != keyword }
-        list.insert(keyword, at: 0)
-        recentKeywordsRaw = list.prefix(8).joined(separator: "\n")
+        model.focusToken += 1
     }
 
     /// 資料有變（索引更新、通訊錄或 BPM 讀到了、物流清單更新）時重新取一次要搜尋的資料。
@@ -680,11 +730,92 @@ struct CommandPalette: View {
     }
 }
 
+// MARK: - 搜尋狀態
+
+/// 全域搜尋的狀態：置中的指令面板與頂部列的搜尋欄共用（在頂部列輸入，下面展開的列表顯示結果）。
+/// 面板關閉時（`Workspace.showsPalette` 變成 false）由工作區呼叫 `reset()`。
+@MainActor
+@Observable
+final class PaletteModel {
+    enum Presentation {
+        /// 置中的面板（⌘K、放大鏡、iPhone）。
+        case centered
+        /// 接在頂部列搜尋欄下面的列表（iPad 右側欄打開時，可以直接打字或用 Apple Pencil 手寫）。
+        case attached
+    }
+
+    static let shared = PaletteModel()
+    nonisolated static let recentKey = "search.recentKeywords"
+
+    var presentation = Presentation.centered
+    /// 輸入中的文字（打空白或逗號就變成一個關鍵字）。
+    var query = ""
+    /// 已經加入的關鍵字：每一個都要符合，越加越精確。
+    var keywords: [String] = []
+    var scope: CommandPalette.Scope?
+    var selection = 0
+    /// 改變時讓搜尋欄重新成為輸入焦點（點了建議之後接著打字）。
+    var focusToken = 0
+    /// 頂部列的搜尋欄按了 Return：面板執行選取的那一列。
+    var submitToken = 0
+    /// 正在用 Apple Pencil 在頂部列的搜尋欄手寫。
+    var isWriting = false
+
+    func reset() {
+        presentation = .centered
+        query = ""
+        keywords = []
+        scope = nil
+        selection = 0
+        isWriting = false
+    }
+
+    /// 輸入中的字變成關鍵字（可以一次好幾個，用空白或逗號分開），輸入欄清空接著打下一個。
+    func commit(_ text: String) {
+        let words = text.split { PaletteSearchField.separators.contains($0) }.map(String.init)
+        for word in words where !keywords.contains(word) {
+            keywords.append(word)
+            remember(word)
+        }
+        query = ""
+    }
+
+    /// Tab：輸入中的字變成關鍵字。
+    func commitTyping() {
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty { commit(query) }
+    }
+
+    /// 搜尋欄是空的時按刪除鍵：拿掉最後一個關鍵字（沒有關鍵字時拿掉「只看」）。
+    func removeLastCondition() {
+        if !keywords.isEmpty {
+            keywords.removeLast()
+        } else if scope != nil {
+            scope = nil
+        }
+    }
+
+    /// 最近用過的關鍵字（最多 8 個）。
+    func remember(_ keyword: String) {
+        let defaults = UserDefaults.standard
+        var list = (defaults.string(forKey: Self.recentKey) ?? "").split(separator: "\n").map(String.init).filter { $0 != keyword }
+        list.insert(keyword, at: 0)
+        defaults.set(list.prefix(8).joined(separator: "\n"), forKey: Self.recentKey)
+    }
+}
+
 // MARK: - 搜尋欄
 
 /// 指令面板的搜尋欄（UIKit 的文字欄）：注音、拼音等輸入法還在組字時不搜尋、也不把空白當成分隔，選好字才更新結果；
 /// 打空白或逗號把前面的字變成關鍵字，空的時按刪除鍵拿掉最後一個關鍵字；上下鍵選擇、Tab 加入關鍵字、Esc 關閉。
+/// UIKit 的文字欄本來就能用 Apple Pencil 手寫（隨手寫），寫好的字和打字一樣更新結果。
 struct PaletteSearchField: UIViewRepresentable {
+    enum Tone {
+        /// 白色面板上。
+        case card
+        /// 黑色頂部列上。
+        case ink
+    }
+
     @Binding var text: String
     var placeholder: String
     var focusToken: Int
@@ -694,14 +825,25 @@ struct PaletteSearchField: UIViewRepresentable {
     var onArrow: (Int) -> Void
     var onTab: () -> Void
     var onEscape: () -> Void
+    /// 出現時就開始輸入（置中的面板）；頂部列的搜尋欄要點了或寫了才開始。
+    var autofocus = true
+    /// 變成 false 時結束輸入（頂部列的搜尋欄在列表關閉時）；`focusToken` 只在 true 時有作用。
+    var isActive = true
+    var tone = Tone.card
+    /// 開始輸入或手寫（頂部列的搜尋欄在這時展開列表）。
+    var onBegin: (() -> Void)?
+    /// Apple Pencil 開始、結束手寫。
+    var onWriting: ((Bool) -> Void)?
 
     static let separators: Set<Character> = [" ", "　", ",", "，", "、"]
 
     func makeUIView(context: Context) -> SearchTextField {
         let field = SearchTextField()
-        field.font = .systemFont(ofSize: 17)
-        field.textColor = UIColor(DS.text)
-        field.tintColor = UIColor(DS.text)
+        let textColor = tone == .ink ? UIColor(DS.onInk) : UIColor(DS.text)
+        field.font = .systemFont(ofSize: tone == .ink ? 15 : 17)
+        field.textColor = textColor
+        field.tintColor = textColor
+        if tone == .ink { field.keyboardAppearance = .dark }
         field.autocorrectionType = .no
         field.autocapitalizationType = .none
         field.spellCheckingType = .no
@@ -712,21 +854,43 @@ struct PaletteSearchField: UIViewRepresentable {
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.coordinator = context.coordinator
+        if onWriting != nil {
+            field.addInteraction(UIScribbleInteraction(delegate: context.coordinator))
+        }
         context.coordinator.focusToken = focusToken
-        DispatchQueue.main.async { field.becomeFirstResponder() }
+        context.coordinator.wasActive = isActive
+        if autofocus {
+            DispatchQueue.main.async { field.becomeFirstResponder() }
+        }
         return field
     }
 
     func updateUIView(_ field: SearchTextField, context: Context) {
-        context.coordinator.parent = self
-        field.placeholder = placeholder
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        if coordinator.placeholder != placeholder {
+            coordinator.placeholder = placeholder
+            if tone == .ink {
+                field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: UIColor(DS.onInkDim)])
+            } else {
+                field.placeholder = placeholder
+            }
+        }
         // 組字中不動文字（會打斷輸入法）
         if field.markedTextRange == nil, field.text != text {
             field.text = text
         }
-        if context.coordinator.focusToken != focusToken {
-            context.coordinator.focusToken = focusToken
-            DispatchQueue.main.async { field.becomeFirstResponder() }
+        if coordinator.focusToken != focusToken {
+            coordinator.focusToken = focusToken
+            if isActive {
+                DispatchQueue.main.async { field.becomeFirstResponder() }
+            }
+        }
+        if coordinator.wasActive != isActive {
+            coordinator.wasActive = isActive
+            if !isActive, field.isFirstResponder {
+                field.resignFirstResponder()
+            }
         }
     }
 
@@ -734,9 +898,11 @@ struct PaletteSearchField: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    final class Coordinator: NSObject, UITextFieldDelegate {
+    final class Coordinator: NSObject, UITextFieldDelegate, UIScribbleInteractionDelegate {
         var parent: PaletteSearchField
         var focusToken = 0
+        var wasActive = true
+        var placeholder: String?
 
         init(parent: PaletteSearchField) {
             self.parent = parent
@@ -745,6 +911,8 @@ struct PaletteSearchField: UIViewRepresentable {
         @objc func textChanged(_ field: UITextField) {
             // 輸入法還在組字（注音、拼音）：選好字才算
             guard field.markedTextRange == nil else { return }
+            // 還沒開始輸入就寫進字（Apple Pencil 隨手寫）：先展開列表，字才不會被清掉
+            if !parent.isActive { parent.onBegin?() }
             let value = field.text ?? ""
             if let last = value.last, PaletteSearchField.separators.contains(last) {
                 parent.onSeparator(value)
@@ -758,6 +926,18 @@ struct PaletteSearchField: UIViewRepresentable {
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
             parent.onSubmit()
             return false
+        }
+
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            parent.onBegin?()
+        }
+
+        func scribbleInteractionWillBeginWriting(_ interaction: UIScribbleInteraction) {
+            parent.onWriting?(true)
+        }
+
+        func scribbleInteractionDidFinishWriting(_ interaction: UIScribbleInteraction) {
+            parent.onWriting?(false)
         }
     }
 }
