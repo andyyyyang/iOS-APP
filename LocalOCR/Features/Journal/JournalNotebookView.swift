@@ -92,10 +92,15 @@ struct JournalNotebookView: View {
         .task { await load() }
         .onDisappear {
             JournalSession.shared.detach(path: path)
+            if JournalOrganizer.shared.openPath == path { JournalOrganizer.shared.openPath = nil }
             captureDrawing()
             organizeTask?.cancel()
             guard hasUnpublishedChanges else { return }
-            BackgroundWork.run("journal-publish") { await finish() }
+            BackgroundWork.run("journal-publish") {
+                await finish()
+                // 這本整理好了：更新所有日誌的統整
+                JournalOrganizer.shared.enqueue(.overview(force: false))
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in captureDrawing() }
         .onChange(of: scenePhase) { _, phase in
@@ -152,23 +157,17 @@ struct JournalNotebookView: View {
             }
             .disabled(notebook == nil)
             .accessibilityLabel("紙張")
-            Button {
-                Task { await organize(summarize: true) }
-            } label: {
-                if isOrganizing {
-                    ProgressView().frame(width: 32, height: 32)
-                } else {
-                    HeaderIcon(systemImage: "wand.and.stars")
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(notebook == nil || isOrganizing)
-            .accessibilityLabel("辨識並整理")
             Button("日誌") { toggleJournalPanel() }
                 .buttonStyle(PillButtonStyle(kind: isJournalPanelShown ? .primary : .secondary, compact: true))
                 .disabled(notebook == nil)
                 .accessibilityLabel("在右側欄依日期列出頁面與整理")
             Menu {
+                Button {
+                    Task { await organize(summarize: true, announce: true) }
+                } label: {
+                    Label(isOrganizing ? "整理中…" : "立即辨識並整理", systemImage: "wand.and.stars")
+                }
+                .disabled(notebook == nil || isOrganizing)
                 Button(role: .destructive) {
                     pendingDelete = visiblePage
                 } label: {
@@ -224,11 +223,12 @@ struct JournalNotebookView: View {
 
     private func attachSession() {
         guard notebook != nil else { return }
+        JournalOrganizer.shared.openPath = path
         JournalSession.shared.attach(path: path, actions: JournalSession.Actions(
             showPage: { handle.scrollToPage($0) },
             addPage: { addPage() },
             deletePage: { deletePage($0) },
-            organize: { Task { await organize(summarize: true) } },
+            organize: { force in Task { await organize(summarize: true, force: force, announce: true) } },
             openModel: { openModel($0) }
         ))
         pushSession()
@@ -275,6 +275,7 @@ struct JournalNotebookView: View {
 
     private func scheduleSave(_ drawing: PKDrawing, mode: JournalViewMode) {
         hasUnpublishedChanges = true
+        JournalOrganizer.shared.noteActivity()
         pendingDrawing = (drawing, mode)
         saveTask?.cancel()
         saveTask = Task {
@@ -317,30 +318,40 @@ struct JournalNotebookView: View {
         }
     }
 
-    /// 停筆幾秒後辨識改過的頁面（貼上機種標記）；不在背景整理、不更新 Markdown（離開時才更新）。
+    /// 自動整理：停筆 5 秒辨識改過的頁面（貼上機種標記）；再閒置一分鐘整理內容有變的日子並更新圖片與 Markdown。
+    /// 又開始寫字就取消，等下次停筆。
     private func scheduleOrganize() {
         organizeTask?.cancel()
         organizeTask = Task {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             await organize(summarize: false)
+            try? await Task.sleep(for: .seconds(55))
+            guard !Task.isCancelled else { return }
+            await organize(summarize: true)
         }
     }
 
-    /// 辨識改過的頁面；`summarize` 時也整理每天的內容並更新 Markdown。
-    private func organize(summarize: Bool) async {
+    /// 辨識改過的頁面；`summarize` 時也整理每天的內容並更新 Markdown。`force`：每一頁重新辨識、每一天重新整理；
+    /// `announce`：使用者要求的，完成時提示。
+    private func organize(summarize: Bool, force: Bool = false, announce: Bool = false) async {
         captureDrawing()
-        guard let snapshot = notebook, !isOrganizing else { return }
+        guard var snapshot = notebook, !isOrganizing else { return }
         isOrganizing = true
         defer { isOrganizing = false }
+        if force {
+            for index in snapshot.pages.indices { snapshot.pages[index].recognizedFingerprint = nil }
+        }
         let (recognized, count) = await JournalIntelligence.recognizeChangedPages(snapshot, models: JournalFiles.models())
         merge(recognized)
         if summarize {
+            var engine: JournalAI.Engine?
             if let current = notebook {
-                merge(await JournalIntelligence.summarizeChangedDays(current), days: true)
+                merge(await JournalIntelligence.summarizeChangedDays(current, force: force, onEngine: { engine = $0 }), days: true)
             }
             await publish()
-            toast = count > 0 ? "已辨識 \(count) 頁並整理" : "已整理"
+            JournalOrganizer.shared.noteOrganized(engine: engine)
+            if announce { toast = count > 0 ? "已辨識 \(count) 頁並整理" : "已整理" }
         } else if count > 0, let current = notebook {
             try? JournalFiles.save(current, notePath: path)
         }

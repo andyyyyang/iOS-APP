@@ -197,15 +197,24 @@ enum JournalIntelligence {
         return (notebook, count)
     }
 
-    /// 內容有變的日子請 Apple Intelligence 整理（摘要、重點、待跟進）；不能用時略過，不影響其他整理。
-    static func summarizeChangedDays(_ notebook: JournalNotebook) async -> JournalNotebook {
+    /// 內容有變的日子請 Apple Intelligence 整理（摘要、重點、待跟進；Private Cloud Compute 可以時用它）；
+    /// 不能用時略過，不影響其他整理。`force`：內容沒變的也重新整理。`shouldContinue` 回傳 false 時停下（使用者開始寫字）。
+    @MainActor
+    static func summarizeChangedDays(
+        _ notebook: JournalNotebook,
+        force: Bool = false,
+        onEngine: (JournalAI.Engine) -> Void = { _ in },
+        shouldContinue: () async -> Bool = { true }
+    ) async -> JournalNotebook {
         var notebook = notebook
         for day in notebook.pagesByDay.map(\.date) {
             let text = JournalMarkdown.text(for: day, in: notebook)
             guard !text.isEmpty else { continue }
             let fingerprint = JournalMarkdown.fingerprint(text)
-            guard notebook.days[day]?.textFingerprint != fingerprint else { continue }
-            guard let insights = try? await NoteIntelligence.insights(for: text) else { continue }
+            guard force || notebook.days[day]?.textFingerprint != fingerprint else { continue }
+            guard await shouldContinue() else { break }
+            guard let (insights, engine) = try? await JournalAI.insights(for: text) else { continue }
+            onEngine(engine)
             notebook.days[day] = JournalDay(textFingerprint: fingerprint, summary: insights.summary, keyPoints: insights.keyPoints, actionItems: insights.actionItems)
         }
         return notebook

@@ -8,6 +8,7 @@ struct NotesSettingsView: View {
     @AppStorage(NotesSettings.Key.limitsLineWidth) private var limitsLineWidth = false
     @AppStorage(NotesSettings.Key.autoInkMemo) private var autoInkMemo = true
     @AppStorage(KeyboardDiagnosticsLabel.key) private var showsKeyboardDiagnostics = false
+    @AppStorage(JournalAI.privateCloudKey) private var journalPrivateCloud = true
     @AppStorage(ServerSettings.Key.baseURL) private var baseURL = ""
     @Environment(\.openURL) private var openURL
     @State private var sync = VaultSyncCenter.shared
@@ -45,6 +46,20 @@ struct NotesSettingsView: View {
             }
 
             StorageSettingsSection()
+
+            Section {
+                Toggle("日誌整理使用 Private Cloud Compute", isOn: $journalPrivateCloud)
+                LabeledContent("狀態", value: JournalAI.cloudStatus)
+                if let issue = JournalAI.lastIssue {
+                    Text(issue)
+                        .font(.footnote)
+                        .foregroundStyle(DS.warning)
+                }
+            } header: {
+                Text("日誌整理")
+            } footer: {
+                Text("手寫日誌會自動辨識與整理：停筆後辨識，閒置一分鐘或離開時整理內容有變的日子，打開 App 時整理其他日誌並更新「日誌統整」。Private Cloud Compute 是 Apple 伺服器上的模型（較準確、可以看比較長的內容，資料不會被保存），需要 iOS 27、網路與每天的額度（iCloud+ 較高），以及 App 取得 Apple 核准的授權；不能用時自動改用裝置端模型。")
+            }
 
             Section {
                 Toggle("限制行寬（易讀寬度）", isOn: $limitsLineWidth)

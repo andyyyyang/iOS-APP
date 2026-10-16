@@ -149,6 +149,57 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(JournalLayout.pageIndex(at: CGPoint(x: 99_999, y: 0), pageCount: 2, mode: .single), 1, "超過最後一頁算最後一頁")
     }
 
+    // MARK: 月曆與國定假日
+
+    func testTaiwanHolidaysComeFromTheOfficialCalendar() {
+        XCTAssertEqual(TaiwanHolidays.holiday(on: "2026-10-10"), "國慶日")
+        XCTAssertEqual(TaiwanHolidays.holiday(on: "2026-10-09"), "補假")
+        XCTAssertEqual(TaiwanHolidays.holiday(on: "2027-02-08"), "春節")
+        XCTAssertEqual(TaiwanHolidays.holiday(on: "2025-10-06"), "中秋節")
+        XCTAssertNil(TaiwanHolidays.holiday(on: "2026-10-15"))
+        XCTAssertTrue(TaiwanHolidays.isMakeupWorkday("2025-02-08"), "週六補班")
+        XCTAssertTrue(TaiwanHolidays.hasData(forYear: 2027))
+    }
+
+    func testCalendarGridAndDaysOff() {
+        let cells = JournalCalendar.cells(year: 2026, month: 10)
+        XCTAssertEqual(cells.count % 7, 0)
+        XCTAssertEqual(cells.prefix(4).compactMap { $0 }.count, 0, "2026-10-01 是週四：前面空四格")
+        XCTAssertEqual(cells[4], "2026-10-01")
+        XCTAssertEqual(cells.compactMap { $0 }.count, 31)
+        XCTAssertTrue(JournalCalendar.isDayOff("2026-10-10"))
+        XCTAssertTrue(JournalCalendar.isDayOff("2026-10-09"), "補假的週五")
+        XCTAssertFalse(JournalCalendar.isDayOff("2026-10-12"))
+        XCTAssertFalse(JournalCalendar.isDayOff("2025-02-08"), "補班的週六不是假日")
+        XCTAssertTrue(JournalCalendar.shifted(year: 2026, month: 12, by: 1) == (2027, 1))
+        XCTAssertTrue(JournalCalendar.shifted(year: 2026, month: 1, by: -1) == (2025, 12))
+    }
+
+    // MARK: 統整
+
+    func testOverviewLinksBackToEachDay() {
+        let model = JournalLinkedModel(code: "0851563HS", title: "0851563HS 主卡", path: "05/0851563HS 主卡.md")
+        let days = [
+            JournalOverview.Day(date: "2026-10-15", noteTitle: "手寫日誌", insights: JournalDay(textFingerprint: "a", summary: "和 Amkor 開會", keyPoints: ["確認尺寸"], actionItems: ["寄樣品"]), models: [model]),
+            JournalOverview.Day(date: "2026-10-01", noteTitle: "手寫日誌", insights: JournalDay(textFingerprint: "b", summary: "整理報價", keyPoints: [], actionItems: []), models: [model]),
+            JournalOverview.Day(date: "2026-09-20", noteTitle: "手寫日誌", insights: nil, models: []),
+        ]
+        let text = JournalOverview.markdown(days: days, weekly: nil, monthly: [("2026-10", "十月摘要")], engine: "裝置端", updated: Date())
+        XCTAssertTrue(text.contains("- [ ] 寄樣品（[[手寫日誌#2026-10-15 週四|10/15]]）"))
+        XCTAssertTrue(text.contains("- [[0851563HS 主卡|0851563HS]]：[[手寫日誌#2026-10-15 週四|10/15]]、[[手寫日誌#2026-10-01 週四|10/01]]"))
+        XCTAssertTrue(text.contains("### 2026-10\n十月摘要"))
+        XCTAssertTrue(text.contains("（尚未整理）"))
+        // 最近一週只有 10/15（10/01 超過 7 天）
+        let week = JournalOverview.weekPrompt(days)
+        XCTAssertTrue(week.contains("和 Amkor 開會"))
+        XCTAssertFalse(week.contains("整理報價"))
+        XCTAssertEqual(JournalOverview.monthPrompts(days, limit: 6).map(\.month), ["2026-10"], "九月那天還沒整理，沒有內容")
+        XCTAssertNotEqual(JournalOverview.fingerprint(days), JournalOverview.fingerprint(Array(days.dropFirst())))
+        let replaced = JournalOverview.replacingSection(in: JournalOverview.newNote, with: text)
+        XCTAssertTrue(replaced.hasPrefix("---\ntype: journal-overview"))
+        XCTAssertEqual(replaced.components(separatedBy: JournalOverview.sectionStart).count, 2)
+    }
+
     func testANewDayStartsANewPage() {
         var notebook = JournalNotebook(id: "jn-test", createdAt: Date(), updatedAt: Date(), paper: .lined, pages: [JournalPage(date: "2026-10-14")])
         XCTAssertTrue(notebook.ensurePage(for: "2026-10-15"))

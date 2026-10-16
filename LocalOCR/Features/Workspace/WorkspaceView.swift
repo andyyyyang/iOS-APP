@@ -18,6 +18,7 @@ struct WorkspaceView: View {
     @State private var store = NotesStore.shared
     @State private var sync = VaultSyncCenter.shared
     @AppStorage(KeyboardDiagnosticsLabel.key) private var showsKeyboardDiagnostics = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var workspace = workspace
@@ -131,6 +132,11 @@ struct WorkspaceView: View {
                 Task { if await VaultIndexStore.shared.refresh() { await store.reload() } }
             }
             if sync.isConfigured { await sync.syncNow() }
+            // 背景整理其他日誌與統整（一件一件做，寫字時暫停）
+            JournalOrganizer.shared.sweep()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { JournalOrganizer.shared.sweep() }
         }
     }
 
