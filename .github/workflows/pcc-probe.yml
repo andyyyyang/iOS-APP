@@ -1,0 +1,43 @@
+name: PCC probe
+
+# 實驗：沒有 Private Cloud Compute 授權時，在 iOS 27 模擬器上碰 PrivateCloudComputeLanguageModel 會不會當掉。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/pcc-probe.yml"
+      - "LocalOCRTests/PrivateCloudProbeTests.swift"
+
+jobs:
+  probe:
+    name: Private Cloud Compute without the entitlement
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: Pick an iOS 27 simulator
+        id: simulator
+        run: |
+          UDID=$(xcrun simctl list devices available --json | python3 -c "
+          import json, re, sys
+          best = None
+          for runtime, items in json.load(sys.stdin)['devices'].items():
+              m = re.search(r'iOS-(\d+)-(\d+)', runtime)
+              if not m: continue
+              v = (int(m.group(1)), int(m.group(2)))
+              for d in items:
+                  if d.get('isAvailable') and d['name'].startswith('iPad') and (best is None or v > best[0]):
+                      best = (v, d['udid'])
+          print(best[1] if best else '')")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      - name: Probe
+        env:
+          TEST_RUNNER_PCC_PROBE: "1"
+        run: |
+          status=0
+          xcodebuild test -project LocalOCR.xcodeproj -scheme LocalOCR \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -only-testing:LocalOCRTests/PrivateCloudProbeTests \
+            CODE_SIGNING_ALLOWED=NO > probe.log 2>&1 || status=$?
+          grep -E "error:|\[probe\]|crash|Crash|signal|Fatal|fatal|Test Case|\*\* TEST|Restarting" probe.log | head -80 || true
+          echo "exit status $status"

@@ -49,6 +49,7 @@ struct NotesSettingsView: View {
 
             Section {
                 Toggle("日誌整理使用 Private Cloud Compute", isOn: $journalPrivateCloud)
+                    .disabled(!JournalAI.isEntitled)
                 LabeledContent("狀態", value: JournalAI.cloudStatus)
                 if let issue = JournalAI.lastIssue {
                     Text(issue)

@@ -17,6 +17,10 @@ enum JournalAI {
 
     static let privateCloudKey = "journal.privateCloudCompute"
 
+    /// App 已經有 Apple 核准的 Private Cloud Compute 授權（com.apple.developer.private-cloud-compute）。
+    /// 沒有授權時完全不碰 Private Cloud Compute 的 API（沒有授權就建立模型可能讓 App 當掉）；核准並加入授權後改成 true。
+    static let isEntitled = false
+
     /// 設定中的選擇（預設開）。
     static var prefersPrivateCloud: Bool {
         UserDefaults.standard.object(forKey: privateCloudKey) as? Bool ?? true
@@ -50,6 +54,7 @@ enum JournalAI {
 
     /// 設定頁顯示的狀態。
     static var cloudStatus: String {
+        guard isEntitled else { return "等待 Apple 核准授權，目前用裝置端模型" }
         #if canImport(FoundationModels) && compiler(>=6.4)
         guard #available(iOS 27.0, *) else { return "需要 iOS 27 以上" }
         return PrivateCloud.status
@@ -69,7 +74,7 @@ enum JournalAI {
     }
 
     private static func cloudInsights(for text: String) async -> NoteInsights? {
-        guard prefersPrivateCloud, !isPaused else { return nil }
+        guard isEntitled, prefersPrivateCloud, !isPaused else { return nil }
         #if canImport(FoundationModels) && compiler(>=6.4)
         guard #available(iOS 27.0, *) else { return nil }
         do {
@@ -86,7 +91,7 @@ enum JournalAI {
     }
 
     private static func cloudText(prompt: String, instructions: String) async -> String? {
-        guard prefersPrivateCloud, !isPaused else { return nil }
+        guard isEntitled, prefersPrivateCloud, !isPaused else { return nil }
         #if canImport(FoundationModels) && compiler(>=6.4)
         guard #available(iOS 27.0, *) else { return nil }
         do {
