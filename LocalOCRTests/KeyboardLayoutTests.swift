@@ -93,8 +93,10 @@ final class KeyboardLayoutTests: XCTestCase {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.showsPalette = true
         let window = try host(workspace)
-        // 置中面板的搜尋欄出現就開始輸入（iPad 頂部列也有一個搜尋欄）
-        let field = try await waitFor { Self.find(SearchTextField.self, in: window) { $0.isFirstResponder } }
+        // 置中面板的搜尋欄（iPad 頂部列也有一個搜尋欄，在畫面最上面）
+        let field = try await waitFor {
+            Self.find(SearchTextField.self, in: window) { $0.isFirstResponder || $0.convert($0.bounds, to: nil).minY > 60 }
+        }
         try await Task.sleep(for: .milliseconds(800))
         let fieldFrame = field.convert(field.bounds, to: window)
         let listArea = CGRect(x: 0, y: fieldFrame.maxY + 48, width: window.bounds.width, height: 260)
@@ -126,8 +128,11 @@ final class KeyboardLayoutTests: XCTestCase {
         let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
         workspace.setRightOpen(true)
         let window = try host(workspace)
+        let started = Date()
+        func mark(_ step: String) { print("[probe] top bar t+\(String(format: "%.1f", Date().timeIntervalSince(started)))s \(step)") }
         let field = try await waitFor { Self.find(SearchTextField.self, in: window) }
         try await Task.sleep(for: .milliseconds(800))
+        mark("shown")
         XCTAssertFalse(workspace.showsPalette, "還沒輸入就打開了列表")
         let fieldFrame = field.convert(field.bounds, to: window)
         print("[probe] top bar search field \(fieldFrame)")
@@ -140,21 +145,27 @@ final class KeyboardLayoutTests: XCTestCase {
         // 隨手寫：還沒點欄位就寫進字，也要展開列表、字不能被清掉
         field.text = "zzqx"
         field.sendActions(for: .editingChanged)
+        mark("wrote zzqx")
         try await Task.sleep(for: .milliseconds(900))
+        mark("after wait")
         XCTAssertTrue(workspace.showsPalette, "輸入後沒有展開結果列表")
         XCTAssertEqual(PaletteModel.shared.presentation, .attached, "列表要接在頂部列的搜尋欄下面")
         XCTAssertEqual(field.text ?? "", "zzqx", "寫進的字被清掉了")
         XCTAssertEqual(PaletteModel.shared.query, "zzqx")
         XCTAssertTrue(field.isFirstResponder || field.becomeFirstResponder(), "搜尋欄無法輸入")
+        mark("focused")
         let typed = Self.render(window)
+        mark("rendered typed")
         let opened = Self.difference(closed, typed, in: belowBar, scale: window.screen.scale)
         print("[probe] top bar list area changed after typing: \(String(format: "%.1f", opened * 100))%")
 
         // 再改字：列表跟著更新
         field.text = "通訊"
         field.sendActions(for: .editingChanged)
+        mark("retyped")
         try await Task.sleep(for: .milliseconds(800))
         let retyped = Self.render(window)
+        mark("rendered retyped")
         let updated = Self.difference(typed, retyped, in: listArea, scale: window.screen.scale)
         print("[probe] top bar list changed after retyping: \(String(format: "%.1f", updated * 100))%")
         for (image, suffix) in [(closed, "closed"), (typed, "typed"), (retyped, "retyped")] {
@@ -169,17 +180,23 @@ final class KeyboardLayoutTests: XCTestCase {
         let center = CGPoint(x: fieldFrame.midX, y: fieldFrame.midY)
         let hit = window.hitTest(center, with: nil)
         XCTAssertTrue(hit === field || hit?.isDescendant(of: field) == true, "頂部列的搜尋欄被列表蓋住（點到的是 \(String(describing: hit.map { type(of: $0) }))）")
+        mark("hit tested")
 
         // 空一格：前面的字變成關鍵字
         field.insertText(" ")
+        mark("inserted space")
         field.sendActions(for: .editingChanged)
+        mark("sent change")
         try await Task.sleep(for: .milliseconds(300))
+        mark("after space wait")
         XCTAssertEqual(PaletteModel.shared.keywords, ["通訊"])
         XCTAssertEqual(field.text ?? "", "")
 
         // 關閉：欄位清空、結束輸入
         workspace.showsPalette = false
+        mark("closed")
         try await Task.sleep(for: .milliseconds(600))
+        mark("after close wait")
         XCTAssertFalse(field.isFirstResponder, "關閉列表後搜尋欄還在輸入")
         XCTAssertEqual(PaletteModel.shared.keywords, [])
         XCTAssertEqual(PaletteModel.shared.presentation, .centered)
