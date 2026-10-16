@@ -733,7 +733,7 @@ struct JtTimelineHeader: View {
                     .fixedSize()
                     .offset(x: max(scroll.offsetX, 0) + 6, y: 5)
             }
-            ForEach(ticks) { tick in
+            ForEach(ticks.filter { !$0.isMonth || $0.x >= scroll.offsetX + 2 }) { tick in
                 Text(tick.label)
                     .font(.system(size: tick.isMonth ? 11 : 10, weight: tick.isMonth ? .bold : .regular).monospacedDigit())
                     .foregroundStyle(tick.isMonth ? DS.text : (tick.isWeekend ? DS.textTertiary : DS.textSecondary))
@@ -758,7 +758,9 @@ struct JtTimelineHeader: View {
     static func stickyMonth(timeline: JtTimeline, offset: CGFloat) -> String? {
         let index = min(max(Int(offset / timeline.dayWidth), 0), max(timeline.days - 1, 0))
         let parts = JtDayNumber.civil(timeline.firstDay + index)
-        guard parts.day != 1 else { return nil }
+        // 這個月 1 日的標籤還完整看得到時不必另外標
+        let monthStartX = CGFloat(index - (parts.day - 1)) * timeline.dayWidth + 2
+        guard monthStartX < max(offset, 0) + 2 else { return nil }
         let nextYear = parts.month == 12 ? parts.year + 1 : parts.year
         let nextMonth = parts.month == 12 ? 1 : parts.month + 1
         let nextX = timeline.x(day: JtDayNumber.fromCivil(year: nextYear, month: nextMonth, day: 1))
@@ -810,6 +812,8 @@ struct JtGanttLabel: View {
     let isPending: Bool
     let onOpen: () -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     var body: some View {
         HStack(spacing: 8) {
             logo
@@ -846,18 +850,21 @@ struct JtGanttLabel: View {
                     .foregroundStyle(DS.warning)
                     .accessibilityLabel(attentionText)
             }
-            Button(action: onOpen) {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(DS.textTertiary)
-                    .frame(width: 26, height: 36)
-                    .contentShape(Rectangle())
+            // iPhone 的左欄窄：點整列就打開案件，不放「…」
+            if sizeClass != .compact {
+                Button(action: onOpen) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DS.textTertiary)
+                        .frame(width: 26, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("案件詳細")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("案件詳細")
         }
-        .padding(.leading, indent ? 26 : 10)
-        .padding(.trailing, 2)
+        .padding(.leading, indent ? (sizeClass == .compact ? 16 : 26) : (sizeClass == .compact ? 8 : 10))
+        .padding(.trailing, sizeClass == .compact ? 6 : 2)
     }
 
     private var subtitle: String {
