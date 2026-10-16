@@ -1,0 +1,29 @@
+name: SDK probe
+
+# 一次性：列出 Xcode 27 SDK 中 Foundation Models 的 Private Cloud Compute 介面（寫程式前確認名稱），之後移除
+on:
+  push:
+    paths:
+      - ".github/workflows/sdk-probe.yml"
+
+jobs:
+  probe:
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - name: Foundation Models interface
+        run: |
+          xcodebuild -version
+          swift --version
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          dir="$sdk/System/Library/Frameworks/FoundationModels.framework"
+          f=$(find "$dir" -name "*arm64*.swiftinterface" | head -1)
+          echo "interface: $f"
+          grep -n "PrivateCloudCompute" "$f" | head -60
+          echo "---- protocol / session inits"
+          grep -n "public protocol LanguageModel\b\|public protocol LanguageModel \|public init(model\|public convenience init(model" "$f" | head -40
+          echo "---- availability / quota / context"
+          grep -n "isAvailable\|quotaUsage\|isLimitReached\|contextSize\|struct ContextOptions\|reasoningLevel" "$f" | head -60
+          echo "---- PCC declaration block"
+          n=$(grep -n "struct PrivateCloudComputeLanguageModel\|class PrivateCloudComputeLanguageModel" "$f" | head -1 | cut -d: -f1)
+          if [ -n "$n" ]; then sed -n "$((n-5)),$((n+70))p" "$f"; fi
