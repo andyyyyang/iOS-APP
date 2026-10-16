@@ -101,10 +101,26 @@ actor VaultSyncEngine {
     /// 超過這個大小的檔案一次下載一個，避免同時佔用太多記憶體。
     static let parallelDownloadLimit = 8 * 1024 * 1024
 
+    /// 這台裝置同步過的一個版本（上傳或下載後的 ETag 與內容雜湊）。
+    private struct Version: Codable, Equatable {
+        let etag: String
+        let hash: String
+    }
+
+    /// 每個檔案最多記下幾個同步過的版本。
+    static let historyLimit = 12
+
     let vault: LocalVault
     private let stateURL: URL
     private let indexURL: URL
+    private let historyURL: URL
     private var state: [String: FileState]
+    /// 每個檔案最近在這台裝置上同步過的版本。遠端是其中之一時，是這台裝置自己傳上去（或已經有過）的舊版本，不是別人改的：
+    /// 邊寫邊上傳的日誌與手寫筆記，完整同步列出遠端時可能還是前一版（物件儲存的清單慢了一步），不能因此當成衝突另存一份。
+    private var history: [String: [Version]]
+    /// 完整同步、編輯當下上傳與更新開著的檔案一次只做一件：上傳到一半時列出遠端，會把自己剛上傳的版本看成別人的修改。
+    private var isBusy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
     /// 遠端的檔案（上次同步時的清單，之後上傳、刪除時更新；包含尚未下載的檔案），存在檔案中，啟動時就能顯示。
     private(set) var remoteFiles: [String: VaultEntry] = [:]
     private let now: @Sendable () -> Date
@@ -113,8 +129,10 @@ actor VaultSyncEngine {
         self.vault = vault
         self.stateURL = stateURL
         indexURL = stateURL.deletingLastPathComponent().appending(path: stateURL.deletingPathExtension().lastPathComponent + "-remote.json")
+        historyURL = stateURL.deletingLastPathComponent().appending(path: stateURL.deletingPathExtension().lastPathComponent + "-history.json")
         self.now = now
         state = (try? JSONDecoder().decode([String: FileState].self, from: Data(contentsOf: stateURL))) ?? [:]
+        history = (try? JSONDecoder().decode([String: [Version]].self, from: Data(contentsOf: historyURL))) ?? [:]
         let index = (try? JSONDecoder().decode([IndexEntry].self, from: Data(contentsOf: indexURL))) ?? []
         remoteFiles = Dictionary(
             index.map { (LocalVault.normalize($0.path), VaultEntry(path: $0.path, size: $0.size, mtime: Date(timeIntervalSince1970: $0.mtime), etag: $0.etag)) },
@@ -164,14 +182,15 @@ actor VaultSyncEngine {
         }
     }
 
-    /// 衝突時較舊的版本另存的路徑：「筆記（iPad 衝突 2026-10-13 1405）.md」。
-    static func conflictPath(for path: String, date: Date, label: String = "iPad 衝突") -> String {
+    /// 衝突時較舊的版本另存的路徑：「筆記（iPad 衝突 2026-10-13 1405）.md」；同一分鐘內第二份起加上編號「1405-2」。
+    static func conflictPath(for path: String, date: Date, label: String = "iPad 衝突", attempt: Int = 1) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HHmm"
         let ext = (path as NSString).pathExtension
         let base = ext.isEmpty ? path : String(path.dropLast(ext.count + 1))
-        let suffix = "（\(label) \(formatter.string(from: date))）"
+        let number = attempt > 1 ? "-\(attempt)" : ""
+        let suffix = "（\(label) \(formatter.string(from: date))\(number)）"
         return ext.isEmpty ? base + suffix : "\(base)\(suffix).\(ext)"
     }
 
@@ -185,6 +204,17 @@ actor VaultSyncEngine {
         allowMassDeletion: Bool = false,
         policy: VaultDownloadPolicy = .everything,
         progress: ProgressHandler? = nil
+    ) async throws -> Report {
+        await acquire()
+        defer { release() }
+        return try await performSync(remote: remote, allowMassDeletion: allowMassDeletion, policy: policy, progress: progress)
+    }
+
+    private func performSync(
+        remote: any VaultRemote,
+        allowMassDeletion: Bool,
+        policy: VaultDownloadPolicy,
+        progress: ProgressHandler?
     ) async throws -> Report {
         let listing = try await remote.list(prefix: "", recursive: true)
         let remoteByPath = Dictionary(
@@ -219,13 +249,20 @@ actor VaultSyncEngine {
             case let (remoteEntry?, _?, nil):
                 adoptions.append(remoteEntry)
             case let (remoteEntry?, local?, base?):
-                let remoteChanged = Self.normalizeETag(remoteEntry.etag) != base.etag
+                let remoteETag = Self.normalizeETag(remoteEntry.etag)
+                let remoteChanged = remoteETag != base.etag
                 let localChanged = hasLocalChanges(local, since: base)
                 switch (remoteChanged, localChanged) {
                 case (false, false): break
                 case (true, false): downloads.append(remoteEntry)
                 case (false, true): uploads.append((path, base))
-                case (true, true): conflicts.append((path, remoteEntry))
+                case (true, true):
+                    // 遠端列出的是這台裝置之前的版本（清單慢了一步）：照常上傳，不是衝突
+                    if isKnown(path, etag: remoteETag) {
+                        uploads.append((path, base))
+                    } else {
+                        conflicts.append((path, remoteEntry))
+                    }
                 }
             case (nil, let local?, let base?):
                 if !hasLocalChanges(local, since: base) {
@@ -300,6 +337,7 @@ actor VaultSyncEngine {
         // 2. 執行
         for path in droppedStates {
             state[path] = nil
+            history[path] = nil
         }
         for (from, entry) in moves {
             let to = LocalVault.normalize(entry.path)
@@ -311,6 +349,7 @@ actor VaultSyncEngine {
                     state[to] = moved
                 }
                 state[from] = nil
+                history[to] = history.removeValue(forKey: from)
                 report.moves.append(Report.Move(from: from, to: to))
             } catch {
                 // 搬不過去（例如目的地已有同名檔案）：舊位置照常刪除，新位置重新下載
@@ -324,6 +363,7 @@ actor VaultSyncEngine {
             try? vault.delete(path)
             vault.removeEmptyParents(of: path)
             state[path] = nil
+            history[path] = nil
             report.deleted += 1
         }
         report.moves += followed
@@ -331,6 +371,7 @@ actor VaultSyncEngine {
             do {
                 try await remote.delete(path, ifMatch: etag)
                 state[path] = nil
+                history[path] = nil
                 remoteFiles[path] = nil
                 report.deleted += 1
             } catch VaultError.notFound {
@@ -351,8 +392,14 @@ actor VaultSyncEngine {
         for (path, remoteEntry) in conflicts {
             let remoteFile = try? await remote.read(remoteEntry.path)
             let localData = try? vault.read(path)
-            if let remoteFile, let localData, LocalVault.hash(remoteFile.data) == LocalVault.hash(localData) {
-                record(path, etag: remoteFile.etag ?? remoteEntry.etag, hash: LocalVault.hash(localData), stamp: stamp(path))
+            let remoteHash = remoteFile.map { LocalVault.hash($0.data) }
+            if let remoteHash, let localData, remoteHash == LocalVault.hash(localData) {
+                record(path, etag: remoteFile?.etag ?? remoteEntry.etag, hash: remoteHash, stamp: stamp(path))
+                continue
+            }
+            // 遠端的內容是這台裝置之前的版本（例如同樣的內容又被上傳一次而換了 ETag）：本機是接著改的，直接取代
+            if let remoteHash, isKnown(path, hash: remoteHash) {
+                uploads.append((path, FileState(etag: Self.normalizeETag(remoteFile?.etag ?? remoteEntry.etag), hash: "")))
                 continue
             }
             let localTime = localByPath[path]?.mtime ?? .distantPast
@@ -360,7 +407,7 @@ actor VaultSyncEngine {
             if localTime > remoteEntry.mtime {
                 // 這台裝置上的版本比較新：上傳取代遠端，遠端較舊的版本另存
                 if !regenerated, let remoteFile {
-                    let copy = Self.conflictPath(for: path, date: now(), label: "較舊版本")
+                    let copy = freshConflictPath(for: path, label: "較舊版本")
                     try vault.write(remoteFile.data, to: copy)
                     uploads.append((copy, nil))
                     report.conflicts.append(copy)
@@ -370,7 +417,7 @@ actor VaultSyncEngine {
                 downloads.append(remoteEntry)
             } else {
                 // 遠端（其他裝置、Obsidian）的版本比較新：本機較舊的版本另存，再下載遠端版本
-                let copy = Self.conflictPath(for: path, date: now())
+                let copy = freshConflictPath(for: path)
                 try vault.move(path, to: copy)
                 uploads.append((copy, nil))
                 downloads.append(remoteEntry)
@@ -385,8 +432,11 @@ actor VaultSyncEngine {
             let before = stamp(path)
             if remoteHash == localHash(path) {
                 record(path, etag: remoteEntry.etag, hash: remoteHash, stamp: before)
+            } else if isKnown(path, hash: remoteHash) {
+                // 遠端是這台裝置之前的版本（上傳被拒絕後清掉了紀錄）：本機是接著改的，直接取代
+                uploads.append((path, FileState(etag: Self.normalizeETag(file.etag ?? remoteEntry.etag), hash: "")))
             } else {
-                let copy = Self.conflictPath(for: path, date: now())
+                let copy = freshConflictPath(for: path)
                 try vault.move(path, to: copy)
                 try vault.write(file.data, to: path)
                 record(path, etag: file.etag ?? remoteEntry.etag, hash: remoteHash)
@@ -440,6 +490,12 @@ actor VaultSyncEngine {
     /// 編輯中的檔案立即上傳（不必列出整個遠端）。遠端同時也改過時上傳會被拒絕，交給下次完整同步（兩份都保留）。
     @discardableResult
     func push(_ paths: [String], remote: any VaultRemote) async throws -> Int {
+        await acquire()
+        defer { release() }
+        return try await performPush(paths, remote: remote)
+    }
+
+    private func performPush(_ paths: [String], remote: any VaultRemote) async throws -> Int {
         var items: [(path: String, base: FileState?)] = []
         for path in Set(paths.map(LocalVault.normalize)) {
             guard let local = localFile(path) else { continue }
@@ -466,6 +522,12 @@ actor VaultSyncEngine {
     /// 打開中的檔案：遠端有新版本、這台裝置上沒有未上傳的修改時下載新版本（只列出它所在的資料夾）。
     /// 回傳是否更新了本機檔案。
     func refresh(_ path: String, remote: any VaultRemote) async throws -> Bool {
+        await acquire()
+        defer { release() }
+        return try await performRefresh(path, remote: remote)
+    }
+
+    private func performRefresh(_ path: String, remote: any VaultRemote) async throws -> Bool {
         let path = LocalVault.normalize(path)
         let folder = (path as NSString).deletingLastPathComponent
         let listing = try await remote.list(prefix: folder.isEmpty ? "" : folder + "/", recursive: false)
@@ -511,6 +573,7 @@ actor VaultSyncEngine {
     /// 清掉同步紀錄與遠端清單（切換到另一個同步空間時）。
     func resetAll() {
         state = [:]
+        history = [:]
         remoteFiles = [:]
         saveState()
         saveIndex()
@@ -598,6 +661,7 @@ actor VaultSyncEngine {
         let current = stamp ?? self.stamp(path)
         let openedAt = opened ? now().timeIntervalSince1970 : state[path]?.opened
         state[path] = FileState(etag: Self.normalizeETag(etag), hash: hash, mtime: current.mtime, size: current.size, opened: openedAt)
+        remember(path, etag: etag, hash: hash)
     }
 
     private func download(_ entries: [VaultEntry], from remote: any VaultRemote, progress: ProgressHandler?) async throws -> Int {
@@ -692,6 +756,56 @@ actor VaultSyncEngine {
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: stateURL, options: .atomic)
+        if let historyData = try? JSONEncoder().encode(history) {
+            try? historyData.write(to: historyURL, options: .atomic)
+        }
+    }
+
+    /// 記下同步過的版本（最新的在後面，最多 `historyLimit` 個）。
+    private func remember(_ path: String, etag: String, hash: String) {
+        guard !hash.isEmpty else { return }
+        let version = Version(etag: Self.normalizeETag(etag), hash: hash)
+        var versions = history[path] ?? []
+        versions.removeAll { $0 == version }
+        versions.append(version)
+        if versions.count > Self.historyLimit { versions.removeFirst(versions.count - Self.historyLimit) }
+        history[path] = versions
+    }
+
+    private func isKnown(_ path: String, etag: String) -> Bool {
+        history[path]?.contains { $0.etag == etag } ?? false
+    }
+
+    private func isKnown(_ path: String, hash: String) -> Bool {
+        history[path]?.contains { $0.hash == hash } ?? false
+    }
+
+    /// 衝突另存的路徑，不會與已有的檔案同名（同一分鐘內第二次衝突時加上編號，否則搬移會失敗而整次同步中斷）。
+    private func freshConflictPath(for path: String, label: String = "iPad 衝突") -> String {
+        let date = now()
+        var attempt = 1
+        var candidate = Self.conflictPath(for: path, date: date, label: label)
+        while vault.exists(candidate) || remoteFiles[candidate] != nil {
+            attempt += 1
+            candidate = Self.conflictPath(for: path, date: date, label: label, attempt: attempt)
+        }
+        return candidate
+    }
+
+    private func acquire() async {
+        guard isBusy else {
+            isBusy = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            isBusy = false
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 
     private func saveIndex() {

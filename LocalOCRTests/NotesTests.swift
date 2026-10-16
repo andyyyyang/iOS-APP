@@ -683,7 +683,24 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
 
     var paths: [String] { lock.withLock { files.keys.sorted() } }
 
+    /// 物件儲存的清單慢了一步：之後列出的都是現在的清單，直到 `unfreezeListing()`（讀寫照常是最新的）。
+    private var frozen: VaultListing?
+
+    func freezeListing() {
+        let listing = currentListing()
+        lock.withLock { frozen = listing }
+    }
+
+    func unfreezeListing() {
+        lock.withLock { frozen = nil }
+    }
+
     func list(prefix: String, recursive: Bool) async throws -> VaultListing {
+        if let frozen = lock.withLock({ frozen }) { return frozen }
+        return currentListing()
+    }
+
+    private func currentListing() -> VaultListing {
         lock.withLock {
             VaultListing(
                 files: files.map { VaultEntry(path: $0.key, size: reportedSizes[$0.key] ?? $0.value.data.count, mtime: mtimes[$0.key] ?? Date(), etag: $0.value.etag) },
@@ -993,6 +1010,89 @@ final class VaultSyncEngineTests: XCTestCase {
         XCTAssertEqual(remote.text(copy), "Obsidian 舊版本", "較舊的版本另存，不會遺失")
         let again = try await engine.sync(remote: remote)
         XCTAssertTrue(again.isEmpty)
+    }
+
+    /// 邊寫邊上傳的日誌：完整同步列出遠端時還是自己剛上傳的前一版（清單慢了一步），不是衝突，也不另存一份。
+    func testStaleListingOfOwnUploadsIsNotAConflict() async throws {
+        let path = "附件/jn-1.localocr-journal"
+        remote.put(path, "v1")
+        _ = try await engine.sync(remote: remote)
+        try vault.writeText("v2", to: path)
+        _ = try await engine.push([path], remote: remote)
+        remote.freezeListing()
+        try vault.writeText("v3", to: path)
+        _ = try await engine.push([path], remote: remote)
+        try vault.writeText("v4", to: path)
+        let report = try await engine.sync(remote: remote)
+        remote.unfreezeListing()
+        XCTAssertTrue(report.conflicts.isEmpty, "自己上傳的版本不是衝突")
+        XCTAssertEqual(remote.text(path), "v4")
+        XCTAssertEqual(remote.paths, [path], "沒有另存衝突版本")
+        let again = try await engine.sync(remote: remote)
+        XCTAssertTrue(again.isEmpty)
+    }
+
+    /// 遠端的內容是這台裝置之前上傳的（同樣的內容又被上傳一次而換了 ETag）：本機接著改的版本直接取代，
+    /// 編輯當下的上傳被拒絕、紀錄清掉之後也一樣。
+    func testRemoteHoldingAnEarlierOwnVersionIsNotAConflict() async throws {
+        let path = "附件/jn-2.localocr-journal"
+        remote.put(path, "v1")
+        _ = try await engine.sync(remote: remote)
+        try vault.writeText("v2", to: path)
+        _ = try await engine.push([path], remote: remote)
+        remote.put(path, "v2")
+        try vault.writeText("v3", to: path)
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.conflicts.isEmpty)
+        XCTAssertEqual(remote.text(path), "v3")
+
+        remote.put(path, "v3")
+        try vault.writeText("v4", to: path)
+        let rejected = try await engine.push([path], remote: remote)
+        XCTAssertEqual(rejected, 0, "ETag 不同：編輯當下的上傳被拒絕")
+        let after = try await engine.sync(remote: remote)
+        XCTAssertTrue(after.conflicts.isEmpty, "遠端是自己之前的版本，不另存")
+        XCTAssertEqual(remote.text(path), "v4")
+        XCTAssertEqual(remote.paths, [path])
+    }
+
+    /// 同一分鐘內兩次衝突：第二份另存的檔名加上編號，同步不會因為檔名重複而中斷。
+    func testConflictCopiesInTheSameMinuteGetDistinctNames() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        try vault.writeText("iPad 1", to: "a.md")
+        remote.put("a.md", "Obsidian 1")
+        let first = try await engine.sync(remote: remote)
+        try vault.writeText("iPad 2", to: "a.md")
+        remote.put("a.md", "Obsidian 2")
+        let second = try await engine.sync(remote: remote)
+        XCTAssertEqual(first.conflicts, ["a（iPad 衝突 \(conflictStamp)）.md"])
+        XCTAssertEqual(second.conflicts, ["a（iPad 衝突 \(conflictStamp)-2）.md"])
+        XCTAssertEqual(vault.readText("a（iPad 衝突 \(conflictStamp)-2）.md"), "iPad 2")
+        XCTAssertEqual(vault.readText("a.md"), "Obsidian 2")
+    }
+
+    /// 完整同步與編輯當下的上傳同時進行時一次只做一件，不會把自己剛上傳的版本當成別人的修改。
+    func testConcurrentPushesAndSyncsDoNotCreateConflicts() async throws {
+        let path = "附件/jn-3.localocr-journal"
+        remote.put(path, "v0")
+        _ = try await engine.sync(remote: remote)
+        let engine = self.engine!
+        let remote = self.remote!
+        let vault = self.vault!
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for round in 1...20 {
+                try vault.writeText("v\(round)", to: path)
+                group.addTask { _ = try await engine.push([path], remote: remote) }
+                group.addTask { _ = try await engine.sync(remote: remote) }
+                _ = try await group.next()
+            }
+            try await group.waitForAll()
+        }
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.conflicts.isEmpty)
+        XCTAssertEqual(remote.paths, [path], "沒有另存衝突版本")
+        XCTAssertEqual(remote.text(path), "v20")
     }
 
     func testIdenticalEditsOnBothSidesAreNotAConflict() async throws {
