@@ -1178,13 +1178,13 @@ final class VaultSyncCenter {
     /// 隱藏的路徑（`.jt/` 等）不在本機 vault：不同步，`.jt/` 交給 JT 業務追蹤（電腦的 JT 每分鐘寫一次心跳）。
     private func applyRemoteChanges(_ result: VaultChanges) async {
         let allPaths = Set(result.changes.compactMap(\.path).map(LocalVault.normalize))
-        let hiddenPaths = allPaths.filter(NotesStore.isHidden)
+        let hiddenPaths = allPaths.filter(LocalVault.isHidden)
         if hiddenPaths.contains(where: { $0.hasPrefix(".jt/") }) {
             Task { await JtSyncStore.shared.handleRemoteChanges(Array(hiddenPaths)) }
         }
         let changes = result.changes.filter { change in
             guard let path = change.path else { return true }
-            return !NotesStore.isHidden(LocalVault.normalize(path))
+            return !LocalVault.isHidden(LocalVault.normalize(path))
         }
         guard result.reset || !changes.isEmpty else { return }
         // 關聯圖、標籤、待辦用的索引也跟著更新（不必下載那些筆記）
