@@ -1,0 +1,56 @@
+name: Crash logs
+
+# 讀 TestFlight 回報的當機（測試者在當機後按「分享」送出的），印出原因與堆疊；App 的部分沒有符號時用同一個 commit 重新建置來解析。
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "用來解析符號的 commit（當機的那個版本）"
+        required: false
+  push:
+    paths:
+      - ".github/workflows/crash-logs.yml"
+      - ".github/scripts/crash_logs.py"
+
+concurrency:
+  group: crash-logs
+  cancel-in-progress: true
+
+jobs:
+  crashes:
+    name: TestFlight crash reports
+    runs-on: xcode-27
+    timeout-minutes: 40
+    env:
+      ASC_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APPSTORE_CONNECT_PRIVATE_KEY }}
+      SYMBOL_COMMIT: ${{ github.event.inputs.commit || '5286c25c3209386f04211289b8b1918817cf916e' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch crash reports
+        run: |
+          pip install --quiet "pyjwt[crypto]" requests
+          python .github/scripts/crash_logs.py
+          echo "offsets: $(cat offsets.txt)"
+      - name: Build the crashed version for symbols
+        run: |
+          if [ ! -s offsets.txt ]; then echo "不用解析"; exit 0; fi
+          git worktree add "$RUNNER_TEMP/symbols" "$SYMBOL_COMMIT"
+          cd "$RUNNER_TEMP/symbols"
+          xcodebuild build -project LocalOCR.xcodeproj -scheme LocalOCR -configuration Release \
+            -destination "generic/platform=iOS" -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO DEBUG_INFORMATION_FORMAT=dwarf-with-dsym > build.log 2>&1 || { grep -E "error:" build.log | head -20; exit 1; }
+          dsym=$(find "$RUNNER_TEMP/dd/Build/Products/Release-iphoneos" -name "LocalOCR.app.dSYM" | head -1)
+          dwarfdump --uuid "$dsym"
+          addresses=""
+          for offset in $(cat "$GITHUB_WORKSPACE/offsets.txt"); do
+            addresses="$addresses $(printf '0x%x' $(( 0x100000000 + offset )))"
+          done
+          echo "== 當機執行緒中 App 的部分（由上而下）"
+          atos -arch arm64 -o "$dsym/Contents/Resources/DWARF/LocalOCR" -l 0x100000000 $addresses
