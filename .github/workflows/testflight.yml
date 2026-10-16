@@ -41,7 +41,8 @@ jobs:
     name: Archive & upload to TestFlight
     needs: changes
     if: needs.changes.outputs.upload == 'true'
-    runs-on: macos-26
+    # iOS 27 SDK：Private Cloud Compute 等新功能只在用 Xcode 27 編譯時才有（CI 也測 Xcode 27）
+    runs-on: xcode-27
     timeout-minutes: 60
     outputs:
       build_number: ${{ steps.prepare.outputs.build_number }}
