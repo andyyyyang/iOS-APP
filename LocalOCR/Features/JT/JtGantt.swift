@@ -452,8 +452,13 @@ struct JtGanttView: View {
                 .padding(.horizontal, 8)
                 .frame(width: labelWidth, height: JtTimelineHeader.height)
             Rectangle().fill(DS.hairline).frame(width: 1, height: JtTimelineHeader.height)
-            JtTimelineHeader(timeline: timeline, scale: scale, scroll: scroll)
-                .frame(maxWidth: .infinity, maxHeight: JtTimelineHeader.height, alignment: .leading)
+            // 用 overlay 放日期列：它跟時間軸一樣寬，不能參與排版（否則整列被撐寬、左欄的搜尋被擠出畫面）
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: JtTimelineHeader.height)
+                .overlay(alignment: .topLeading) {
+                    JtTimelineHeader(timeline: timeline, scale: scale, scroll: scroll)
+                }
                 .clipped()
         }
     }
@@ -537,7 +542,6 @@ struct JtGanttView: View {
                 indent: indent,
                 sameCustomer: sameCustomer,
                 isPending: store.isPending(caseId: item.id),
-                onPickEndUser: { endUserCase = JtCaseReference(id: item.id) },
                 onOpen: { onOpen(item.id) }
             )
             .contentShape(Rectangle())
@@ -804,7 +808,6 @@ struct JtGanttLabel: View {
     let indent: Bool
     let sameCustomer: Bool
     let isPending: Bool
-    let onPickEndUser: () -> Void
     let onOpen: () -> Void
 
     var body: some View {
@@ -870,16 +873,10 @@ struct JtGanttLabel: View {
     private var logo: some View {
         if sameCustomer {
             if item.endUserName.isEmpty {
-                Button(action: onPickEndUser) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(DS.textTertiary)
-                        .frame(width: 24, height: 24)
-                        .overlay(Circle().strokeBorder(DS.textTertiary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                        .opacity(0.6)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("指定終端客戶")
+                // 同桌面版：沒有終端客戶時留白（桌面滑過才出現虛線框）；長按選單可以指定
+                Color.clear
+                    .frame(width: 24, height: 24)
+                    .accessibilityHidden(true)
             } else {
                 JtLogo(domain: item.endUserDomain, name: item.endUserName, circle: true, size: 24)
             }

@@ -20,10 +20,11 @@ final class JtScreenshotProbeTests: XCTestCase {
     func testGanttScreenshots() async throws {
         guard ProcessInfo.processInfo.environment["JT_SHOT"] == "1" else { throw XCTSkip("只在 Probe 工作流程執行") }
         let store = try makeStore()
-        let shots: [(name: String, mode: String, scale: String, style: UIUserInterfaceStyle)] = [
-            ("customer-dark", "customer", "week", .dark),
-            ("etd-light", "etd-asc", "week", .light),
-            ("status-day-dark", "status", "day", .dark),
+        let shots: [(name: String, mode: String, scale: String, style: UIUserInterfaceStyle, phone: Bool)] = [
+            ("customer-dark", "customer", "week", .dark, false),
+            ("etd-light", "etd-asc", "week", .light, false),
+            ("status-day-dark", "status", "day", .dark, false),
+            ("phone-month-dark", "etd-asc", "month", .dark, true),
         ]
         for shot in shots {
             UserDefaults.standard.set(shot.mode, forKey: "jt.groupMode")
@@ -31,8 +32,14 @@ final class JtScreenshotProbeTests: XCTestCase {
             UserDefaults.standard.set("all", forKey: "jt.filter")
             UserDefaults.standard.set("", forKey: "jt.collapsedGroups")
             UserDefaults.standard.set("", forKey: "jt.owners")
-            let root = JtGanttView(store: store, query: .constant(""), onOpen: { _ in })
+            let gantt = JtGanttView(store: store, query: .constant(""), onOpen: { _ in })
                 .background(DS.pane)
+                .environment(\.horizontalSizeClass, shot.phone ? .compact : .regular)
+            // iPhone：同一個模擬器上把寬度縮成 390 點
+            let root = HStack(spacing: 0) {
+                gantt.frame(width: shot.phone ? 390 : nil)
+                if shot.phone { Spacer(minLength: 0) }
+            }
             let window = try host(root, style: shot.style)
             try await Task.sleep(for: .seconds(4))
             printShot(shot.name, window)
