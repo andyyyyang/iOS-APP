@@ -20,8 +20,8 @@ struct JournalBadge: Equatable {
     var tagIndex: Int
 }
 
-/// 日誌筆記本的畫布：固定大小的頁面一頁接一頁往下（頁與頁之間有空隙），每頁有頁首日期與頁碼；
-/// Apple Pencil 書寫、手指捲動，雙指縮放（最小為符合寬度）。頁面上的機種標記可以點。
+/// 日誌筆記本的畫布：固定大小的頁面，可以連續往下捲、一次看一頁或兩頁並排（左右翻頁），每頁有頁首日期與頁碼；
+/// Apple Pencil 書寫、手指捲動或翻頁，雙指縮放（最小為整頁放得下）。頁面上的機種標記可以點。
 final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKToolPickerObserver {
     let canvasView = PKCanvasView()
     private let paperView = JournalPaperView()
@@ -29,14 +29,19 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
     private let toolPicker = PKToolPicker()
     private var pages: [JournalPageInfo] = []
     private var paper: PaperStyle = .lined
-    private var lastWidth: CGFloat = 0
+    private(set) var mode: JournalViewMode = .scroll
+    private var lastSize: CGSize = .zero
     private var lastVisiblePage = -1
+    private var toolPickerInset: CGFloat = 0
+    /// 換顯示方式時重新排列筆跡：不是使用者寫的，不回報。
+    private var isRearranging = false
 
-    var onDrawingChange: ((PKDrawing) -> Void)?
+    /// 筆跡變了（與當時的顯示方式，分回每一頁時要用同一種排列）。
+    var onDrawingChange: ((PKDrawing, JournalViewMode) -> Void)?
     /// 點了機種標記（頁、標記）。
     var onBadgeTap: ((Int, Int) -> Void)?
     var onAddPage: (() -> Void)?
-    /// 畫面中間是第幾頁（頁首顯示日期）。
+    /// 畫面上是第幾頁（兩頁並排時是左邊那頁）。
     var onVisiblePageChange: ((Int) -> Void)?
 
     override func viewDidLoad() {
@@ -47,9 +52,9 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
         canvasView.backgroundColor = .clear
         canvasView.isOpaque = false
         canvasView.drawingPolicy = .default
-        canvasView.alwaysBounceVertical = true
         canvasView.showsHorizontalScrollIndicator = false
         canvasView.overrideUserInterfaceStyle = .light
+        canvasView.contentInsetAdjustmentBehavior = .never
         canvasView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(canvasView)
         NSLayoutConstraint.activate([
@@ -62,6 +67,7 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
         canvasView.addSubview(badgeView)
         badgeView.onTap = { [weak self] page, tag in self?.onBadgeTap?(page, tag) }
         badgeView.onAddPage = { [weak self] in self?.onAddPage?() }
+        applyScrollBehavior()
 
         toolPicker.colorUserInterfaceStyle = .light
         toolPicker.addObserver(canvasView)
@@ -82,12 +88,13 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let width = canvasView.bounds.width
-        guard width > 0 else { return }
-        if width != lastWidth {
-            let relativeZoom = lastWidth > 0 ? canvasView.zoomScale / fitScale(for: lastWidth) : 1
-            lastWidth = width
-            let fit = fitScale(for: width)
+        let size = canvasView.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        if size != lastSize {
+            let previousFit = lastSize.width > 0 ? fitScale(for: lastSize) : 0
+            let relativeZoom = previousFit > 0 ? canvasView.zoomScale / previousFit : 1
+            lastSize = size
+            let fit = fitScale(for: size)
             canvasView.minimumZoomScale = fit
             canvasView.maximumZoomScale = fit * 4
             canvasView.zoomScale = fit * max(relativeZoom, 1)
@@ -95,14 +102,45 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
         updateLayout()
     }
 
-    private func fitScale(for width: CGFloat) -> CGFloat {
-        width / JournalLayout.canvasWidth
+    /// 最小縮放：連續捲動時頁寬符合畫面寬度；翻頁時整頁（或兩頁）放得下。
+    private func fitScale(for size: CGSize) -> CGFloat {
+        switch mode {
+        case .scroll:
+            return size.width / JournalLayout.canvasWidth
+        case .single, .spread:
+            let slot = JournalLayout.slotSize(mode)
+            let height = max(size.height - bottomObstruction, 1)
+            return min(size.width / slot.width, height / slot.height)
+        }
+    }
+
+    /// 下面被蓋住的高度：工具列，或至少是 Home 指示條。
+    private var bottomObstruction: CGFloat {
+        max(toolPickerInset, view.safeAreaInsets.bottom)
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        if mode.isPaged { lastSize = .zero }
+        view.setNeedsLayout()
+    }
+
+    private var isAtFit: Bool {
+        abs(canvasView.zoomScale - canvasView.minimumZoomScale) < canvasView.minimumZoomScale * 0.02
     }
 
     /// 載入筆跡與頁面。
-    func configure(drawing: PKDrawing, pages: [JournalPageInfo], paper: PaperStyle) {
+    func configure(drawing: PKDrawing, pages: [JournalPageInfo], paper: PaperStyle, mode: JournalViewMode) {
+        if mode != self.mode {
+            self.mode = mode
+            applyScrollBehavior()
+            lastSize = .zero
+            view.setNeedsLayout()
+        }
         if canvasView.drawing != drawing {
+            isRearranging = true
             canvasView.drawing = drawing
+            isRearranging = false
         }
         update(pages: pages, paper: paper)
     }
@@ -111,39 +149,109 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
     func update(pages: [JournalPageInfo], paper: PaperStyle) {
         self.pages = pages
         self.paper = paper
-        paperView.configure(pages: pages, paper: paper)
-        badgeView.configure(pages: pages)
+        paperView.configure(pages: pages, paper: paper, mode: mode)
+        badgeView.configure(pages: pages, mode: mode)
         updateLayout()
+    }
+
+    /// 換顯示方式：筆跡依原本的排列分回每一頁，再依新的排列放回畫布，停在原本看的那一頁。
+    func setMode(_ newMode: JournalViewMode) {
+        guard newMode != mode else { return }
+        let page = max(lastVisiblePage, 0)
+        let perPage = JournalLayout.split(canvasView.drawing, pageCount: pages.count, mode: mode)
+        mode = newMode
+        applyScrollBehavior()
+        isRearranging = true
+        canvasView.drawing = JournalLayout.combine(perPage, mode: newMode)
+        isRearranging = false
+        paperView.configure(pages: pages, paper: paper, mode: newMode)
+        badgeView.configure(pages: pages, mode: newMode)
+        lastSize = .zero
+        lastVisiblePage = -1
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        scrollToPage(page, animated: false)
+    }
+
+    private func applyScrollBehavior() {
+        canvasView.alwaysBounceVertical = !mode.isPaged
+        canvasView.alwaysBounceHorizontal = mode.isPaged
+        canvasView.showsVerticalScrollIndicator = !mode.isPaged
+        canvasView.decelerationRate = mode.isPaged ? .fast : .normal
     }
 
     func scrollToPage(_ index: Int, animated: Bool) {
         view.layoutIfNeeded()
         let zoom = max(canvasView.zoomScale, 0.01)
-        let rect = JournalLayout.pageRect(index)
-        let y = max(0, min(rect.minY * zoom - 12, canvasView.contentSize.height - canvasView.bounds.height))
-        canvasView.setContentOffset(CGPoint(x: canvasView.contentOffset.x, y: y), animated: animated)
+        let inset = canvasView.contentInset
+        switch mode {
+        case .scroll:
+            let rect = JournalLayout.pageRect(index)
+            let y = max(0, min(rect.minY * zoom - 12, canvasView.contentSize.height - canvasView.bounds.height + inset.bottom))
+            canvasView.setContentOffset(CGPoint(x: canvasView.contentOffset.x, y: y), animated: animated)
+        case .single, .spread:
+            let slot = JournalLayout.slot(ofPage: index, mode: mode)
+            canvasView.setContentOffset(CGPoint(x: offset(forSlot: slot), y: -inset.top), animated: animated)
+        }
+    }
+
+    /// 翻頁時某一格對齊畫面的位置（超過最後面時停在能捲到的最右邊）。
+    private func offset(forSlot slot: Int) -> CGFloat {
+        let zoom = max(canvasView.zoomScale, 0.01)
+        let inset = canvasView.contentInset
+        let width = JournalLayout.slotSize(mode).width * zoom
+        let maxOffset = max(-inset.left, canvasView.contentSize.width + inset.right - canvasView.bounds.width)
+        return min(max(CGFloat(slot) * width - inset.left, -inset.left), maxOffset)
     }
 
     private func updateLayout() {
         let zoom = max(canvasView.zoomScale, 0.01)
-        let height = JournalLayout.canvasHeight(pageCount: pages.count) + JournalBadgeLayerView.addPageHeight
+        var size = JournalLayout.canvasSize(pageCount: pages.count, mode: mode)
+        if mode.isPaged {
+            size.width += JournalLayout.addPageWidth
+        } else {
+            size.height += JournalBadgeLayerView.addPageHeight
+        }
         // 以左上角為縮放原點（anchorPoint 是 .zero）：縮放時左上角固定在畫布原點
         for layerView in [paperView, badgeView] as [UIView] {
-            layerView.bounds = CGRect(x: 0, y: 0, width: JournalLayout.canvasWidth, height: height)
+            layerView.bounds = CGRect(origin: .zero, size: size)
             layerView.layer.position = .zero
             layerView.transform = CGAffineTransform(scaleX: zoom, y: zoom)
         }
-        let size = CGSize(width: JournalLayout.canvasWidth * zoom, height: height * zoom)
-        if canvasView.contentSize != size {
-            canvasView.contentSize = size
+        let contentSize = CGSize(width: size.width * zoom, height: size.height * zoom)
+        if canvasView.contentSize != contentSize {
+            canvasView.contentSize = contentSize
         }
+        updateInsets()
         reportVisiblePage()
+    }
+
+    /// 翻頁時頁面置中（畫面比頁面寬或高時）；工具列蓋住的高度留在下面。
+    private func updateInsets() {
+        let bottom = bottomObstruction
+        var inset = UIEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0)
+        if mode.isPaged {
+            let zoom = max(canvasView.zoomScale, 0.01)
+            let slot = JournalLayout.slotSize(mode)
+            let bounds = canvasView.bounds.size
+            let horizontal = max(0, (bounds.width - slot.width * zoom) / 2)
+            let vertical = max(0, (bounds.height - bottom - slot.height * zoom) / 2)
+            inset = UIEdgeInsets(top: vertical, left: horizontal, bottom: bottom + vertical, right: horizontal)
+        }
+        if canvasView.contentInset != inset {
+            canvasView.contentInset = inset
+            canvasView.verticalScrollIndicatorInsets.bottom = bottom
+        }
     }
 
     private func reportVisiblePage() {
         let zoom = max(canvasView.zoomScale, 0.01)
-        let centerY = (canvasView.contentOffset.y + canvasView.bounds.height / 2) / zoom
-        let page = JournalLayout.pageIndex(atY: centerY, pageCount: pages.count)
+        let center = CGPoint(
+            x: (canvasView.contentOffset.x + canvasView.bounds.width / 2) / zoom,
+            y: (canvasView.contentOffset.y + canvasView.bounds.height / 2) / zoom
+        )
+        var page = JournalLayout.pageIndex(at: center, pageCount: pages.count, mode: mode)
+        if mode == .spread { page -= page % 2 }
         if page != lastVisiblePage {
             lastVisiblePage = page
             // 可能在 SwiftUI 更新畫面時被呼叫：下一輪再通知，不在更新中改狀態
@@ -154,14 +262,17 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
     private func updateToolPickerInset() {
         let obscured = toolPicker.frameObscured(in: view)
         let inset = obscured.isNull ? 0 : max(0, view.bounds.maxY - obscured.minY)
-        canvasView.contentInset.bottom = inset
-        canvasView.verticalScrollIndicatorInsets.bottom = inset
+        guard inset != toolPickerInset else { return }
+        toolPickerInset = inset
+        if mode.isPaged { lastSize = .zero }
+        view.setNeedsLayout()
     }
 
     // MARK: - PKCanvasViewDelegate
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-        onDrawingChange?(canvasView.drawing)
+        guard !isRearranging else { return }
+        onDrawingChange?(canvasView.drawing, mode)
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
@@ -176,6 +287,26 @@ final class JournalCanvasController: UIViewController, PKCanvasViewDelegate, PKT
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         reportVisiblePage()
+    }
+
+    /// 翻頁：整頁放得下時放開手指就停在最近的一格（往哪邊滑就翻到哪邊）；放大後可以自由移動。
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard mode.isPaged, isAtFit else { return }
+        let width = JournalLayout.slotSize(mode).width * max(canvasView.zoomScale, 0.01)
+        guard width > 0 else { return }
+        let inset = canvasView.contentInset.left
+        let current = (scrollView.contentOffset.x + inset) / width
+        var slot: CGFloat
+        if velocity.x > 0.15 {
+            slot = floor(current + 0.05) + 1
+        } else if velocity.x < -0.15 {
+            slot = ceil(current - 0.05) - 1
+        } else {
+            slot = ((targetContentOffset.pointee.x + inset) / width).rounded()
+        }
+        let last = CGFloat(JournalLayout.slotCount(pageCount: pages.count, mode: mode))
+        slot = min(max(slot, 0), last)
+        targetContentOffset.pointee = CGPoint(x: offset(forSlot: Int(slot)), y: -canvasView.contentInset.top)
     }
 
     // MARK: - PKToolPickerObserver
@@ -194,7 +325,7 @@ final class JournalPaperView: UIView {
     static let backdrop = UIColor(red: 0.925, green: 0.925, blue: 0.94, alpha: 1)
 
     private var pageLayers: [CALayer] = []
-    private var configured: ([JournalPageInfo], PaperStyle)?
+    private var configured: ([JournalPageInfo], PaperStyle, JournalViewMode)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -207,17 +338,17 @@ final class JournalPaperView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(pages: [JournalPageInfo], paper: PaperStyle) {
+    func configure(pages: [JournalPageInfo], paper: PaperStyle, mode: JournalViewMode) {
         let titles = pages.map { JournalPageInfo(day: $0.day, number: $0.number, badges: []) }
-        if let configured, configured.0 == titles, configured.1 == paper { return }
-        configured = (titles, paper)
+        if let configured, configured.0 == titles, configured.1 == paper, configured.2 == mode { return }
+        configured = (titles, paper, mode)
         pageLayers.forEach { $0.removeFromSuperlayer() }
-        pageLayers = pages.enumerated().map { index, info in makePage(index: index, info: info, paper: paper) }
+        pageLayers = pages.enumerated().map { index, info in makePage(index: index, info: info, paper: paper, mode: mode) }
         pageLayers.forEach { layer.addSublayer($0) }
     }
 
-    private func makePage(index: Int, info: JournalPageInfo, paper: PaperStyle) -> CALayer {
-        let rect = JournalLayout.pageRect(index)
+    private func makePage(index: Int, info: JournalPageInfo, paper: PaperStyle, mode: JournalViewMode) -> CALayer {
+        let rect = JournalLayout.pageRect(index, mode: mode)
         let page = CALayer()
         page.frame = rect
         page.backgroundColor = UIColor.white.cgColor
@@ -257,7 +388,7 @@ final class JournalBadgeLayerView: UIView {
 
     var onTap: ((Int, Int) -> Void)?
     var onAddPage: (() -> Void)?
-    private var configured: [JournalPageInfo]?
+    private var configured: ([JournalPageInfo], JournalViewMode)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -278,12 +409,12 @@ final class JournalBadgeLayerView: UIView {
         return nil
     }
 
-    func configure(pages: [JournalPageInfo]) {
-        guard configured != pages else { return }
-        configured = pages
+    func configure(pages: [JournalPageInfo], mode: JournalViewMode) {
+        if let configured, configured.0 == pages, configured.1 == mode { return }
+        configured = (pages, mode)
         subviews.forEach { $0.removeFromSuperview() }
         for (pageIndex, info) in pages.enumerated() {
-            let rect = JournalLayout.pageRect(pageIndex)
+            let rect = JournalLayout.pageRect(pageIndex, mode: mode)
             for badge in info.badges {
                 let button = makeBadge(badge)
                 button.sizeToFit()
@@ -301,7 +432,6 @@ final class JournalBadgeLayerView: UIView {
                 addSubview(button)
             }
         }
-        let last = JournalLayout.pageRect(max(pages.count - 1, 0))
         var configuration = UIButton.Configuration.gray()
         configuration.title = "新增一頁"
         configuration.image = UIImage(systemName: "plus")
@@ -311,7 +441,14 @@ final class JournalBadgeLayerView: UIView {
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 22, bottom: 12, trailing: 22)
         let add = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onAddPage?() })
         add.sizeToFit()
-        add.center = CGPoint(x: last.midX, y: last.maxY + JournalLayout.gap + 24)
+        if mode.isPaged {
+            // 翻頁：放在最後一格右邊
+            let size = JournalLayout.canvasSize(pageCount: pages.count, mode: mode)
+            add.center = CGPoint(x: size.width + JournalLayout.addPageWidth / 2, y: size.height / 2)
+        } else {
+            let last = JournalLayout.pageRect(max(pages.count - 1, 0))
+            add.center = CGPoint(x: last.midX, y: last.maxY + JournalLayout.gap + 24)
+        }
         add.accessibilityLabel = "新增一頁"
         addSubview(add)
     }
@@ -344,6 +481,8 @@ final class JournalCanvasHandle {
     fileprivate weak var controller: JournalCanvasController?
 
     var currentDrawing: PKDrawing? { controller?.canvasView.drawing }
+    /// 畫布上筆跡目前的排列方式（分回每一頁時要用）。
+    var currentMode: JournalViewMode? { controller?.mode }
 
     func scrollToPage(_ index: Int, animated: Bool = true) {
         controller?.scrollToPage(index, animated: animated)
@@ -352,12 +491,14 @@ final class JournalCanvasHandle {
 
 /// SwiftUI 包裝：`revision` 改變時（載入、換紙張）重新設定畫布；頁面與標記變了只更新頁面，不重設筆跡。
 struct JournalCanvas: UIViewControllerRepresentable {
-    let drawing: () -> PKDrawing
+    /// 依某種顯示方式排列的整本筆跡（重新設定畫布時用）。
+    let drawing: (JournalViewMode) -> PKDrawing
     let pages: [JournalPageInfo]
     let paper: PaperStyle
+    let mode: JournalViewMode
     let handle: JournalCanvasHandle
     let revision: Int
-    var onDrawingChange: (PKDrawing) -> Void
+    var onDrawingChange: (PKDrawing, JournalViewMode) -> Void
     var onBadgeTap: (Int, Int) -> Void
     var onAddPage: () -> Void
     var onVisiblePageChange: (Int) -> Void
@@ -365,7 +506,7 @@ struct JournalCanvas: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> JournalCanvasController {
         let controller = JournalCanvasController()
         controller.loadViewIfNeeded()
-        controller.configure(drawing: drawing(), pages: pages, paper: paper)
+        controller.configure(drawing: drawing(mode), pages: pages, paper: paper, mode: mode)
         handle.controller = controller
         context.coordinator.revision = revision
         return controller
@@ -378,9 +519,11 @@ struct JournalCanvas: UIViewControllerRepresentable {
         controller.onVisiblePageChange = onVisiblePageChange
         if context.coordinator.revision != revision {
             context.coordinator.revision = revision
-            controller.configure(drawing: drawing(), pages: pages, paper: paper)
+            controller.configure(drawing: drawing(mode), pages: pages, paper: paper, mode: mode)
         } else {
             controller.update(pages: pages, paper: paper)
+            // 換了顯示方式：畫布自己重新排列筆跡（不會漏掉還沒存檔的筆跡）
+            controller.setMode(mode)
         }
     }
 

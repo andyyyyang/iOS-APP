@@ -155,6 +155,8 @@ enum LeftPanelMode: String, CaseIterable, Identifiable {
 
 /// 右側欄的內容（目前筆記的資訊）。
 enum RightPanelMode: String, CaseIterable, Identifiable {
+    /// 日誌筆記本的頁面與每天的整理（只在開著日誌時）。
+    case journal
     case memo
     case outline
     case links
@@ -165,6 +167,7 @@ enum RightPanelMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .journal: return "日誌"
         case .memo: return "手寫"
         case .outline: return "大綱"
         case .links: return "連結"
@@ -216,6 +219,11 @@ final class Workspace {
     var showsPalette = false
     /// 畫面底部的短暫提示（例如在全域搜尋複製了分機）。
     var toast: String?
+    /// 全螢幕：收起頂部列、功能列與側欄，只留內容（所有頁面都可以）。
+    private(set) var isFullScreen = false
+    @ObservationIgnored private var sidebarsBeforeFullScreen: (left: Bool, right: Bool)?
+    /// 內容要求打開右側欄（iPhone 的右側欄是抽屜，由外框接手）。
+    private(set) var rightDrawerRequest = 0
     var showsCamera = false
     var showsPairing = false
     var pendingDelete: NoteSummary?
@@ -443,6 +451,31 @@ final class Workspace {
     func showRight(_ mode: RightPanelMode) {
         rightMode = mode
         setRightOpen(true)
+    }
+
+    /// 從內容打開右側欄的某個面板（iPad 打開側欄，iPhone 拉出抽屜）。
+    func revealRight(_ mode: RightPanelMode) {
+        showRight(mode)
+        rightDrawerRequest += 1
+    }
+
+    /// 進入全螢幕時收起兩邊的側欄（離開時恢復）；全螢幕中仍可以從內容或指令打開側欄。
+    func setFullScreen(_ on: Bool) {
+        guard on != isFullScreen else { return }
+        if on {
+            sidebarsBeforeFullScreen = (isLeftOpen, isRightOpen)
+            isLeftOpen = false
+            isRightOpen = false
+        } else if let saved = sidebarsBeforeFullScreen {
+            setLeftOpen(saved.left)
+            setRightOpen(saved.right)
+            sidebarsBeforeFullScreen = nil
+        }
+        isFullScreen = on
+    }
+
+    func toggleFullScreen() {
+        setFullScreen(!isFullScreen)
     }
 
     func setLeftWidth(_ width: CGFloat, persist: Bool) {

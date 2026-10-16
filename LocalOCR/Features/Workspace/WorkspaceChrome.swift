@@ -207,6 +207,7 @@ struct Ribbon: View {
                     VStack(spacing: 4) { mainButtons }
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                fullScreenButton
                 SyncIndicator()
                 settingsButton
             }
@@ -214,6 +215,7 @@ struct Ribbon: View {
             HStack(spacing: 4) {
                 mainButtons
                 separator
+                fullScreenButton
                 SyncIndicator()
                 settingsButton
             }
@@ -244,6 +246,10 @@ struct Ribbon: View {
 
     private var settingsButton: some View {
         button("設定", WorkspaceTab.settings.systemImage, isActive: workspace.active == .settings) { run { workspace.open(.settings) } }
+    }
+
+    private var fullScreenButton: some View {
+        button("全螢幕（⌃⌘F）", "arrow.up.left.and.arrow.down.right") { run { workspace.setFullScreen(true) } }
     }
 
     private var isJournalActive: Bool {
@@ -519,6 +525,13 @@ struct CompactTopBar: View {
                 .lineLimit(1)
                 .padding(.leading, 4)
             Spacer(minLength: 8)
+            Button {
+                workspace.setFullScreen(true)
+            } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(InkIconButtonStyle(size: 40, isActive: true))
+            .accessibilityLabel("全螢幕")
             Button {
                 workspace.showsPalette = true
             } label: {

@@ -110,6 +110,45 @@ final class JournalTests: XCTestCase {
         XCTAssertEqual(JournalLayout.pageIndex(atY: JournalLayout.pageRect(2).midY, pageCount: 3), 2)
     }
 
+    func testEveryViewModeKeepsInkOnItsPage() {
+        let pages = [
+            PKDrawing(strokes: [stroke(at: CGPoint(x: 100, y: 200))]),
+            PKDrawing(strokes: [stroke(at: CGPoint(x: 600, y: 900))]),
+            PKDrawing(strokes: [stroke(at: CGPoint(x: 40, y: 1100))]),
+        ]
+        for mode in JournalViewMode.allCases {
+            let canvas = JournalLayout.combine(pages, mode: mode)
+            let split = JournalLayout.split(canvas, pageCount: 3, mode: mode)
+            XCTAssertEqual(split.map(\.strokes.count), [1, 1, 1], "\(mode)")
+            for (original, back) in zip(pages, split) {
+                XCTAssertEqual(back.bounds.midX, original.bounds.midX, accuracy: 0.5, "\(mode)：換回頁面座標")
+                XCTAssertEqual(back.bounds.midY, original.bounds.midY, accuracy: 0.5, "\(mode)：換回頁面座標")
+            }
+        }
+        // 換顯示方式：依原本的排列分回每一頁，再依新的排列放回去，內容不變
+        let spread = JournalLayout.combine(JournalLayout.split(JournalLayout.combine(pages, mode: .scroll), pageCount: 3, mode: .scroll), mode: .spread)
+        XCTAssertEqual(JournalLayout.split(spread, pageCount: 3, mode: .spread).map(\.strokes.count), [1, 1, 1])
+    }
+
+    func testPagedModesLayPagesOutSideBySide() {
+        let left = JournalLayout.pageRect(0, mode: .spread)
+        let right = JournalLayout.pageRect(1, mode: .spread)
+        let next = JournalLayout.pageRect(2, mode: .spread)
+        XCTAssertEqual(left.minY, right.minY)
+        XCTAssertLessThan(left.maxX, right.minX)
+        XCTAssertGreaterThan(next.minX, right.maxX)
+        XCTAssertEqual(JournalLayout.slotCount(pageCount: 3, mode: .spread), 2)
+        XCTAssertEqual(JournalLayout.slot(ofPage: 3, mode: .spread), 1)
+        XCTAssertEqual(JournalLayout.canvasSize(pageCount: 3, mode: .spread).width, JournalLayout.slotSize(.spread).width * 2)
+        XCTAssertEqual(JournalLayout.pageIndex(at: CGPoint(x: right.midX, y: right.midY), pageCount: 3, mode: .spread), 1)
+        XCTAssertEqual(JournalLayout.pageIndex(at: CGPoint(x: next.midX, y: 10), pageCount: 3, mode: .spread), 2)
+        // 一頁一張：一頁一格，左右排列
+        let second = JournalLayout.pageRect(1, mode: .single)
+        XCTAssertEqual(second.minY, JournalLayout.pageRect(0, mode: .single).minY)
+        XCTAssertEqual(JournalLayout.pageIndex(at: CGPoint(x: second.midX, y: second.midY), pageCount: 2, mode: .single), 1)
+        XCTAssertEqual(JournalLayout.pageIndex(at: CGPoint(x: 99_999, y: 0), pageCount: 2, mode: .single), 1, "超過最後一頁算最後一頁")
+    }
+
     func testANewDayStartsANewPage() {
         var notebook = JournalNotebook(id: "jn-test", createdAt: Date(), updatedAt: Date(), paper: .lined, pages: [JournalPage(date: "2026-10-14")])
         XCTAssertTrue(notebook.ensurePage(for: "2026-10-15"))

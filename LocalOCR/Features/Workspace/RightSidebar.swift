@@ -4,20 +4,31 @@ import SwiftUI
 struct RightSidebar: View {
     @Environment(Workspace.self) private var workspace
     @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
+    @State private var store = NotesStore.shared
+    @State private var journal = JournalSession.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let path = workspace.activeNotePath {
-                ModePicker(modes: RightPanelMode.allCases.filter { $0 != .ai || showsAIPanel })
+                let isJournal: Bool = journal.path == path || store.notes.first(where: { $0.path == path })?.isJournal == true
+                let modes = RightPanelMode.allCases.filter { mode in
+                    switch mode {
+                    case .journal: return isJournal
+                    case .memo: return !isJournal
+                    case .ai: return showsAIPanel
+                    case .outline, .links, .properties: return true
+                    }
+                }
+                let mode = Self.effectiveMode(workspace.rightMode, available: modes, isJournal: isJournal)
+                ModePicker(modes: modes, active: mode)
                 Group {
-                    switch workspace.rightMode {
+                    switch mode {
+                    case .journal: JournalSidebarPanel(path: path)
                     case .memo: InkMemoPanel(path: path).id(path)
                     case .outline: OutlinePanel(path: path)
                     case .links: LinksPanel(path: path)
                     case .properties: PropertiesPanel(path: path)
-                    case .ai:
-                        // 設定中關掉了筆記 AI：顯示大綱
-                        if showsAIPanel { AIPanel(path: path).id(path) } else { OutlinePanel(path: path) }
+                    case .ai: AIPanel(path: path).id(path)
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -29,17 +40,24 @@ struct RightSidebar: View {
         .padding(.top, 14)
         .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    /// 這則筆記沒有的面板改顯示最接近的：日誌筆記本的「手寫」是日誌，其他筆記的「日誌」與關掉的 AI 是大綱。
+    static func effectiveMode(_ mode: RightPanelMode, available: [RightPanelMode], isJournal: Bool) -> RightPanelMode {
+        if available.contains(mode) { return mode }
+        return isJournal && mode == .memo ? .journal : .outline
+    }
 }
 
-/// 分段控制：大綱｜連結｜屬性｜AI（設定中關掉筆記 AI 時沒有 AI）。
+/// 分段控制：日誌（日誌筆記本）｜手寫（其他筆記）｜大綱｜連結｜屬性｜AI（設定中關掉筆記 AI 時沒有 AI）。
 private struct ModePicker: View {
     let modes: [RightPanelMode]
+    let active: RightPanelMode
     @Environment(Workspace.self) private var workspace
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(modes) { mode in
-                let isActive = workspace.rightMode == mode || (workspace.rightMode == .ai && !modes.contains(.ai) && mode == .outline)
+                let isActive = mode == active
                 Button {
                     workspace.rightMode = mode
                 } label: {

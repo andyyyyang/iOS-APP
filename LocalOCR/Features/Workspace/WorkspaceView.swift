@@ -33,6 +33,11 @@ struct WorkspaceView: View {
             // 鍵盤出現時版面完全不動（頂部列、側欄、浮動工具列都不跟著跑）；
             // 筆記編輯器自己依鍵盤高度調整捲動範圍（MarkdownEditor）
             .ignoresSafeArea(.keyboard)
+            if workspace.isFullScreen {
+                FullScreenExitHandle()
+                    .zIndex(15)
+                    .transition(.opacity)
+            }
             if showsKeyboardDiagnostics {
                 KeyboardDiagnosticsOverlay()
                     .frame(width: 290, height: 190)
@@ -50,7 +55,9 @@ struct WorkspaceView: View {
         }
         .ignoresSafeArea(.keyboard)
         .toast($workspace.toast)
+        .persistentSystemOverlays(workspace.isFullScreen ? .hidden : .automatic)
         .animation(.easeOut(duration: 0.18), value: workspace.showsPalette)
+        .animation(.smooth(duration: 0.3), value: workspace.isFullScreen)
         .background { KeyboardShortcuts() }
         .fullScreenCover(isPresented: $workspace.showsCamera) {
             LiveScanView(onClose: { workspace.showsCamera = false })
@@ -96,9 +103,16 @@ struct WorkspaceView: View {
                 workspace.followMovedNotes()
             }
         }
-        // 開啟 Markdown 筆記時，右側欄自動切到這則筆記的手寫備忘（手寫筆記本身不必）
+        // 開啟日誌筆記本時右側欄切到「日誌」；開啟 Markdown 筆記時切到這則筆記的手寫備忘（手寫筆記本身不必）
         .onChange(of: workspace.activeNotePath, initial: true) { _, path in
-            guard let path, NotesSettings.autoInkMemo, !isNotebook(path) else { return }
+            guard let path else { return }
+            let summary = summary(of: path)
+            if summary?.isJournal == true {
+                workspace.rightMode = .journal
+                return
+            }
+            if workspace.rightMode == .journal { workspace.rightMode = .outline }
+            guard NotesSettings.autoInkMemo, summary?.isNotebook != true else { return }
             workspace.rightMode = .memo
         }
         // 開著的筆記不會在按需模式整理空間時被移除
@@ -120,10 +134,10 @@ struct WorkspaceView: View {
         }
     }
 
-    private func isNotebook(_ path: String) -> Bool {
-        if let note = store.notes.first(where: { $0.path == path }) { return note.isNotebook }
-        guard let text = LocalVault.shared.readText(path) else { return false }
-        return NotesStore.summarize(path: path, mtime: Date(), text: text).isNotebook
+    private func summary(of path: String) -> NoteSummary? {
+        if let note = store.notes.first(where: { $0.path == path }) { return note }
+        guard let text = LocalVault.shared.readText(path) else { return nil }
+        return NotesStore.summarize(path: path, mtime: Date(), text: text)
     }
 
     private var massDeletionMessage: String {
@@ -142,12 +156,19 @@ private struct RegularWorkspace: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopBar()
+            // 全螢幕：只留內容（側欄可以從內容或指令打開）
+            if !workspace.isFullScreen {
+                TopBar()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             HStack(spacing: 0) {
-                Ribbon()
-                    .frame(width: Workspace.railWidth)
-                    .padding(.top, 6)
-                    .padding(.bottom, 14)
+                if !workspace.isFullScreen {
+                    Ribbon()
+                        .frame(width: Workspace.railWidth)
+                        .padding(.top, 6)
+                        .padding(.bottom, 14)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
                 ContentPanel()
             }
         }
@@ -275,11 +296,14 @@ private struct CompactWorkspace: View {
             let right = revealed(isOpen: showsRight, drag: rightDrag, width: width)
             ZStack {
                 VStack(spacing: 0) {
-                    CompactTopBar(
-                        onLeft: { setDrawer(left: true) },
-                        onRight: { setDrawer(right: true) },
-                        onTabs: { showsTabs = true }
-                    )
+                    if !workspace.isFullScreen {
+                        CompactTopBar(
+                            onLeft: { setDrawer(left: true) },
+                            onRight: { setDrawer(right: true) },
+                            onTabs: { showsTabs = true }
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                     CenterPane(allowsBackSwipe: left == 0 && right == 0, edgeExclusion: Self.edgeWidth)
                         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous))
                         .ignoresSafeArea(edges: .bottom)
@@ -316,6 +340,8 @@ private struct CompactWorkspace: View {
                 .presentationDetents([.medium, .large])
         }
         .onChange(of: workspace.active) { _, _ in setDrawer() }
+        // 內容要求打開右側欄（例如日誌的「日誌」按鈕）
+        .onChange(of: workspace.rightDrawerRequest) { _, _ in setDrawer(right: true) }
     }
 
     /// 側欄露出多少（0 = 收起，width = 完全打開）。
@@ -423,9 +449,48 @@ private struct KeyboardShortcuts: View {
                 .keyboardShortcut("]", modifiers: .command)
             Button("搜尋內文") { workspace.showLeft(.search) }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            Button(workspace.isFullScreen ? "結束全螢幕" : "全螢幕") { workspace.toggleFullScreen() }
+                .keyboardShortcut("f", modifiers: [.command, .control])
         }
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - 全螢幕
+
+/// 全螢幕時畫面最上方的小橫條：點一下（或往下拉）離開全螢幕。放在狀態列或動態島下方，不蓋住內容的按鈕。
+private struct FullScreenExitHandle: View {
+    @Environment(Workspace.self) private var workspace
+    @State private var windowTop: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { proxy in
+            Button {
+                workspace.setFullScreen(false)
+            } label: {
+                Capsule()
+                    .fill(Color.white.opacity(0.55))
+                    .frame(width: 44, height: 5)
+                    .frame(width: 88, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .position(x: proxy.size.width / 2, y: handleY)
+            .simultaneousGesture(DragGesture(minimumDistance: 8).onEnded { value in
+                if value.translation.height > 12 { workspace.setFullScreen(false) }
+            })
+            .accessibilityLabel("結束全螢幕")
+        }
+        .ignoresSafeArea()
+        .background(WindowInsetsReader { windowTop = $0.top })
+    }
+
+    /// 有動態島或瀏海的 iPhone：在它下方；有狀態列（iPad）：在狀態列中間；沒有（台前調度的小視窗）：視窗頂端。
+    private var handleY: CGFloat {
+        if windowTop > 40 { return windowTop - 6 }
+        if windowTop > 10 { return windowTop / 2 }
+        return 10
     }
 }

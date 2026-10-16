@@ -12,6 +12,8 @@ struct JournalNotebookView: View {
     @Environment(Workspace.self) private var workspace
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @AppStorage(JournalViewMode.storageKey) private var viewModeRaw = JournalViewMode.scroll.rawValue
     @State private var path = ""
     @State private var title = ""
     @State private var notebook: JournalNotebook?
@@ -21,11 +23,11 @@ struct JournalNotebookView: View {
     @State private var visiblePage = 0
     @State private var saveTask: Task<Void, Never>?
     @State private var organizeTask: Task<Void, Never>?
-    /// 畫布回報、還沒寫進檔案的最新筆跡。
-    @State private var pendingDrawing: PKDrawing?
+    /// 畫布回報、還沒寫進檔案的最新筆跡（與當時的排列方式）。
+    @State private var pendingDrawing: (drawing: PKDrawing, mode: JournalViewMode)?
     @State private var hasUnpublishedChanges = false
     @State private var isOrganizing = false
-    @State private var showsDays = false
+    @State private var pendingDelete: Int?
     @State private var picking: TagReference?
     @State private var toast: String?
     @FocusState private var titleFocused: Bool
@@ -38,9 +40,10 @@ struct JournalNotebookView: View {
             Rectangle().fill(DS.hairline).frame(height: 1)
             if let notebook {
                 JournalCanvas(
-                    drawing: { handle.currentDrawing ?? JournalLayout.combine(notebook.pages.map(\.pkDrawing)) },
+                    drawing: { mode in JournalLayout.combine(notebook.pages.map(\.pkDrawing), mode: mode) },
                     pages: pageInfos(notebook),
                     paper: notebook.paper,
+                    mode: viewMode,
                     handle: handle,
                     revision: revision,
                     onDrawingChange: scheduleSave,
@@ -58,9 +61,26 @@ struct JournalNotebookView: View {
         }
         .background(DS.pane)
         .toolbar(.hidden, for: .navigationBar)
-        .inspector(isPresented: $showsDays) {
-            JournalDaysPanel(notebook: notebook, isOrganizing: isOrganizing, onOrganize: { Task { await organize(summarize: true) } }, onOpenModel: openModel, onShowPage: { handle.scrollToPage($0) })
-                .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+        .confirmationDialog(
+            JournalDeletePrompt.title(pendingDelete),
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("刪除", role: .destructive) {
+                if let index = pendingDelete { deletePage(index) }
+                pendingDelete = nil
+            }
+        } message: {
+            Text(JournalDeletePrompt.message(pageCount: notebook?.pages.count ?? 0))
+        }
+        // 右側欄的「日誌」面板跟著這本筆記本
+        .onAppear { attachSession() }
+        .onChange(of: notebook) { _, _ in pushSession() }
+        .onChange(of: isOrganizing) { _, _ in pushSession() }
+        .onChange(of: visiblePage) { _, _ in pushSession() }
+        .onChange(of: path) { old, _ in
+            JournalSession.shared.detach(path: old)
+            attachSession()
         }
         .sheet(item: $picking) { reference in
             ModelPickerSheet(tag: tag(reference), models: JournalFiles.models()) { choice in choose(choice, for: reference) }
@@ -71,6 +91,7 @@ struct JournalNotebookView: View {
         }
         .task { await load() }
         .onDisappear {
+            JournalSession.shared.detach(path: path)
             captureDrawing()
             organizeTask?.cancel()
             guard hasUnpublishedChanges else { return }
@@ -95,7 +116,7 @@ struct JournalNotebookView: View {
                 .submitLabel(.done)
                 .onSubmit { titleFocused = false }
             if let notebook, notebook.pages.indices.contains(visiblePage) {
-                Text("\(JournalLayout.heading(for: notebook.pages[visiblePage].date)) · 第 \(visiblePage + 1)/\(notebook.pages.count) 頁")
+                Text("\(JournalLayout.heading(for: notebook.pages[visiblePage].date)) · \(pageLabel(notebook))")
                     .font(.footnote.monospacedDigit())
                     .foregroundStyle(DS.textSecondary)
                     .lineLimit(1)
@@ -109,6 +130,17 @@ struct JournalNotebookView: View {
             .buttonStyle(.plain)
             .disabled(notebook == nil)
             .accessibilityLabel("新增一頁")
+            Menu {
+                Picker("顯示方式", selection: $viewModeRaw) {
+                    ForEach(JournalViewMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode.rawValue)
+                    }
+                }
+            } label: {
+                HeaderIcon(systemImage: viewMode.systemImage)
+            }
+            .disabled(notebook == nil)
+            .accessibilityLabel("顯示方式")
             Menu {
                 Picker("紙張", selection: Binding(get: { notebook?.paper ?? .lined }, set: { changePaper($0) })) {
                     ForEach(PaperStyle.allCases) { style in
@@ -132,25 +164,78 @@ struct JournalNotebookView: View {
             .buttonStyle(.plain)
             .disabled(notebook == nil || isOrganizing)
             .accessibilityLabel("辨識並整理")
-            Button("日誌") { showsDays.toggle() }
-                .buttonStyle(PillButtonStyle(kind: showsDays ? .primary : .secondary, compact: true))
+            Button("日誌") { toggleJournalPanel() }
+                .buttonStyle(PillButtonStyle(kind: isJournalPanelShown ? .primary : .secondary, compact: true))
                 .disabled(notebook == nil)
-                .accessibilityLabel("依日期整理")
-            if let url = NotesSettings.obsidianURL(for: path) {
-                Menu {
+                .accessibilityLabel("在右側欄依日期列出頁面與整理")
+            Menu {
+                Button(role: .destructive) {
+                    pendingDelete = visiblePage
+                } label: {
+                    Label(deleteMenuTitle, systemImage: "trash")
+                }
+                .disabled(notebook == nil)
+                if let url = NotesSettings.obsidianURL(for: path) {
                     Button {
                         openURL(url)
                     } label: {
                         Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app")
                     }
-                } label: {
-                    HeaderIcon(systemImage: "ellipsis")
                 }
-                .accessibilityLabel("更多")
+            } label: {
+                HeaderIcon(systemImage: "ellipsis")
             }
+            .accessibilityLabel("更多")
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
+    }
+
+    private var deleteMenuTitle: String {
+        let number = visiblePage + 1
+        return viewMode == .spread ? "刪除左邊這一頁（第 \(number) 頁）" : "刪除這一頁（第 \(number) 頁）"
+    }
+
+    private var viewMode: JournalViewMode {
+        JournalViewMode(rawValue: viewModeRaw) ?? .scroll
+    }
+
+    /// 「第 3/10 頁」；兩頁並排時「第 3–4/10 頁」。
+    private func pageLabel(_ notebook: JournalNotebook) -> String {
+        let count = notebook.pages.count
+        if viewMode == .spread, visiblePage + 1 < count {
+            return "第 \(visiblePage + 1)–\(visiblePage + 2)/\(count) 頁"
+        }
+        return "第 \(visiblePage + 1)/\(count) 頁"
+    }
+
+    /// 右側欄正在顯示這本的「日誌」（iPhone 的右側欄是拉出來的抽屜，按鈕不維持選取）。
+    private var isJournalPanelShown: Bool {
+        sizeClass != .compact && workspace.isRightOpen && workspace.rightMode == .journal
+    }
+
+    private func toggleJournalPanel() {
+        if isJournalPanelShown {
+            workspace.setRightOpen(false)
+        } else {
+            workspace.revealRight(.journal)
+        }
+    }
+
+    private func attachSession() {
+        guard notebook != nil else { return }
+        JournalSession.shared.attach(path: path, actions: JournalSession.Actions(
+            showPage: { handle.scrollToPage($0) },
+            addPage: { addPage() },
+            deletePage: { deletePage($0) },
+            organize: { Task { await organize(summarize: true) } },
+            openModel: { openModel($0) }
+        ))
+        pushSession()
+    }
+
+    private func pushSession() {
+        JournalSession.shared.update(path: path, notebook: notebook, isOrganizing: isOrganizing, visiblePage: visiblePage)
     }
 
     private func pageInfos(_ notebook: JournalNotebook) -> [JournalPageInfo] {
@@ -181,30 +266,31 @@ struct JournalNotebookView: View {
         }
         notebook = loaded
         revision += 1
+        attachSession()
         sync.touch(initialPath)
         let last = loaded.pages.count - 1
         try? await Task.sleep(for: .milliseconds(350))
         handle.scrollToPage(last, animated: false)
     }
 
-    private func scheduleSave(_ drawing: PKDrawing) {
+    private func scheduleSave(_ drawing: PKDrawing, mode: JournalViewMode) {
         hasUnpublishedChanges = true
-        pendingDrawing = drawing
+        pendingDrawing = (drawing, mode)
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             saveTask = nil
-            storeDrawing(drawing)
+            storeDrawing(drawing, mode: mode)
             scheduleOrganize()
         }
     }
 
-    /// 把畫布筆跡分回每一頁並存檔。
-    private func storeDrawing(_ drawing: PKDrawing) {
+    /// 把畫布筆跡分回每一頁並存檔（依畫布當時的排列方式）。
+    private func storeDrawing(_ drawing: PKDrawing, mode: JournalViewMode) {
         guard var current = notebook else { return }
         pendingDrawing = nil
-        let pages = JournalLayout.split(drawing, pageCount: current.pages.count)
+        let pages = JournalLayout.split(drawing, pageCount: current.pages.count, mode: mode)
         var changed = false
         for (index, page) in pages.enumerated() where current.pages[index].drawing != page.dataRepresentation() {
             current.pages[index].pkDrawing = page
@@ -224,8 +310,10 @@ struct JournalNotebookView: View {
     private func captureDrawing() {
         saveTask?.cancel()
         saveTask = nil
-        if let latest = handle.currentDrawing ?? pendingDrawing {
-            storeDrawing(latest)
+        if let drawing = handle.currentDrawing, let mode = handle.currentMode {
+            storeDrawing(drawing, mode: mode)
+        } else if let pending = pendingDrawing {
+            storeDrawing(pending.drawing, mode: pending.mode)
         }
     }
 
@@ -315,6 +403,42 @@ struct JournalNotebookView: View {
         }
     }
 
+    /// 刪除一頁：後面的頁碼往前（頁面圖片要重新產生），刪掉的頁面圖片也從 vault 移除；只剩一頁時清成今天的空白頁。
+    private func deletePage(_ index: Int) {
+        captureDrawing()
+        guard var current = notebook, current.pages.indices.contains(index) else { return }
+        let removed = current.pages[index]
+        if current.pages.count == 1 {
+            current.pages[0] = JournalPage(date: JournalLayout.day())
+        } else {
+            current.pages.remove(at: index)
+            for later in index..<current.pages.count { current.pages[later].publishedFingerprint = nil }
+        }
+        // 那一天沒有頁面了：整理結果也拿掉
+        let dates = Set(current.pages.map(\.date))
+        current.days = current.days.filter { dates.contains($0.key) }
+        current.updatedAt = Date()
+        notebook = current
+        hasUnpublishedChanges = true
+        do {
+            try JournalFiles.save(current, notePath: path)
+        } catch {
+            toast = "刪除失敗：\(error.localizedDescription)"
+            return
+        }
+        // 頁面位置變了：畫布依剩下的頁面重新排列
+        revision += 1
+        let notePath = path
+        let id = current.id
+        Task { await JournalFiles.removePageImage(notePath: notePath, id: id, page: removed, store: store) }
+        let target = min(index, current.pages.count - 1)
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            handle.scrollToPage(target, animated: false)
+        }
+        toast = "已刪除第 \(index + 1) 頁"
+    }
+
     private func changePaper(_ paper: PaperStyle) {
         captureDrawing()
         guard var current = notebook else { return }
@@ -389,93 +513,6 @@ private struct HeaderIcon: View {
             .background(DS.control, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
-
-// MARK: - 依日期整理
-
-/// 側邊的「日誌」：每天的摘要、重點、待跟進、提到的機種與頁面（點了捲到那一頁）。
-private struct JournalDaysPanel: View {
-    let notebook: JournalNotebook?
-    let isOrganizing: Bool
-    var onOrganize: () -> Void
-    var onOpenModel: (String) -> Void
-    var onShowPage: (Int) -> Void
-
-    var body: some View {
-        List {
-            Section {
-                Button {
-                    onOrganize()
-                } label: {
-                    HStack {
-                        Text("辨識並整理")
-                        Spacer()
-                        if isOrganizing { ProgressView() }
-                    }
-                }
-                .disabled(isOrganizing || notebook == nil)
-            } footer: {
-                Text("在裝置上辨識手寫，寫了「#機種代號」的地方會貼上機種標記；Apple Intelligence 依日期整理摘要。結果會寫進這份筆記的 Markdown，Obsidian 中也看得到。")
-            }
-            if let notebook {
-                ForEach(notebook.pagesByDay) { day in
-                    let pages = day.pages.map { notebook.pages[$0] }
-                    if pages.contains(where: { !$0.isBlank }) {
-                        Section(JournalLayout.heading(for: day.date)) {
-                            if let insights = notebook.days[day.date] {
-                                Text(insights.summary).font(.callout)
-                                ForEach(insights.keyPoints, id: \.self) { point in
-                                    Label(point, systemImage: "circle.fill").labelStyle(DotLabelStyle())
-                                }
-                                ForEach(insights.actionItems, id: \.self) { item in
-                                    Label(item, systemImage: "arrow.turn.down.right").font(.callout)
-                                }
-                            }
-                            let models = JournalMarkdown.linkedModels(in: pages)
-                            if !models.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 6) {
-                                        ForEach(models, id: \.path) { model in
-                                            Button {
-                                                onOpenModel(model.path)
-                                            } label: {
-                                                Label(model.code, systemImage: "link")
-                                                    .font(.caption.weight(.semibold))
-                                                    .padding(.horizontal, 10)
-                                                    .padding(.vertical, 5)
-                                                    .background(DS.Pastel.sky.color, in: Capsule())
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                    }
-                                }
-                            }
-                            HStack(spacing: 6) {
-                                ForEach(day.pages, id: \.self) { index in
-                                    Button("第 \(index + 1) 頁") { onShowPage(index) }
-                                        .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-    }
-}
-
-private struct DotLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            configuration.icon
-                .font(.system(size: 6))
-                .foregroundStyle(.tint)
-            configuration.title.font(.callout)
-        }
-    }
-}
-
-// MARK: - 選擇機種
 
 /// 標記對不到（或不確定）時選機種：先列出可能的，也可以搜尋代號、開案單號、客戶。
 struct ModelPickerSheet: View {

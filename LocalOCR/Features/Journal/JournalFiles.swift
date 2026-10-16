@@ -85,6 +85,18 @@ enum JournalFiles {
         return notebook
     }
 
+    /// 刪掉的頁面的圖片：這台裝置上有就刪除（同步時從遠端刪除），只在遠端的直接刪除遠端。
+    static func removePageImage(notePath: String, id: String, page: JournalPage, store: NotesStore) async {
+        let path = pageImagePath(notePath: notePath, id: id, page: page)
+        let sync = VaultSyncCenter.shared
+        if store.vault.exists(path) {
+            try? store.vault.delete(path)
+            sync.localDidChange()
+        } else if sync.pendingFiles.contains(where: { $0.path == LocalVault.normalize(path) }) {
+            await sync.deleteRemoteOnly(path)
+        }
+    }
+
     /// 目前 vault 中的機種清單（伺服器索引；沒有索引時依這台裝置上「代號 主卡」的檔名）。
     static func models() -> [ModelEntry] {
         let index = VaultIndexStore.shared

@@ -142,11 +142,46 @@ struct JournalDay: Codable, Equatable {
 
 // MARK: - 版面
 
-/// 頁面大小與排列：頁面一頁接一頁往下，中間留一點空隙（像攤開的筆記本）。
+/// 頁面的顯示方式：連續往下捲、一次一頁、兩頁並排（後兩種像翻書一樣左右翻頁）。
+enum JournalViewMode: String, CaseIterable, Identifiable, Sendable {
+    case scroll
+    case single
+    case spread
+
+    static let storageKey = "journal.viewMode"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .scroll: return "連續捲動"
+        case .single: return "一頁一張"
+        case .spread: return "兩頁並排"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .scroll: return "scroll"
+        case .single: return "rectangle.portrait"
+        case .spread: return "rectangle.split.2x1"
+        }
+    }
+
+    /// 左右翻頁（一次一頁或兩頁）。
+    var isPaged: Bool { self != .scroll }
+}
+
+/// 頁面大小與排列：連續捲動時頁面一頁接一頁往下，中間留一點空隙；翻頁時每一頁（或並排的兩頁）佔一格，格子左右排列。
+/// 每頁的筆跡都存成頁面座標，畫布上的位置依顯示方式換算（combine / split），換顯示方式不會改到內容。
 enum JournalLayout {
     static let pageSize = CGSize(width: 820, height: 1160)
     static let gap: CGFloat = 40
     static let margin: CGFloat = 28
+    /// 兩頁並排時中間的書背。
+    static let spine: CGFloat = 24
+    /// 翻頁時最後面「新增一頁」的寬度。
+    static let addPageWidth: CGFloat = 320
     /// 頁首（日期）的高度：筆跡從這下面開始比較好看，但寫在上面也可以。
     static let headerHeight: CGFloat = 72
 
@@ -154,6 +189,65 @@ enum JournalLayout {
 
     static func pageRect(_ index: Int) -> CGRect {
         CGRect(x: margin, y: margin + CGFloat(index) * (pageSize.height + gap), width: pageSize.width, height: pageSize.height)
+    }
+
+    /// 翻頁時一格的大小（一頁或並排的兩頁，含四周留白）。
+    static func slotSize(_ mode: JournalViewMode) -> CGSize {
+        switch mode {
+        case .scroll, .single: return CGSize(width: pageSize.width + margin * 2, height: pageSize.height + margin * 2)
+        case .spread: return CGSize(width: pageSize.width * 2 + spine + margin * 2, height: pageSize.height + margin * 2)
+        }
+    }
+
+    /// 第幾頁在第幾格。
+    static func slot(ofPage index: Int, mode: JournalViewMode) -> Int {
+        mode == .spread ? index / 2 : index
+    }
+
+    static func slotCount(pageCount: Int, mode: JournalViewMode) -> Int {
+        let count = max(pageCount, 1)
+        return mode == .spread ? (count + 1) / 2 : count
+    }
+
+    static func pageRect(_ index: Int, mode: JournalViewMode) -> CGRect {
+        switch mode {
+        case .scroll:
+            return pageRect(index)
+        case .single:
+            return CGRect(x: CGFloat(index) * slotSize(.single).width + margin, y: margin, width: pageSize.width, height: pageSize.height)
+        case .spread:
+            let slot = CGFloat(index / 2)
+            let side = CGFloat(index % 2)
+            return CGRect(x: slot * slotSize(.spread).width + margin + side * (pageSize.width + spine), y: margin, width: pageSize.width, height: pageSize.height)
+        }
+    }
+
+    /// 所有頁面佔的大小（不含最後面的「新增一頁」）。
+    static func canvasSize(pageCount: Int, mode: JournalViewMode) -> CGSize {
+        switch mode {
+        case .scroll:
+            return CGSize(width: canvasWidth, height: canvasHeight(pageCount: pageCount))
+        case .single, .spread:
+            let slot = slotSize(mode)
+            return CGSize(width: CGFloat(slotCount(pageCount: pageCount, mode: mode)) * slot.width, height: slot.height)
+        }
+    }
+
+    /// 畫布上某一點屬於第幾頁（空隙與書背算最近的一頁）。
+    static func pageIndex(at point: CGPoint, pageCount: Int, mode: JournalViewMode) -> Int {
+        let last = max(pageCount - 1, 0)
+        switch mode {
+        case .scroll:
+            return pageIndex(atY: point.y, pageCount: pageCount)
+        case .single:
+            return min(max(Int(floor(point.x / slotSize(.single).width)), 0), last)
+        case .spread:
+            let width = slotSize(.spread).width
+            let slot = max(Int(floor(point.x / width)), 0)
+            let local = point.x - CGFloat(slot) * width - margin
+            let side = local > pageSize.width + spine / 2 ? 1 : 0
+            return min(slot * 2 + side, last)
+        }
     }
 
     static func canvasHeight(pageCount: Int) -> CGFloat {
@@ -168,10 +262,10 @@ enum JournalLayout {
     }
 
     /// 每頁的筆跡合成整本的畫布筆跡。
-    static func combine(_ pages: [PKDrawing]) -> PKDrawing {
+    static func combine(_ pages: [PKDrawing], mode: JournalViewMode = .scroll) -> PKDrawing {
         var strokes: [PKStroke] = []
         for (index, drawing) in pages.enumerated() {
-            let origin = pageRect(index).origin
+            let origin = pageRect(index, mode: mode).origin
             for var stroke in drawing.strokes {
                 stroke.transform = stroke.transform.concatenating(CGAffineTransform(translationX: origin.x, y: origin.y))
                 strokes.append(stroke)
@@ -181,12 +275,13 @@ enum JournalLayout {
     }
 
     /// 整本的畫布筆跡分回每一頁（依每一筆的中心落在哪一頁）。
-    static func split(_ drawing: PKDrawing, pageCount: Int) -> [PKDrawing] {
+    static func split(_ drawing: PKDrawing, pageCount: Int, mode: JournalViewMode = .scroll) -> [PKDrawing] {
         var pages = Array(repeating: [PKStroke](), count: max(pageCount, 1))
         for stroke in drawing.strokes {
             let bounds = stroke.renderBounds
-            let index = pageIndex(atY: bounds.isNull ? 0 : bounds.midY, pageCount: pages.count)
-            let origin = pageRect(index).origin
+            let center = bounds.isNull ? CGPoint.zero : CGPoint(x: bounds.midX, y: bounds.midY)
+            let index = pageIndex(at: center, pageCount: pages.count, mode: mode)
+            let origin = pageRect(index, mode: mode).origin
             var moved = stroke
             moved.transform = stroke.transform.concatenating(CGAffineTransform(translationX: -origin.x, y: -origin.y))
             pages[index].append(moved)
