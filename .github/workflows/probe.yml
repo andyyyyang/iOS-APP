@@ -6,6 +6,8 @@ on:
   push:
     paths:
       - ".github/workflows/probe.yml"
+      - "LocalOCR/Features/JT/**"
+      - "LocalOCRTests/JtScreenshotProbeTests.swift"
 
 jobs:
   probe:
