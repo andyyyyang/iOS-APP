@@ -671,6 +671,7 @@ struct CommandPalette: View {
             Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
             Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),
             Item(id: "drawings", title: "圖面瀏覽與產能清單", detail: "", systemImage: WorkspaceTab.drawings.systemImage, isCommand: true, action: { workspace.open(.drawings) }),
+            Item(id: "jt", title: "JT 業務追蹤（甘特、行事曆、在製、機台）", detail: "", systemImage: WorkspaceTab.jt.systemImage, isCommand: true, action: { workspace.open(.jt) }),
             Item(id: "logistics", title: "物流追蹤（快遞單號）", detail: "", systemImage: WorkspaceTab.logistics.systemImage, isCommand: true, action: { workspace.open(.logistics) }),
             Item(id: "hub", title: "業務快查與物流中心", detail: "", systemImage: WorkspaceTab.hub.systemImage, isCommand: true, action: { workspace.open(.hub) }),
             Item(id: "contacts", title: "快速通訊錄查詢（分機、MVPN）", detail: "", systemImage: WorkspaceTab.contacts.systemImage, isCommand: true, action: { workspace.open(.contacts) }),

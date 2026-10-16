@@ -441,6 +441,8 @@ struct WorkspaceTabContent: View {
             DrawingsPage()
         case .logistics:
             LogisticsPage()
+        case .jt:
+            JtPage()
         case .hub:
             JentechHubPage()
         case .contacts:

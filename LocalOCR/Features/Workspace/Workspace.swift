@@ -10,6 +10,7 @@ enum WorkspaceTab: Hashable, Identifiable {
     case tasks
     case drawings
     case logistics
+    case jt
     case hub
     case contacts
     case codes
@@ -30,6 +31,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "tasks"
         case .drawings: return "drawings"
         case .logistics: return "logistics"
+        case .jt: return "jt"
         case .hub: return "hub"
         case .contacts: return "contacts"
         case .codes: return "codes"
@@ -58,6 +60,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case "tasks": self = .tasks
         case "drawings": self = .drawings
         case "logistics": self = .logistics
+        case "jt": self = .jt
         case "hub": self = .hub
         case "contacts": self = .contacts
         case "codes": self = .codes
@@ -83,6 +86,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "待辦"
         case .drawings: return "圖面"
         case .logistics: return "物流追蹤"
+        case .jt: return "JT 業務追蹤"
         case .hub: return "業務快查"
         case .contacts: return "通訊錄"
         case .codes: return "代碼查詢"
@@ -105,6 +109,7 @@ enum WorkspaceTab: Hashable, Identifiable {
         case .tasks: return "checkmark.square"
         case .drawings: return "square.stack.3d.up"
         case .logistics: return "shippingbox"
+        case .jt: return "chart.bar.xaxis"
         case .hub: return "truck.box"
         case .contacts: return "phone"
         case .codes: return "tag"

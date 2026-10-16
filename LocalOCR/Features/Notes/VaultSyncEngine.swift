@@ -1175,21 +1175,32 @@ final class VaultSyncCenter {
     }
 
     /// 其他裝置的修改：開著的筆記直接下載新版本；其他檔案、刪除或不知道是哪些檔案時完整同步一次。
+    /// 隱藏的路徑（`.jt/` 等）不在本機 vault：不同步，`.jt/` 交給 JT 業務追蹤（電腦的 JT 每分鐘寫一次心跳）。
     private func applyRemoteChanges(_ result: VaultChanges) async {
+        let allPaths = Set(result.changes.compactMap(\.path).map(LocalVault.normalize))
+        let hiddenPaths = allPaths.filter(NotesStore.isHidden)
+        if hiddenPaths.contains(where: { $0.hasPrefix(".jt/") }) {
+            Task { await JtSyncStore.shared.handleRemoteChanges(Array(hiddenPaths)) }
+        }
+        let changes = result.changes.filter { change in
+            guard let path = change.path else { return true }
+            return !NotesStore.isHidden(LocalVault.normalize(path))
+        }
+        guard result.reset || !changes.isEmpty else { return }
         // 關聯圖、標籤、待辦用的索引也跟著更新（不必下載那些筆記）
         VaultIndexStore.shared.scheduleRefresh()
-        let paths = Set(result.changes.compactMap(\.path).map(LocalVault.normalize))
+        let paths = allPaths.subtracting(hiddenPaths)
         let open = paths.intersection(openPaths)
         for path in open {
             await refreshOpenFile(path)
         }
         let needsFullSync = result.reset
-            || result.changes.contains { $0.path == nil || $0.op != "write" }
+            || changes.contains { $0.path == nil || $0.op != "write" }
             || !paths.subtracting(open).isEmpty
         guard needsFullSync else { return }
         if isSyncing {
             scheduleSync(after: 2)
-        } else if result.changes.contains(where: { $0.op == "delete" }) {
+        } else if changes.contains(where: { $0.op == "delete" }) {
             // 刪除通常是搬移或改名（Obsidian 的 Remotely Save 上傳新位置、刪除舊位置）：等一下讓兩邊都到齊，
             // 同步時才認得出是搬移（這台裝置上跟著搬），而不是刪除後再下載
             scheduleSync(after: 4)

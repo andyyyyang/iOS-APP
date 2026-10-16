@@ -1,15 +1,16 @@
 import SwiftUI
 
 /// 左側欄的「業務快查」：上方固定的快速查詢框（人名、分機、客戶、代碼、案件、單號一次查），
-/// 沒有輸入時是工具選單（看板、物流追蹤、通訊錄、代碼查詢、案件查詢、BPM 追蹤、編輯卡片、SOP 導覽）。
+/// 沒有輸入時是工具選單（看板、JT 業務追蹤、物流追蹤、通訊錄、代碼查詢、案件查詢、BPM 追蹤、編輯卡片、SOP 導覽）。
 struct ToolsPanel: View {
     @Environment(Workspace.self) private var workspace
     @State private var store = JentechStore.shared
     @State private var logistics = LogisticsStore.shared
+    @State private var jt = JtSyncStore.shared
     @State private var query = ""
     @State private var toast: String?
 
-    private static let menu: [WorkspaceTab] = [.hub, .logistics, .contacts, .codes, .cases, .bpm, .cards, .sop]
+    private static let menu: [WorkspaceTab] = [.hub, .jt, .logistics, .contacts, .codes, .cases, .bpm, .cards, .sop]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +47,7 @@ struct ToolsPanel: View {
         switch tab {
         case .hub: return "七個工具的總覽"
         case .logistics: return logistics.loadedAt == nil ? "快遞單號背景追蹤" : "追蹤中 \(logistics.active.count)"
+        case .jt: return jt.detailLine
         case .contacts: return store.contacts.isEmpty ? "分機與 MVPN" : "\(store.contacts.count) 筆"
         case .codes: return "客戶客代與 SAP T-Code"
         case .cases: return "開案 Checklist"
