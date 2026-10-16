@@ -34,6 +34,7 @@ jobs:
       - name: Probe
         env:
           TEST_RUNNER_PCC_PROBE: "1"
+          TEST_RUNNER_TOPBAR_SPLIT: "1"
         run: |
           status=0
           xcodebuild test -project LocalOCR.xcodeproj -scheme LocalOCR \

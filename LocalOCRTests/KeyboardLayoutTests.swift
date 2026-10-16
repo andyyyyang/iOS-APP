@@ -192,6 +192,13 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertEqual(PaletteModel.shared.keywords, ["通訊"])
         XCTAssertEqual(field.text ?? "", "")
 
+        // 實驗（Probe 工作流程）：先自己結束輸入，分開量收鍵盤與關列表各花多久
+        if ProcessInfo.processInfo.environment["TOPBAR_SPLIT"] == "1" {
+            let resigned = field.resignFirstResponder()
+            mark("resigned \(resigned)")
+            try await Task.sleep(for: .milliseconds(300))
+            mark("after resign wait")
+        }
         // 關閉：欄位清空、結束輸入
         workspace.showsPalette = false
         mark("closed")
