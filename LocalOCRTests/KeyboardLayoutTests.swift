@@ -86,6 +86,36 @@ final class KeyboardLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxY + 34, safeBottom + 1, "\(name)：輸入列底部（\(Int(frame.maxY + 34))）超出安全區域（\(Int(safeBottom))），被 Home 指示條蓋住")
     }
 
+    /// 全域搜尋：輸入關鍵字後結果列表要跟著變（使用者回報過列表不更新）。
+    func testSearchResultsFollowTyping() async throws {
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "keyboard-layout-\(UUID().uuidString)")))
+        workspace.showsPalette = true
+        let window = try host(workspace)
+        let field = try await waitFor { Self.find(SearchTextField.self, in: window) }
+        try await Task.sleep(for: .milliseconds(800))
+        let fieldFrame = field.convert(field.bounds, to: window)
+        let listArea = CGRect(x: 0, y: fieldFrame.maxY + 48, width: window.bounds.width, height: 260)
+        let before = Self.render(window)
+        field.insertText("zzqx")
+        field.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .milliseconds(800))
+        let after = Self.render(window)
+        let change = Self.difference(before, after, in: listArea, scale: window.screen.scale)
+        print("[probe] palette list changed after typing: \(String(format: "%.1f", change * 100))%")
+        for (image, suffix) in [(before, "before"), (after, "after")] {
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "palette-typing-\(suffix)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertGreaterThan(change, 0.02, "輸入關鍵字後結果列表沒有更新")
+        // 打空白：前面的字變成關鍵字，輸入欄清空接著打下一個
+        field.insertText(" ")
+        field.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(field.text ?? "", "", "打空白後輸入欄要清空")
+    }
+
     /// iPad 橫向打開鍵盤後，鍵盤上方只剩約 450 點（台前調度的小視窗更矮）。版面中只要有固定高度比這高的內容
     /// （例如一整排固定的按鈕），SwiftUI 就會把整個版面置中排版，頂部列跟著往上推。各種畫面都要放得進 320 點高。
     func testWorkspaceFitsInAShortSpace() throws {

@@ -18,7 +18,8 @@ struct CommandPalette: View {
     @State private var scope: Scope?
     @State private var selection = 0
     @AppStorage("search.recentKeywords") private var recentKeywordsRaw = ""
-    @FocusState private var focused: Bool
+    /// 改變時讓搜尋欄重新成為輸入焦點（點了建議之後接著打字）。
+    @State private var focusToken = 0
 
     /// 只看某一類結果。
     private enum Scope: Hashable {
@@ -100,18 +101,23 @@ struct CommandPalette: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(DS.textSecondary)
-                    TextField(keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 17))
-                        .focused($focused)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .submitLabel(.go)
-                        .onSubmit { run(items) }
+                    PaletteSearchField(
+                        text: $query,
+                        placeholder: keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…",
+                        focusToken: focusToken,
+                        onSubmit: { run(items) },
+                        onSeparator: { commit($0) },
+                        onDeleteWhenEmpty: { removeLastCondition() },
+                        onArrow: { delta in selection = min(max(selection + delta, 0), max(items.count - 1, 0)) },
+                        onTab: { if !query.trimmingCharacters(in: .whitespaces).isEmpty { commit(query) } },
+                        onEscape: { close() }
+                    )
+                    .frame(height: 52)
                     Button("取消") { close() }
                         .font(.subheadline)
                         .foregroundStyle(DS.textSecondary)
                         .buttonStyle(.plain)
+                        .keyboardShortcut(.cancelAction)
                 }
                 .padding(.horizontal, 16)
                 .frame(height: 52)
@@ -124,7 +130,8 @@ struct CommandPalette: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 1) {
+                        // 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）
+                        VStack(alignment: .leading, spacing: 1) {
                             if searchText.isEmpty && scope == nil {
                                 Text("可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字")
                                     .font(.caption)
@@ -138,7 +145,7 @@ struct CommandPalette: View {
                                     sectionHeader(title, count: count)
                                 case .item(let item, let index):
                                     self.row(item, isSelected: index == selection)
-                                        .id(index)
+                                        .id(item.id)
                                         .onTapGesture {
                                             selection = index
                                             run(items)
@@ -153,10 +160,12 @@ struct CommandPalette: View {
                             }
                         }
                         .padding(6)
+                        .id(searchText + "|" + (scope?.title ?? ""))
                     }
                     .frame(maxHeight: sizeClass == .compact ? 440 : 560)
                     .onChange(of: selection) { _, value in
-                        withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(value) }
+                        guard items.indices.contains(value) else { return }
+                        withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(items[value].id) }
                     }
                 }
             }
@@ -172,7 +181,6 @@ struct CommandPalette: View {
             keywords = []
             scope = nil
             selection = 0
-            focused = true
         }
         // 業務快查的資料：通訊錄與 BPM 讀一次後留著，索引與物流超過一分鐘才重新取得
         .task {
@@ -183,30 +191,9 @@ struct CommandPalette: View {
             if jentech.bpm == nil { await jentech.loadBpm() }
         }
         .task(id: sourcesVersion) { sources = currentSources() }
-        .onChange(of: query) { _, value in
-            selection = 0
-            // 打了空白或逗號（輸入法選完字之後）：前面的字變成一個關鍵字，接著打下一個
-            if let last = value.last, Self.separators.contains(last) { commit(value) }
-        }
+        .onChange(of: query) { _, _ in selection = 0 }
         .onChange(of: keywords) { _, _ in selection = 0 }
         .onChange(of: scope) { _, _ in selection = 0 }
-        .onKeyPress(.tab) {
-            guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return .ignored }
-            commit(query)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            selection = min(selection + 1, max(items.count - 1, 0))
-            return .handled
-        }
-        .onKeyPress(.upArrow) {
-            selection = max(selection - 1, 0)
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            close()
-            return .handled
-        }
     }
 
     private static func rows(_ sections: [Section]) -> [Row] {
@@ -461,7 +448,7 @@ struct CommandPalette: View {
             if !keywords.contains(keyword) { keywords.append(keyword) }
             remember(keyword)
         }
-        focused = true
+        focusToken += 1
     }
 
     /// 輸入中的字變成關鍵字（可以一次好幾個，用空白或逗號分開），輸入欄清空接著打下一個。
@@ -472,6 +459,15 @@ struct CommandPalette: View {
             remember(word)
         }
         query = ""
+    }
+
+    /// 搜尋欄是空的時按刪除鍵：拿掉最後一個關鍵字（沒有關鍵字時拿掉「只看」）。
+    private func removeLastCondition() {
+        if !keywords.isEmpty {
+            keywords.removeLast()
+        } else if scope != nil {
+            scope = nil
+        }
     }
 
     /// 最近用過的關鍵字（最多 8 個）。
@@ -682,4 +678,114 @@ struct CommandPalette: View {
     private func close() {
         workspace.showsPalette = false
     }
+}
+
+// MARK: - 搜尋欄
+
+/// 指令面板的搜尋欄（UIKit 的文字欄）：注音、拼音等輸入法還在組字時不搜尋、也不把空白當成分隔，選好字才更新結果；
+/// 打空白或逗號把前面的字變成關鍵字，空的時按刪除鍵拿掉最後一個關鍵字；上下鍵選擇、Tab 加入關鍵字、Esc 關閉。
+struct PaletteSearchField: UIViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var focusToken: Int
+    var onSubmit: () -> Void
+    var onSeparator: (String) -> Void
+    var onDeleteWhenEmpty: () -> Void
+    var onArrow: (Int) -> Void
+    var onTab: () -> Void
+    var onEscape: () -> Void
+
+    static let separators: Set<Character> = [" ", "　", ",", "，", "、"]
+
+    func makeUIView(context: Context) -> SearchTextField {
+        let field = SearchTextField()
+        field.font = .systemFont(ofSize: 17)
+        field.textColor = UIColor(DS.text)
+        field.tintColor = UIColor(DS.text)
+        field.autocorrectionType = .no
+        field.autocapitalizationType = .none
+        field.spellCheckingType = .no
+        field.returnKeyType = .go
+        field.clearButtonMode = .whileEditing
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.coordinator = context.coordinator
+        context.coordinator.focusToken = focusToken
+        DispatchQueue.main.async { field.becomeFirstResponder() }
+        return field
+    }
+
+    func updateUIView(_ field: SearchTextField, context: Context) {
+        context.coordinator.parent = self
+        field.placeholder = placeholder
+        // 組字中不動文字（會打斷輸入法）
+        if field.markedTextRange == nil, field.text != text {
+            field.text = text
+        }
+        if context.coordinator.focusToken != focusToken {
+            context.coordinator.focusToken = focusToken
+            DispatchQueue.main.async { field.becomeFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: PaletteSearchField
+        var focusToken = 0
+
+        init(parent: PaletteSearchField) {
+            self.parent = parent
+        }
+
+        @objc func textChanged(_ field: UITextField) {
+            // 輸入法還在組字（注音、拼音）：選好字才算
+            guard field.markedTextRange == nil else { return }
+            let value = field.text ?? ""
+            if let last = value.last, PaletteSearchField.separators.contains(last) {
+                parent.onSeparator(value)
+                field.text = ""
+                parent.text = ""
+                return
+            }
+            if parent.text != value { parent.text = value }
+        }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.onSubmit()
+            return false
+        }
+    }
+}
+
+/// 搜尋欄的文字欄：空的時按刪除鍵、外接鍵盤的上下鍵、Tab 與 Esc 交給指令面板。
+final class SearchTextField: UITextField {
+    weak var coordinator: PaletteSearchField.Coordinator?
+
+    override func deleteBackward() {
+        if (text ?? "").isEmpty, markedTextRange == nil {
+            coordinator?.parent.onDeleteWhenEmpty()
+        }
+        super.deleteBackward()
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let commands = [
+            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(moveUp)),
+            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(moveDown)),
+            UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(tab)),
+            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escape)),
+        ]
+        for command in commands { command.wantsPriorityOverSystemBehavior = true }
+        return commands
+    }
+
+    @objc private func moveUp() { coordinator?.parent.onArrow(-1) }
+    @objc private func moveDown() { coordinator?.parent.onArrow(1) }
+    @objc private func tab() { coordinator?.parent.onTab() }
+    @objc private func escape() { coordinator?.parent.onEscape() }
 }
