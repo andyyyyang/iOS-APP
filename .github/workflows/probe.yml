@@ -1,6 +1,6 @@
 name: Probe
 
-# 在 iOS 27 iPad 模擬器上只跑幾個實驗用的測試（比整套 CI 快）：Private Cloud Compute 沒有授權時的行為、頂部列搜尋欄每一步的耗時。
+# 在 iOS 27 iPad 模擬器上只跑幾個實驗用的測試（比整套 CI 快）：目前是 JT 甘特的截圖（假資料，以 base64 印在記錄裡）。
 on:
   workflow_dispatch:
   push:
@@ -33,13 +33,13 @@ jobs:
         run: defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
       - name: Probe
         env:
-          TEST_RUNNER_PCC_PROBE: "1"
-          TEST_RUNNER_TOPBAR_SPLIT: "1"
+          TEST_RUNNER_JT_SHOT: "1"
         run: |
           status=0
           xcodebuild test -project LocalOCR.xcodeproj -scheme LocalOCR \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
-            -only-testing:LocalOCRTests/KeyboardLayoutTests/testTopBarSearchFieldOpensTheResultsList \
+            -only-testing:LocalOCRTests/JtScreenshotProbeTests \
             CODE_SIGNING_ALLOWED=NO > probe.log 2>&1 || status=$?
           grep -E "error:|\[probe\]|crash|Crash|signal|Fatal|fatal|Test Case|\*\* TEST|Restarting" probe.log | head -80 || true
+          grep -E "^\[shot\]" probe.log || true
           echo "exit status $status"
