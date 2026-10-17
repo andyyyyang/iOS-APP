@@ -53,7 +53,7 @@ struct JournalNotebookView: View {
                 )
                 .ignoresSafeArea(.container, edges: .bottom)
             } else if loadFailed {
-                ContentUnavailableView("無法開啟日誌筆記本", systemImage: "exclamationmark.triangle", description: Text("找不到筆記本資料（\(notebookID)），可能還沒同步到這台裝置。"))
+                ContentUnavailableView("無法開啟日誌筆記本", systemImage: "exclamationmark.triangle", description: Text("尚未同步到這台裝置"))
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -40,9 +40,9 @@ enum VaultSyncError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .remoteLooksEmpty:
-            return "Railway 空間是空的，為了避免刪除這台裝置上的筆記，已停止同步。請確認 Obsidian 已上傳 vault。"
+            return "雲端是空的，已停止同步"
         case .tooManyDeletions(let local, let remote):
-            return "這次同步會刪除 \(local + remote) 個檔案，為了安全已先停止，等你確認。"
+            return "同步會刪除 \(local + remote) 個檔案，等你確認"
         case .uploadFailed(let detail):
             return "上傳失敗：\(detail)"
         }
@@ -1100,8 +1100,8 @@ final class VaultSyncCenter {
         guard force || storage != VaultBackend.storage else { return nil }
         if VaultBackend.current() != nil {
             await syncNow()
-            if let lastError { return "還有修改沒上傳到原本的空間（\(lastError)）。請連上網路後再切換。" }
-            if await engine.hasUnsyncedChanges() { return "還有修改沒上傳到原本的空間，請稍後再切換。" }
+            if let lastError { return "還有修改沒上傳：\(lastError)" }
+            if await engine.hasUnsyncedChanges() { return "還有修改沒上傳，請稍後再試" }
         }
         stopLiveSync()
         applySettings()

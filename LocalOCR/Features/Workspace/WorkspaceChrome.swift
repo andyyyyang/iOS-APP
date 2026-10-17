@@ -70,7 +70,7 @@ private struct TopBarSearchField: View {
     private var isActive: Bool { workspace.showsPalette && model.presentation == .attached }
 
     private var placeholder: String {
-        isActive && (!model.keywords.isEmpty || model.scope != nil) ? "再加一個關鍵字…" : "搜尋筆記或指令"
+        isActive && (!model.keywords.isEmpty || model.scope != nil) ? "再加一個關鍵字…" : "搜尋或問 AI"
     }
 
     var body: some View {
@@ -389,8 +389,8 @@ struct SyncIndicator: View {
         if !sync.isConfigured { return "與 Obsidian 配對" }
         if sync.isSyncing { return sync.progress.map { "下載中 \($0.done)/\($0.total)" } ?? "同步中" }
         if let error = sync.lastError { return error }
-        if let failed = sync.failedFiles.first { return "\(sync.failedFiles.count) 個檔案沒有同步（下次會再試）：\(failed)" }
-        if let date = sync.lastSyncedAt { return "已同步 \(date.formatted(.relative(presentation: .named)))，點一下立即同步" }
+        if let failed = sync.failedFiles.first { return "\(sync.failedFiles.count) 個檔案沒有同步：\(failed)" }
+        if let date = sync.lastSyncedAt { return "已同步 \(date.formatted(.relative(presentation: .named)))" }
         return "立即同步"
     }
 }

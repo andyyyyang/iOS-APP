@@ -54,12 +54,12 @@ enum JournalAI {
 
     /// 設定頁顯示的狀態。
     static var cloudStatus: String {
-        guard isEntitled else { return "等待 Apple 核准授權，目前用裝置端模型" }
+        guard isEntitled else { return "目前用裝置端" }
         #if canImport(FoundationModels) && compiler(>=6.4)
         guard #available(iOS 27.0, *) else { return "需要 iOS 27 以上" }
         return PrivateCloud.status
         #else
-        return "這個版本的 App 以 iOS 26 SDK 編譯，沒有 Private Cloud Compute"
+        return "此版本不支援"
         #endif
     }
 
@@ -136,11 +136,11 @@ private enum PrivateCloud {
         let model = PrivateCloudComputeLanguageModel()
         switch model.availability {
         case .available:
-            return model.quotaUsage.isLimitReached ? "今天的額度用完了（訂閱 iCloud+ 有較高的額度）" : "可以使用（需要網路）"
+            return model.quotaUsage.isLimitReached ? "今天的額度用完了" : "可以使用"
         case .unavailable(let reason):
             switch reason {
             case .deviceNotEligible: return "這台裝置不支援 Apple Intelligence"
-            case .systemNotReady: return "Apple Intelligence 還沒準備好（設定 › Apple Intelligence 與 Siri）"
+            case .systemNotReady: return "Apple Intelligence 還沒準備好"
             @unknown default: return "目前無法使用"
             }
         }
@@ -178,15 +178,15 @@ private enum PrivateCloud {
     static func describe(_ error: Error) -> String {
         if let error = error as? PrivateCloudComputeLanguageModel.Error {
             switch error {
-            case .networkFailure: return "連不上 Private Cloud Compute（網路）"
-            case .quotaLimitReached: return "今天的額度用完了（訂閱 iCloud+ 有較高的額度）"
+            case .networkFailure: return "連不上 Private Cloud Compute"
+            case .quotaLimitReached: return "今天的額度用完了"
             case .serviceUnavailable: return "Private Cloud Compute 暫時無法使用"
             @unknown default: return error.localizedDescription
             }
         }
         if let error = error as? Unavailable { return error.reason }
         // 沒有 Apple 核准的授權時，模型顯示可以用，但請求會失敗
-        return "請求失敗（App 可能還沒取得 Apple 的 Private Cloud Compute 授權）：\(error.localizedDescription)"
+        return "請求失敗：\(error.localizedDescription)"
     }
 }
 #endif

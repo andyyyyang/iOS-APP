@@ -147,12 +147,6 @@ private struct TasksColumn: View {
                 ForEach(Array(store.openTasks.prefix(40))) { task in
                     TaskCard(task: task, onToggle: { store.toggle(task) }, onOpen: { workspace.openNote(task.notePath) })
                 }
-                Text("在任何筆記寫「- [ ] 事項」就會出現在這裡。")
-                    .font(.footnote)
-                    .foregroundStyle(DS.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.textTertiary.opacity(0.5), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
             }
             .padding(.bottom, 16)
         }
@@ -246,7 +240,7 @@ private struct OutlinePanel: View {
                     .hoverEffect(.highlight)
                 }
                 if headings.isEmpty {
-                    PanelHint(text: "這則筆記沒有標題。以 # 開頭的一行會出現在大綱，點一下就能跳過去。")
+                    PanelHint(text: "沒有標題")
                 }
 
                 Rectangle().fill(DS.hairline).frame(height: 1).padding(.vertical, 10)
@@ -263,9 +257,6 @@ private struct OutlinePanel: View {
                             workspace.openNote(note.path)
                         }
                     }
-                }
-                if backlinks.isEmpty {
-                    PanelHint(text: "還沒有其他筆記連到這裡。")
                 }
             }
             .padding(.bottom, 16)
@@ -305,9 +296,6 @@ private struct LinksPanel: View {
                 ForEach(backlinks) { note in
                     LinkCard(title: note.title, detail: BacklinkContext.line(in: note, linkingTo: title, store: store)) { workspace.openNote(note.path) }
                 }
-                if backlinks.isEmpty {
-                    PanelHint(text: "在別的筆記寫 [[\(title)]] 就會出現在這裡。")
-                }
                 Text("這則筆記連到 · \(outgoing.count)")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(DS.text)
@@ -316,9 +304,6 @@ private struct LinksPanel: View {
                 ForEach(outgoing, id: \.self) { target in
                     let folder = (target as NSString).deletingLastPathComponent
                     LinkCard(title: WorkspaceTab.note(target).title, detail: folder.isEmpty ? "最上層" : folder) { workspace.openNote(target) }
-                }
-                if outgoing.isEmpty {
-                    PanelHint(text: "沒有連到其他筆記。")
                 }
             }
             .padding(.bottom, 16)
@@ -440,7 +425,7 @@ private struct AIPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 if isNotebook {
-                    PanelHint(text: "手寫筆記請按筆記上方的「AI」：先辨識手寫內容，再整理摘要與標籤。")
+                    PanelHint(text: "請按筆記上方的「AI」")
                 } else {
                     Button {
                         Task { await analyze() }
@@ -459,8 +444,6 @@ private struct AIPanel: View {
                             .font(.footnote)
                             .foregroundStyle(DS.warning)
                     }
-                    PanelHint(text: "在裝置上整理摘要、重點、待辦與標籤，內容不會離開這台裝置。編輯時也可以選取文字使用系統的「書寫工具」。")
-
                     if let insights {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("摘要").font(.caption.weight(.semibold)).foregroundStyle(DS.textSecondary)
@@ -497,7 +480,7 @@ private struct AIPanel: View {
                         }
                         Button {
                             workspace.editRequest = EditRequest(path: path) { NoteMarkdownEditing.insertingInsights(insights, into: $0) }
-                            applied = "已把摘要、重點與標籤加到筆記開頭"
+                            applied = "已加到筆記開頭"
                         } label: {
                             Text("加到筆記開頭").frame(maxWidth: .infinity)
                         }
@@ -506,7 +489,7 @@ private struct AIPanel: View {
                             Button {
                                 let tasks = insights.actionItems.map { "- [ ] " + $0 }.joined(separator: "\n")
                                 workspace.editRequest = EditRequest(path: path) { $0.trimmingCharacters(in: .newlines) + "\n\n## 待辦\n" + tasks + "\n" }
-                                applied = "已把待辦加到筆記最後"
+                                applied = "已加到筆記最後"
                             } label: {
                                 Text("把待辦加到筆記最後").frame(maxWidth: .infinity)
                             }

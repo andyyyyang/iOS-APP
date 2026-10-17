@@ -69,7 +69,7 @@ struct DrawingsPage: View {
             "圖面",
             subtitle: subtitle,
             query: mode == .drawings ? $filter.query : $capacity.query,
-            searchPlaceholder: mode == .drawings ? "搜尋機種、SID、SAP、原廠圖號、PO 號" : "搜尋圖號、SID、PO 號、機台、站別產能"
+            searchPlaceholder: mode == .drawings ? "搜尋機種" : "搜尋產能清單"
         ) {
             SegmentedPills(options: Mode.allCases.map { (value: $0, title: isCompact ? $0.shortTitle : $0.rawValue) }, selection: $mode)
         } chips: {
@@ -90,7 +90,6 @@ struct DrawingsPage: View {
                             Text(capacity.sourceDescription(meta))
                         }
                     }
-                    Text("「重新抽取」「寫回 catalog」要在電腦的 Obsidian 執行（需要 Python）")
                 } label: {
                     FilterChip(title: "匯出", systemImage: "square.and.arrow.up")
                 }
@@ -111,12 +110,12 @@ struct DrawingsPage: View {
             let ends = library.scopes.filter { $0.kind == .end }
             ForEach(all) { scope in scopeButton(scope) }
             if !ships.isEmpty {
-                Section("OSAT（PO 開給我們的封裝廠）") {
+                Section("OSAT") {
                     ForEach(ships) { scope in scopeButton(scope) }
                 }
             }
             if !ends.isEmpty {
-                Section("END USER（晶片端）") {
+                Section("END USER") {
                     ForEach(ends) { scope in scopeButton(scope) }
                 }
             }

@@ -15,7 +15,7 @@ struct TasksPage: View {
             VStack(alignment: .leading, spacing: 18) {
                 PageHeader("待辦", subtitle: "\(store.openTasks.count) 件未完成 · \(groups.count) 則筆記")
                 if groups.isEmpty {
-                    EmptyStateView(title: "沒有待辦事項", message: "在筆記中寫「- [ ] 事項」就會出現在這裡。")
+                    EmptyStateView(title: "沒有待辦事項")
                         .padding(.top, 40)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], alignment: .leading, spacing: 12) {

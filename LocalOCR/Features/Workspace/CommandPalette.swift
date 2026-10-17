@@ -197,7 +197,7 @@ struct CommandPalette: View {
                 .foregroundStyle(DS.textSecondary)
             PaletteSearchField(
                 text: Binding(get: { model.query }, set: { model.query = $0 }),
-                placeholder: keywords.isEmpty && scope == nil ? (sizeClass == .compact ? "搜尋或問 AI" : "搜尋或問 AI：筆記、人名分機、客戶、機種、JT 案件、指令") : "再加一個關鍵字…",
+                placeholder: keywords.isEmpty && scope == nil ? "搜尋或問 AI" : "再加一個關鍵字…",
                 focusToken: model.focusToken,
                 onSubmit: { run(items) },
                 onSeparator: { model.commit($0) },
@@ -215,13 +215,6 @@ struct CommandPalette: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
-    }
-
-    private var hint: String {
-        if isAttached {
-            return "可以直接打字或用 Apple Pencil 寫：人名、分機、客戶、機種、開案號、BPM、SOP、物流單號；空一格再加一個關鍵字"
-        }
-        return "可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字"
     }
 
     /// 建議與結果列表（置中的面板、頂部列下面的列表與 iPhone 下方的搜尋共用）。
@@ -266,13 +259,6 @@ struct CommandPalette: View {
     /// 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）。
     private func listBody(items: [Item], rows: [Row]) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            if searchText.isEmpty && scope == nil {
-                Text(hint)
-                    .font(.caption)
-                    .foregroundStyle(DS.textTertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 6)
-            }
             ForEach(rows) { row in
                 switch row {
                 case .header(_, let title, let count):
@@ -710,7 +696,7 @@ struct CommandPalette: View {
             Item(id: "journal", title: "打開日誌筆記本", detail: "今天的一頁", systemImage: "book.closed", isCommand: true, action: { workspace.openJournal() }),
             Item(id: "new-note", title: "新增筆記", detail: "", systemImage: "square.and.pencil", isCommand: true, action: { workspace.newTextNote() }),
             Item(id: "new-notebook", title: "新增手寫筆記", detail: "", systemImage: "pencil", isCommand: true, action: { workspace.newNotebook() }),
-            Item(id: "new-journal", title: "新增日誌筆記本", detail: "一頁一頁、依日期整理、#機種標記", systemImage: "book.closed", isCommand: true, action: { workspace.newJournal() }),
+            Item(id: "new-journal", title: "新增日誌筆記本", detail: "", systemImage: "book.closed", isCommand: true, action: { workspace.newJournal() }),
             Item(id: "new-tasks", title: "新增待辦清單", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.newTaskNote() }),
             Item(id: "graph", title: "開啟關聯圖", detail: "", systemImage: WorkspaceTab.graph.systemImage, isCommand: true, action: { workspace.open(.graph) }),
             Item(id: "tasks", title: "所有待辦", detail: "", systemImage: "checkmark.square", isCommand: true, action: { workspace.open(.tasks) }),
@@ -728,7 +714,7 @@ struct CommandPalette: View {
             Item(id: "scan", title: "掃描文件", detail: "", systemImage: "viewfinder", isCommand: true, action: { workspace.open(.scan) }),
             Item(id: "camera", title: "開啟相機連續拍照", detail: "", systemImage: "camera", isCommand: true, action: { workspace.showsCamera = true }),
             Item(id: "history", title: "掃描紀錄", detail: "", systemImage: "clock", isCommand: true, action: { workspace.open(.history) }),
-            Item(id: "fullscreen", title: workspace.isFullScreen ? "結束全螢幕" : "全螢幕", detail: "收起頂部列、功能列與側欄（⌃⌘F）", systemImage: workspace.isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", isCommand: true, action: { workspace.toggleFullScreen() }),
+            Item(id: "fullscreen", title: workspace.isFullScreen ? "結束全螢幕" : "全螢幕", detail: "⌃⌘F", systemImage: workspace.isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", isCommand: true, action: { workspace.toggleFullScreen() }),
             Item(id: "left", title: "切換左側欄", detail: "", systemImage: "sidebar.left", isCommand: true, action: { workspace.toggleLeft() }),
             Item(id: "right", title: "切換右側欄", detail: "", systemImage: "sidebar.right", isCommand: true, action: { workspace.toggleRight() }),
             Item(id: "search", title: "搜尋內文", detail: "", systemImage: "magnifyingglass", isCommand: true, action: { workspace.showLeft(.search) }),
@@ -765,7 +751,7 @@ struct CommandPalette: View {
 
     /// 問 AI 的一列：在 AI 搜尋開新對話回答（讀筆記與 vault，附上來源）。
     private func askItem(_ text: String) -> Item {
-        Item(id: "ask-ai", title: "問 AI：\(text)", detail: "在 AI 搜尋回答，會讀筆記與 vault 並附上來源", systemImage: "sparkles") {
+        Item(id: "ask-ai", title: "問 AI：\(text)", detail: "", systemImage: "sparkles") {
             askAI(text)
         }
     }

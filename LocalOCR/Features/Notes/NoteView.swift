@@ -134,7 +134,7 @@ struct NoteView: View {
     @ViewBuilder
     private var placeholder: some View {
         if text.isEmpty {
-            Text("開始書寫…　輸入 [[ 連到其他筆記，或按上方的 AI 請它幫忙")
+            Text("開始書寫…")
                 .font(.body)
                 .foregroundStyle(DS.textTertiary)
                 .padding(.horizontal, horizontalPadding)
@@ -293,11 +293,11 @@ struct NoteView: View {
     private func apply(_ result: String, for request: AIEditRequest) {
         let ns = text as NSString
         guard NSMaxRange(request.range) <= ns.length, ns.substring(with: request.range) == request.original else {
-            toast = "筆記在 AI 修改期間有變動，請重新選取後再試"
+            toast = "筆記已變動，請再試一次"
             return
         }
         controller.replace(range: request.range, with: result)
-        toast = "已套用 AI 的修改"
+        toast = "已套用"
     }
 
     /// [[筆記#標題]]：開啟後跳到標題或 ^區塊。

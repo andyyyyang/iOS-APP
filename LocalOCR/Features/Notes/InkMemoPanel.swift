@@ -73,7 +73,7 @@ struct InkMemoPanel: View {
                         activatesOnAppear: false
                     )
                 } else if loadFailed {
-                    Text("手寫備忘還沒下載到這台裝置，連上網路後再打開這則筆記。")
+                    Text("尚未下載，請連上網路")
                         .font(.footnote)
                         .foregroundStyle(DS.textTertiary)
                         .padding(14)

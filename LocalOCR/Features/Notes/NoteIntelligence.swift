@@ -12,7 +12,7 @@ enum NoteIntelligenceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable(let reason): return reason
-        case .empty: return "這份筆記還沒有可以整理的內容。"
+        case .empty: return "沒有可以整理的內容"
         }
     }
 }
@@ -68,7 +68,7 @@ enum NoteIntelligence {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw NoteIntelligenceError.empty }
         guard text.count <= editCharacterLimit else {
-            throw NoteIntelligenceError.unavailable("內容太長（\(text.count) 字）。請先選取要修改的段落（\(editCharacterLimit) 字以內）再請 AI 修改。")
+            throw NoteIntelligenceError.unavailable("內容太長，請選取 \(editCharacterLimit) 字以內")
         }
         #if canImport(FoundationModels)
         guard #available(iOS 26.0, *) else {

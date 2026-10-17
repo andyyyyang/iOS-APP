@@ -162,9 +162,6 @@ struct DrawingSpecSheet: View {
                 .foregroundStyle(DS.text)
                 .card(padding: 12)
             HStack(alignment: .firstTextBaseline) {
-                Text("存在 vault 的 \(DrawingsLibrary.dataRoot)/\(DrawingsLibrary.notesFile)，其他裝置也看得到。")
-                    .font(.caption)
-                    .foregroundStyle(DS.textTertiary)
                 Spacer()
                 if let tip {
                     Text(tip)

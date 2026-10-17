@@ -214,7 +214,7 @@ struct CapacityTableView: View {
                     processBadge(row.process)
                     if row.trimming != nil {
                         Chip(text: "外剪", pastel: .butter)
-                            .help("有外剪站（\(row.trimming?.text ?? "")）——外剪較難，試作時間長，交期要留意")
+                            .help("外剪 \(row.trimming?.text ?? "")")
                     }
                 }
             case .endUser:
@@ -277,11 +277,11 @@ struct CapacityTableView: View {
             Text(cell?.text ?? "✓")
                 .fontWeight(.bold)
                 .foregroundStyle(DS.success)
-                .help(["有這道流程（PO LIST 未填產能）", cell?.note ?? ""].filter { !$0.isEmpty }.joined(separator: "\n"))
+                .help(["有這道流程", cell?.note ?? ""].filter { !$0.isEmpty }.joined(separator: "\n"))
         case .catalog:
             Text(cell?.text ?? "")
                 .foregroundStyle(DS.textTertiary)
-                .help("來源：catalog.json（PO LIST 這一站沒填）")
+                .help("來源：catalog.json")
         case .po:
             if let cell {
                 let machines = DrawingCapacity.machines(for: capacity, column: station.id)
@@ -344,7 +344,7 @@ struct CapacityTableView: View {
         } else {
             Text("-")
                 .foregroundStyle(DS.textTertiary)
-                .help("理論產能表沒有收這一款")
+                .help("沒有理論產能")
         }
     }
 

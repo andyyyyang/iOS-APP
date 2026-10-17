@@ -35,7 +35,7 @@ struct InkBlockEditorView: View {
         NavigationStack {
             Group {
                 if loadFailed {
-                    ContentUnavailableView("無法開啟手寫區塊", systemImage: "icloud.slash", description: Text("筆跡資料還沒下載到這台裝置，請連上網路後再試。"))
+                    ContentUnavailableView("無法開啟手寫區塊", systemImage: "icloud.slash", description: Text("請連上網路後再試"))
                 } else if didLoad {
                     CanvasNotebook(
                         drawing: { handle.currentDrawing ?? block.pkDrawing },
@@ -173,5 +173,5 @@ struct InkBlockEditorView: View {
 private enum InkSaveError: LocalizedError {
     case render
 
-    var errorDescription: String? { "無法產生手寫區塊的圖片，請再試一次。" }
+    var errorDescription: String? { "無法產生圖片，請再試一次" }
 }

@@ -48,7 +48,7 @@ struct AIEditSheet: View {
                         .font(.footnote)
                         .foregroundStyle(DS.textSecondary)
                     if isTooLong {
-                        Text("內容太長，請先在筆記中選取要修改的段落（\(NoteIntelligence.editCharacterLimit) 字以內）。")
+                        Text("內容太長，請選取 \(NoteIntelligence.editCharacterLimit) 字以內")
                             .font(.subheadline)
                             .foregroundStyle(DS.warning)
                     }
@@ -63,7 +63,7 @@ struct AIEditSheet: View {
                     case .working:
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text("Apple Intelligence 正在修改…")
+                            Text("修改中…")
                                 .foregroundStyle(DS.textSecondary)
                         }
                         .padding(.vertical, 24)
@@ -108,9 +108,6 @@ struct AIEditSheet: View {
                     .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
                     .disabled(instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTooLong)
             }
-            Text("在裝置上用 Apple Intelligence 修改，內容不會上傳。套用後可以用復原（三指左滑或 ⌘Z）還原。")
-                .font(.caption)
-                .foregroundStyle(DS.textTertiary)
         }
     }
 

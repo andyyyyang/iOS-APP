@@ -82,7 +82,7 @@ struct NoteCard: View {
                 .foregroundStyle(DS.text)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-            Text(note.snippet.isEmpty ? (note.isNotebook ? "手寫內容" : note.isLocal ? "沒有其他文字" : "在雲端，打開時下載") : note.snippet)
+            Text(note.snippet.isEmpty ? (note.isNotebook ? "手寫內容" : note.isLocal ? "沒有其他文字" : "在雲端") : note.snippet)
                 .font(.system(size: 13))
                 .foregroundStyle(featured ? DS.onPastelSecondary : DS.textSecondary)
                 .lineLimit(3)

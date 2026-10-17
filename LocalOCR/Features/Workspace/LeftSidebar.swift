@@ -115,7 +115,7 @@ struct FileExplorer: View {
                         rowView(row)
                     }
                     if store.notes.isEmpty && store.folders.isEmpty {
-                        Text(sync.isConfigured ? "vault 是空的" : "與 Obsidian 配對後，整個 vault 會出現在這裡。")
+                        Text(sync.isConfigured ? "vault 是空的" : "尚未配對")
                             .font(.footnote)
                             .foregroundStyle(DS.textTertiary)
                             .padding(14)
@@ -328,7 +328,7 @@ struct FileExplorer: View {
                 if await workspace.moveNote(path, toFolder: folder) != nil { moved += 1 }
             }
             let name = NotesStore.folderTitle(folder)
-            toast = moved > 0 ? "已搬到「\(name)」" : "沒有搬移（可能是網路中斷或已有同名檔案）"
+            toast = moved > 0 ? "已搬到「\(name)」" : "搬移失敗"
         }
     }
 
@@ -482,7 +482,7 @@ struct SearchPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: "搜尋", subtitle: "標題、標籤與內文") { EmptyView() }
+            PanelHeader(title: "搜尋") { EmptyView() }
             SearchField(placeholder: "搜尋整個 vault", text: $query, autofocus: true)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
@@ -619,12 +619,6 @@ struct TagsPanel: View {
                                 .buttonStyle(.plain)
                             }
                         }
-                    }
-                    if store.tagCounts.isEmpty {
-                        Text("在筆記的屬性加入 tags，就會出現在這裡。")
-                            .font(.footnote)
-                            .foregroundStyle(DS.textTertiary)
-                            .padding(14)
                     }
                 }
                 .padding(.horizontal, 8)

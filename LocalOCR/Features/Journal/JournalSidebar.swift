@@ -50,7 +50,7 @@ enum JournalDeletePrompt {
     }
 
     static func message(pageCount: Int) -> String {
-        pageCount > 1 ? "這一頁的筆跡會一起刪除，無法復原。" : "這是唯一的一頁：會清成今天的空白頁。"
+        pageCount > 1 ? "無法復原" : "會清成空白頁"
     }
 }
 
@@ -74,11 +74,6 @@ struct JournalSidebarPanel: View {
     var body: some View {
         if session.path == path, let notebook = session.notebook, let actions = session.actions {
             content(notebook, actions: actions)
-        } else {
-            Text("打開日誌筆記本後，這裡會有月曆與每天的整理。")
-                .font(.footnote)
-                .foregroundStyle(DS.textTertiary)
-                .padding(.top, 8)
         }
     }
 
@@ -124,7 +119,7 @@ struct JournalSidebarPanel: View {
                 organizer.sweep(force: true, rebuild: true)
             }
         } message: {
-            Text("每一本日誌的每一頁重新辨識、每一天重新整理，再重新統整。頁面多時要一段時間，會在背景一件一件做。")
+            Text("會花一段時間")
         }
     }
 
@@ -347,7 +342,7 @@ struct JournalSidebarPanel: View {
                 if let insights = notebook.days[day], !insights.summary.isEmpty {
                     insightsView(insights)
                 } else {
-                    Text("還沒整理：停筆一陣子後會自動辨識與整理。")
+                    Text("還沒整理")
                         .font(.footnote)
                         .foregroundStyle(DS.textTertiary)
                 }
@@ -396,7 +391,7 @@ struct JournalSidebarPanel: View {
     private var statusText: String {
         if session.isOrganizing { return "正在整理這本…" }
         if let current = organizer.current { return current + "…" }
-        guard let finished = organizer.lastFinished else { return "自動整理：停筆後辨識，閒置或離開時整理" }
+        guard let finished = organizer.lastFinished else { return "自動整理" }
         let time = finished.formatted(date: .omitted, time: .shortened)
         let engine = organizer.lastEngine.map { "（" + $0.title + "）" } ?? ""
         return "已自動整理 · " + time + engine

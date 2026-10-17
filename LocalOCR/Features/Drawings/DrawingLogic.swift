@@ -471,7 +471,7 @@ enum DrawingTheory {
         lines.append("合計 \(n(item.dailyQty)) pcs/日" + (pct > 0 ? (pct < 100 ? "（已含 \(pct)% 稼動率）" : "（未打稼動折扣）") : ""))
         if !item.pressPn.isEmpty { lines.append("沖壓品號 \(item.pressPn)") }
         if !item.note.isEmpty { lines.append("備註：\(item.note)") }
-        if item.mismatch { lines.append("⚠ 日夜班回推的稼動率對不起來，數字要再確認") }
+        if item.mismatch { lines.append("⚠ 日夜班稼動率對不起來") }
         if let sourceMtime, !sourceMtime.isEmpty { lines.append("來源：理論產能表 \(sourceMtime)") }
         return lines.joined(separator: "\n")
     }

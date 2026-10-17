@@ -128,7 +128,7 @@ struct DrawingModelList: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     if visible.isEmpty {
-                        EmptyStateView(title: "沒有符合條件的機種", message: models.isEmpty ? nil : "調整搜尋或篩選條件試試看。")
+                        EmptyStateView(title: "沒有符合條件的機種")
                             .padding(.top, 30)
                     }
                     ForEach(visible) { model in
@@ -233,7 +233,7 @@ struct DrawingModelCard: View {
                 DrawingTypeBadge(type: model.type)
                 if !model.endUser.isEmpty {
                     Chip(text: model.endUser + (model.endUserGuessed ? "?" : ""))
-                        .help(model.endUserGuessed ? "catalog 沒登錄終端客戶，這是依客戶圖號字頭推定的（CV90 → Qualcomm）" : "")
+                        .help(model.endUserGuessed ? "推定" : "")
                 }
                 Chip(text: "\(model.drawings.count) 張")
             }

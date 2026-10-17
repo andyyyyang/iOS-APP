@@ -749,7 +749,7 @@ struct GraphPage: View {
                         workspace.openNote(path)
                     }
                     if model.data.nodes.isEmpty {
-                        EmptyStateView(title: "沒有可以顯示的筆記", message: "筆記之間還沒有連結，或都被篩選掉了。在筆記中寫 [[筆記名稱]] 就會出現在這裡。")
+                        EmptyStateView(title: "沒有可以顯示的筆記")
                     }
                 }
                 if isLaying {
@@ -847,7 +847,7 @@ struct GraphPage: View {
             .prefix(6)
         return VStack(alignment: .leading, spacing: 0) {
             if matches.isEmpty {
-                Text("關聯圖中沒有符合的筆記")
+                Text("沒有符合的筆記")
                     .font(.subheadline)
                     .foregroundStyle(DS.textTertiary)
                     .padding(12)

@@ -65,7 +65,7 @@ final class DrawingCanvasState {
             } else {
                 let header = (try? FileHandle(forReadingFrom: url).read(upToCount: 4)) ?? Data()
                 guard header == Data("%PDF".utf8) else {
-                    content = .failed(title: "PDF 讀取失敗", detail: DrawingPaths.baseName(path), hint: "這個檔不是 PDF（開頭不是 %PDF），可能是 CAD 檔改了副檔名")
+                    content = .failed(title: "PDF 讀取失敗", detail: DrawingPaths.baseName(path), hint: "不是 PDF 檔")
                     return
                 }
                 guard let loaded = PDFDocument(url: url) else {
@@ -275,7 +275,7 @@ struct DrawingViewer: View {
     private var canvas: some View {
         switch state.content {
         case .idle:
-            EmptyStateView(title: model == nil ? "沒有選取機種" : "\(model!.dwg) 找不到圖面檔案", message: model == nil ? "從左邊的清單選一個機種。" : nil)
+            EmptyStateView(title: model == nil ? "沒有選取機種" : "\(model!.dwg) 找不到圖面檔案")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loading:
             VStack(spacing: 10) {
@@ -292,7 +292,7 @@ struct DrawingViewer: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .cadOnly(let path):
             VStack(spacing: 14) {
-                EmptyStateView(title: "這一版是 CAD 原始檔", message: "\(DrawingPaths.baseName(path))\n沒有可預覽的格式")
+                EmptyStateView(title: "這一版是 CAD 原始檔", message: DrawingPaths.baseName(path))
                 Button {
                     Task { await share(path) }
                 } label: {

@@ -153,9 +153,9 @@ struct WorkspaceView: View {
     private var massDeletionMessage: String {
         guard let deletion = sync.blockedDeletion else { return "" }
         var parts: [String] = []
-        if deletion.local > 0 { parts.append("這台裝置上 \(deletion.local) 個（Obsidian 或其他裝置已經刪除）") }
-        if deletion.remote > 0 { parts.append("雲端 \(deletion.remote) 個（這台裝置上已經刪除）") }
-        return parts.joined(separator: "、") + "。為了安全先停下來了；確定是你刪除的就按「仍要同步」。搬移到其他資料夾的檔案不算刪除。"
+        if deletion.local > 0 { parts.append("這台裝置 \(deletion.local) 個") }
+        if deletion.remote > 0 { parts.append("雲端 \(deletion.remote) 個") }
+        return parts.joined(separator: "、")
     }
 }
 

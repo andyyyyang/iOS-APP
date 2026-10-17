@@ -232,7 +232,7 @@ final class DrawingsLibrary {
 
     private func fetch() async {
         guard let remote = VaultBackend.current() else {
-            error = "需要先與同步伺服器配對，才能讀取圖面資料。"
+            error = "尚未配對"
             return
         }
         isLoading = true
@@ -247,7 +247,7 @@ final class DrawingsLibrary {
                 let legacy = "ship:" + scope
                 scope = scopes.contains(where: { $0.id == legacy }) ? legacy : "all"
             }
-            error = result.models.isEmpty ? "找不到任何客戶資料（\(dataRoot) 與 \(Self.assetRoot)）" : nil
+            error = result.models.isEmpty ? "找不到客戶資料" : nil
             loadedAt = Date()
             await loadNotes(remote: remote)
         } catch {

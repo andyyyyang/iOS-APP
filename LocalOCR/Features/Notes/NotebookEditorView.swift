@@ -44,7 +44,7 @@ struct NotebookEditorView: View {
                 )
                 .ignoresSafeArea(.container, edges: .bottom)
             } else if loadFailed {
-                ContentUnavailableView("無法開啟手寫筆記", systemImage: "exclamationmark.triangle", description: Text("找不到筆跡資料（\(notebookID)），可能還沒同步到這台裝置。"))
+                ContentUnavailableView("無法開啟手寫筆記", systemImage: "exclamationmark.triangle", description: Text("尚未同步到這台裝置"))
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -290,7 +290,7 @@ private struct NotebookInspector: View {
                 case .recognizing(let part, let total):
                     Text(total > 1 ? "正在辨識手寫（\(part)／\(total)）…" : "正在辨識手寫…").foregroundStyle(.secondary)
                 case .thinking:
-                    Text("Apple Intelligence 正在整理…").foregroundStyle(.secondary)
+                    Text("整理中…").foregroundStyle(.secondary)
                 case .failed(let message):
                     Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                 case .idle:
@@ -298,8 +298,6 @@ private struct NotebookInspector: View {
                 }
             } header: {
                 Text("Apple Intelligence")
-            } footer: {
-                Text("手寫辨識與整理都在裝置上完成。結果會寫進這份筆記的 Markdown（Obsidian 中可以看到與搜尋），你在 Obsidian 寫的其他文字不會被改動。")
             }
 
             if let insights = archive?.insights {
