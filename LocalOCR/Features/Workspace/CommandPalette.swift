@@ -11,6 +11,7 @@ struct CommandPalette: View {
     @State private var jentech = JentechStore.shared
     @State private var logistics = LogisticsStore.shared
     @State private var jt = JtSyncStore.shared
+    @State private var keyboard = KeyboardFrame.shared
     @State private var index = VaultIndexStore.shared
     @State private var sources = GlobalSearch.Sources()
     /// 搜尋的狀態（頂部列的搜尋欄也用同一份）。
@@ -136,6 +137,8 @@ struct CommandPalette: View {
                     // 手寫時列表不接受點擊（筆畫不會誤點到結果或關掉列表）
                     .allowsHitTesting(!model.isWriting)
                 }
+            } else if sizeClass == .compact {
+                bottomLayout(results: results, items: items, rows: rows)
             } else {
                 ZStack(alignment: .top) {
                     Color.black.opacity(0.25)
@@ -194,7 +197,7 @@ struct CommandPalette: View {
                 .foregroundStyle(DS.textSecondary)
             PaletteSearchField(
                 text: Binding(get: { model.query }, set: { model.query = $0 }),
-                placeholder: keywords.isEmpty && scope == nil ? "搜尋筆記、人名分機、客戶、機種、案件或指令" : "再加一個關鍵字…",
+                placeholder: keywords.isEmpty && scope == nil ? (sizeClass == .compact ? "搜尋或問 AI" : "搜尋或問 AI：筆記、人名分機、客戶、機種、JT 案件、指令") : "再加一個關鍵字…",
                 focusToken: model.focusToken,
                 onSubmit: { run(items) },
                 onSeparator: { model.commit($0) },
@@ -406,6 +409,15 @@ struct CommandPalette: View {
         if sections.isEmpty, scope == nil, keywords.isEmpty {
             let fuzzy = commands.filter { Self.score($0.title, query: text) != nil }
             if !fuzzy.isEmpty { sections.append(Section(id: "more-commands", title: "其他指令", items: fuzzy)) }
+        }
+        // 問 AI：像問題或指令的句子（或什麼都找不到）放最上面，按 Return 就問；否則放在最後
+        if scope == nil {
+            let ask = Section(id: "ai", title: "AI", items: [askItem(text)])
+            if GlobalSearch.looksLikeQuestion(text) || sections.isEmpty {
+                sections.insert(ask, at: 0)
+            } else {
+                sections.append(ask)
+            }
         }
 
         // 建議：結果分在哪幾類（點了只看那一類）、可以再加的篩選關鍵字（依目前的結果算）
@@ -731,6 +743,53 @@ struct CommandPalette: View {
         }
         if title.lowercased().contains(query.lowercased()) { score += 20 }
         return score * 100 - haystack.count
+    }
+
+    /// 問 AI 的一列：在 AI 搜尋開新對話回答（讀筆記與 vault，附上來源）。
+    private func askItem(_ text: String) -> Item {
+        Item(id: "ask-ai", title: "問 AI：\(text)", detail: "在 AI 搜尋回答，會讀筆記與 vault 並附上來源", systemImage: "sparkles") {
+            askAI(text)
+        }
+    }
+
+    private func askAI(_ text: String) {
+        let assistant = KnowledgeAssistant.shared
+        let recentNote = workspace.tabs.last(where: { $0.notePath != nil })?.notePath
+        workspace.open(.start)
+        guard !assistant.isWorking else {
+            workspace.toast = "AI 還在回答上一個問題"
+            return
+        }
+        assistant.newConversation()
+        assistant.send(text, openNote: recentNote)
+    }
+
+    /// iPhone：搜尋欄在下面（從浮動搜尋列展開），結果列表在搜尋欄上面；鍵盤出現時一起貼在鍵盤上方。
+    private func bottomLayout(results: (sections: [Section], suggestions: [Suggestion]), items: [Item], rows: [Row]) -> some View {
+        GeometryReader { proxy in
+            let overlap = keyboard.overlap(with: proxy.frame(in: .global))
+            let bottom: CGFloat = overlap > 0 ? overlap + 8 : 8
+            let listHeight = max(proxy.size.height - bottom - 52 - 8 - 70, 140)
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture { close() }
+                VStack(spacing: 8) {
+                    panel(results: results, items: items, rows: rows, maxHeight: listHeight)
+                        .background(DS.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .shadow(color: .black.opacity(0.18), radius: 24, y: 8)
+                    fieldRow(items: items)
+                        .background(DS.card, in: Capsule())
+                        .overlay(Capsule().strokeBorder(DS.cardBorder, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.16), radius: 16, y: 6)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, bottom)
+            }
+            .animation(.easeOut(duration: 0.25), value: overlap)
+        }
     }
 
     private func run(_ items: [Item]) {

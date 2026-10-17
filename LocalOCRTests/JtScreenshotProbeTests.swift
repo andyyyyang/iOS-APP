@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 import UIKit
 import XCTest
@@ -66,6 +67,33 @@ final class JtScreenshotProbeTests: XCTestCase {
             window.isHidden = true
             self.window = nil
         }
+    }
+
+    /// iPhone 的浮動搜尋列，以及展開後輸入問題（問 AI 在最上面）。
+    func testPhoneFloatingSearchScreenshots() async throws {
+        guard ProcessInfo.processInfo.environment["JT_SHOT"] == "1" else { throw XCTSkip("只在 Probe 工作流程執行") }
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "jt-shot-phone-\(UUID().uuidString)")))
+        workspace.open(.tasks)
+        let root = HStack(spacing: 0) {
+            WorkspaceRoot()
+                .environment(workspace)
+                .environment(TemplateLibrary.shared)
+                .environment(ScanDraft())
+                .modelContainer(for: ScanRecord.self, inMemory: true)
+                .environment(\.horizontalSizeClass, .compact)
+                .frame(width: 390)
+            Spacer(minLength: 0)
+        }
+        let window = try host(root, style: .dark)
+        try await Task.sleep(for: .seconds(3))
+        printShot("phone-floating", window)
+        workspace.showsPalette = true
+        try await Task.sleep(for: .seconds(1))
+        PaletteModel.shared.query = "這週有哪些案件要出貨？"
+        try await Task.sleep(for: .seconds(4))
+        printShot("phone-search-ai", window)
+        workspace.showsPalette = false
+        try await Task.sleep(for: .seconds(1))
     }
 
     // MARK: - 假資料

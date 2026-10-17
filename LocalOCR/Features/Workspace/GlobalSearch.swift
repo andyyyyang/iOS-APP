@@ -100,6 +100,21 @@ enum GlobalSearch {
         let count: Int
     }
 
+    /// 看起來像問題或請 AI 做事的句子（問 AI 排在搜尋結果最上面）。
+    static func looksLikeQuestion(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lower = trimmed.lowercased()
+        let markers = ["?", "？", "嗎", "呢", "怎麼", "如何", "為什麼", "為何", "什麼", "哪些", "哪一", "哪裡", "多少", "幾個", "幾件", "幾天", "是否",
+                       "請", "幫我", "能不能", "可不可以", "整理", "比較", "總結", "摘要", "列出", "告訴我", "找出",
+                       "how ", "what ", "why ", "when ", "where ", "which ", "who ", "summarize", "explain"]
+        if markers.contains(where: { lower.contains($0) }) { return true }
+        // 長句通常是在問問題；機種、料號再長也是英數字，不算
+        let chinese = trimmed.unicodeScalars.filter { (0x4E00...0x9FFF).contains($0.value) }.count
+        if chinese >= 12 { return true }
+        return trimmed.split(separator: " ").count >= 5
+    }
+
     /// 只選某一區（或沒有關鍵字、只選了區）時，一區最多列幾筆。
     static let scopedLimit = 40
 

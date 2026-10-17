@@ -295,9 +295,15 @@ private struct CompactWorkspace: View {
     /// 拖曳中的側欄：往外拉出為正、往回推為負；nil 表示沒有在拖。
     @State private var leftDrag: CGFloat?
     @State private var rightDrag: CGFloat?
+    @State private var keyboard = KeyboardFrame.shared
 
     /// 螢幕邊緣可以拉出側欄的寬度（往右滑回上一頁不從這裡開始）。
     static let edgeWidth: CGFloat = 22
+
+    /// 浮動搜尋列：AI 搜尋首頁（有自己的輸入列）、全螢幕、搜尋展開與鍵盤出現時不顯示。
+    private var showsFloatingSearch: Bool {
+        !workspace.isFullScreen && !workspace.showsPalette && workspace.active != .start && keyboard.frame.isNull
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -315,8 +321,18 @@ private struct CompactWorkspace: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     CenterPane(allowsBackSwipe: left == 0 && right == 0, edgeExclusion: Self.edgeWidth)
+                        // 內容可以捲到浮動搜尋列上面，不會被蓋住最後幾行
+                        .safeAreaPadding(.bottom, showsFloatingSearch ? proxy.safeAreaInsets.bottom + 62 : 0)
                         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous))
                         .ignoresSafeArea(edges: .bottom)
+                }
+
+                // 下方的浮動搜尋列（AI 搜尋首頁有自己的輸入列、全螢幕與搜尋展開時不顯示）
+                if showsFloatingSearch {
+                    FloatingSearchBar()
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 6)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 if left > 0 || right > 0 {

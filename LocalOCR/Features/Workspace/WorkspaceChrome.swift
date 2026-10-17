@@ -598,13 +598,16 @@ struct CompactTopBar: View {
             }
             .buttonStyle(InkIconButtonStyle(size: 40, isActive: true))
             .accessibilityLabel("全螢幕")
-            Button {
-                workspace.showsPalette = true
-            } label: {
-                Image(systemName: "magnifyingglass")
+            // 搜尋改用下方的浮動搜尋列（FloatingSearchBar）；AI 搜尋首頁沒有浮動列，留一個放大鏡
+            if workspace.active == .start || workspace.isFullScreen {
+                Button {
+                    workspace.showsPalette = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .buttonStyle(InkIconButtonStyle(size: 40, isActive: true))
+                .accessibilityLabel("搜尋筆記或指令")
             }
-            .buttonStyle(InkIconButtonStyle(size: 40, isActive: true))
-            .accessibilityLabel("搜尋筆記或指令")
             Button(action: onTabs) {
                 Text("\(workspace.tabs.count)")
                     .font(.system(size: 12, weight: .bold))
@@ -719,5 +722,51 @@ struct TabCountMenu: View {
                 Label("關閉全部分頁（\(workspace.tabs.count) 個）", systemImage: "xmark.rectangle.portrait")
             }
         }
+    }
+}
+
+/// iPhone 下方的浮動搜尋列：點一下展開搜尋（筆記、業務快查、JT、指令，也可以直接問 AI），右邊的按鈕打開 AI 搜尋。
+/// 鍵盤出現時被鍵盤蓋住（工作區不讓開鍵盤），展開的搜尋欄自己貼在鍵盤上方。
+struct FloatingSearchBar: View {
+    @Environment(Workspace.self) private var workspace
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button {
+                workspace.showsPalette = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(DS.textSecondary)
+                    Text("搜尋或問 AI")
+                        .font(.system(size: 16))
+                        .foregroundStyle(DS.textSecondary)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 18)
+                .frame(maxWidth: .infinity, minHeight: 50)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("搜尋或問 AI")
+            Button {
+                workspace.open(.start)
+            } label: {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(DS.onPrimary)
+                    .frame(width: 40, height: 40)
+                    .background(DS.primary, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 5)
+            .accessibilityLabel("AI 搜尋")
+        }
+        .background(DS.card, in: Capsule())
+        .overlay(Capsule().strokeBorder(DS.cardBorder, lineWidth: 1))
+        .shadow(color: .black.opacity(0.16), radius: 18, y: 6)
+        .padding(.horizontal, 16)
     }
 }

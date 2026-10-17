@@ -100,4 +100,17 @@ final class GlobalSearchTests: XCTestCase {
         XCTAssertEqual(groups.first?.hits.count, GlobalSearch.Section.contacts.limit)
         XCTAssertEqual(groups.first?.total, 30)
     }
+
+    func testQuestionsAreAskedToAIFirst() {
+        XCTAssertTrue(GlobalSearch.looksLikeQuestion("這週有哪些案件要出貨？"))
+        XCTAssertTrue(GlobalSearch.looksLikeQuestion("幫我整理今天的待辦"))
+        XCTAssertTrue(GlobalSearch.looksLikeQuestion("Amkor 的樣品進度如何"))
+        XCTAssertTrue(GlobalSearch.looksLikeQuestion("how many cases are overdue"))
+        XCTAssertTrue(GlobalSearch.looksLikeQuestion("上次跟客戶開會討論的散熱片尺寸變更"), "長句通常是在問問題")
+        XCTAssertFalse(GlobalSearch.looksLikeQuestion("AP25"))
+        XCTAssertFalse(GlobalSearch.looksLikeQuestion("Amkor"))
+        XCTAssertFalse(GlobalSearch.looksLikeQuestion("0851-563HS"))
+        XCTAssertFalse(GlobalSearch.looksLikeQuestion("101434675 0851563HS (CV90-94312)"), "長的機種名稱不是問題")
+        XCTAssertFalse(GlobalSearch.looksLikeQuestion("  "))
+    }
 }
