@@ -338,7 +338,7 @@ final class JtTests: XCTestCase {
         let bar = JtBarGeometry(item: item, timeline: timeline)
         XCTAssertEqual(bar.x0, 110)
         XCTAssertEqual(bar.x1, 500, "結束那天整天都畫")
-        XCTAssertEqual(bar.progressX, 380, "進度填到 progressDate")
+        XCTAssertEqual(bar.progressX, 375, "進度填到 progressDate 那天的正中間（今天的藍線）")
         XCTAssertEqual(bar.flagX, 500)
 
         let dragged = JtBarGeometry(item: item, timeline: timeline, dragDays: 3)
@@ -349,7 +349,7 @@ final class JtTests: XCTestCase {
         var late = item
         late.end = "2026-10-01"
         late.etd = "2026-10-01"
-        XCTAssertEqual(JtBarGeometry(item: late, timeline: timeline).x1, 380, "需要注意的案件延伸到今天")
+        XCTAssertEqual(JtBarGeometry(item: late, timeline: timeline).x1, 375, "需要注意的案件延伸到今天的藍線")
     }
 
     func testMarkersCloseTogetherMergeIntoACount() {

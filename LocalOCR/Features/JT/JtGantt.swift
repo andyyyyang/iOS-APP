@@ -218,14 +218,16 @@ struct JtBarGeometry {
         }
         x0 = timeline.x(day: startDay)
         var right = timeline.x(day: endDay) + dayWidth
+        // 今天的藍線畫在今天的正中間：延伸到今天、填到目前進度都停在同一條線上（同桌面版）
+        let todayLine = timeline.todayX + dayWidth / 2
         if item.tone == "attention", !item.isClosed {
-            right = max(right, timeline.x(day: timeline.todayDay) + dayWidth)
+            right = max(right, todayLine)
         }
         x1 = max(right, x0 + 4)
         if item.isClosed || item.tone == "ready" {
             progressX = x1
         } else if let progress = JtDayNumber.number(item.progressDate) {
-            progressX = min(max(timeline.x(day: progress) + dayWidth, x0), x1)
+            progressX = min(max(timeline.x(day: progress) + dayWidth / 2, x0), x1)
         } else {
             progressX = x0
         }
@@ -1138,7 +1140,7 @@ struct JtGroupBar: View {
         let ends = group.members.compactMap { JtDayNumber.number($0.end) }
         let x0 = timeline.x(group.row.start) ?? starts.min().map { timeline.x(day: $0) } ?? 0
         var x1 = (timeline.x(group.row.end) ?? ends.max().map { timeline.x(day: $0) } ?? x0) + dayWidth
-        if group.attention > 0 { x1 = max(x1, timeline.todayX + dayWidth) }
+        if group.attention > 0 { x1 = max(x1, timeline.todayX + dayWidth / 2) }
         let midY = JtGanttRow.groupHeight / 2
         return ZStack(alignment: .topLeading) {
             Capsule()
