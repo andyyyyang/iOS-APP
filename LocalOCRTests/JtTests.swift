@@ -403,4 +403,56 @@ final class JtTests: XCTestCase {
         XCTAssertEqual(shown.endUserName, "Nvidia")
         XCTAssertEqual(shown.endUserDomain, "", "換了終端客戶：舊的 logo 網域不再適用")
     }
+
+    // MARK: - 待辦（今天分頁與右側欄）
+
+    private static let agendaCalendar = #"""
+    { "schema": "jt.v1", "kind": "calendar", "rev": "a", "generatedAt": 1,
+      "data": { "today": "2026-10-16",
+        "items": [
+          { "id": "todo:A@2026-10-12", "kind": "todo", "title": "回覆報價", "start": "2026-10-12", "allDay": true, "entryId": "A" },
+          { "id": "todo:B", "kind": "todo", "title": "寄樣品", "start": "2026-10-16", "allDay": true, "entryId": "B", "done": true },
+          { "id": "todo:C", "kind": "todo", "title": "打電話", "start": "2026-10-16", "allDay": true, "entryId": "C" },
+          { "id": "meet:M", "kind": "meeting", "title": "週會", "start": "2026-10-16T09:30", "allDay": false },
+          { "id": "ms:D", "kind": "milestone", "title": "首試", "start": "2026-10-20", "allDay": true },
+          { "id": "etd:E", "kind": "etd", "title": "出貨", "start": "2026-10-20", "allDay": true }
+        ],
+        "days": { "2026-10-16": { "carried": ["todo:A@2026-10-12"],
+          "groups": [{ "kind": "todo", "ids": ["todo:A@2026-10-12", "todo:B", "todo:C"] }, { "kind": "meeting", "ids": ["meet:M"] }] } } },
+      "clocks": {} }
+    """#
+
+    func testAgendaFollowsJtDaysAndSinksFinishedTodos() throws {
+        let store = makeStore()
+        XCTAssertTrue(store.apply(kind: "calendar", data: snapshot(Self.agendaCalendar)))
+
+        var agenda = store.agenda(on: "2026-10-16")
+        XCTAssertEqual(agenda.map(\.kind), ["todo", "meeting"])
+        XCTAssertEqual(agenda[0].items.map(\.id), ["todo:A@2026-10-12", "todo:C", "todo:B"], "完成的沉到該段最下面")
+        XCTAssertTrue(agenda[0].carried.contains("todo:A@2026-10-12"), "沒做完的待辦延續到今天")
+
+        store.setTodo("C", ["done": true])
+        agenda = store.agenda(on: "2026-10-16")
+        XCTAssertEqual(agenda[0].items.map(\.id), ["todo:A@2026-10-12", "todo:B", "todo:C"], "剛打勾的馬上沉下去")
+
+        store.createTodo(title: "新的待辦", date: "2026-10-16")
+        agenda = store.agenda(on: "2026-10-16")
+        XCTAssertEqual(agenda[0].items.count, 4)
+        XCTAssertTrue(agenda[0].items[1].isPending, "還沒送到 JT 的新待辦排在未完成的後面")
+        XCTAssertEqual(agenda[0].items[1].title, "新的待辦")
+
+        XCTAssertEqual(store.agenda(on: "2026-10-20").map(\.kind), ["milestone", "etd"], "JT 沒排的日子依種類分段")
+        XCTAssertTrue(store.agenda(on: "2026-10-21").isEmpty)
+    }
+
+    func testCalendarMarksCountOpenItemsPerDay() throws {
+        let store = makeStore()
+        XCTAssertTrue(store.apply(kind: "calendar", data: snapshot(Self.agendaCalendar)))
+        store.setTodo("C", ["done": true])
+        let marks = JtSyncStore.agendaMarks(items: store.displayItems(), days: store.calendar?.days ?? [:])
+        XCTAssertEqual(marks["2026-10-16"]?.total, 4, "JT 排好的日子含延續的待辦")
+        XCTAssertEqual(marks["2026-10-16"]?.open, 2)
+        XCTAssertEqual(marks["2026-10-20"]?.open, 2)
+        XCTAssertNil(marks["2026-10-21"])
+    }
 }

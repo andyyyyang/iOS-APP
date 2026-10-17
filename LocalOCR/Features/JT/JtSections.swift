@@ -9,34 +9,28 @@ struct JtDayView: View {
     let onOpenCase: (String) -> Void
 
     @State private var selected = ""
-    @State private var newTodo = ""
-    @State private var isEditingNote = false
-    @State private var noteDraft = ""
     @Environment(\.horizontalSizeClass) private var sizeClass
-
-    private static let kindOrder = ["todo", "meeting", "milestone", "etd", "po"]
 
     var body: some View {
         let today = store.calendar?.today ?? store.meta?.today ?? JtDates.string(Date())
         let date = selected.isEmpty ? today : selected
-        let items = store.displayItems()
+        let sections = store.agenda(on: date)
         VStack(spacing: 0) {
             dateStrip(today: today, selected: date)
             Rectangle().fill(DS.hairline).frame(height: 1)
             ToolScroll {
                 header(date: date, today: today)
-                let groups = sections(date: date, items: items)
-                if groups.isEmpty {
+                if sections.isEmpty {
                     Text("這天沒有項目")
                         .font(.footnote)
                         .foregroundStyle(DS.textTertiary)
                         .padding(.vertical, 8)
                 }
-                ForEach(groups, id: \.kind) { group in
-                    section(group.kind, items: group.items, carried: group.carried)
+                ForEach(sections) { section in
+                    JtAgendaSectionView(section: section, store: store, onOpenCase: onOpenCase)
                 }
-                addTodo(date: date)
-                noteCard(date: date)
+                JtAddTodoField(store: store, date: date)
+                JtDayNoteCard(store: store, date: date)
                 if let error = store.calendar?.outlookError, !error.isEmpty {
                     Text("Outlook 同步問題：\(error)")
                         .font(.caption)
@@ -44,7 +38,6 @@ struct JtDayView: View {
                 }
             }
         }
-        .onChange(of: date) { _, _ in isEditingNote = false }
     }
 
     private func dateStrip(today: String, selected: String) -> some View {
@@ -69,7 +62,7 @@ struct JtDayView: View {
         let date = JtDates.date(day) ?? Date()
         let parts = Calendar(identifier: .gregorian).dateComponents([.day, .weekday], from: date)
         let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
-        let isHoliday = store.calendar?.holidays[day] != nil || parts.weekday == 1 || parts.weekday == 7
+        let isHoliday = store.calendar?.holidays[day] != nil || JournalCalendar.isDayOff(day)
         let count = store.calendar?.days[day]?.groups.reduce(0) { $0 + $1.ids.count } ?? 0
         return Button { self.selected = day } label: {
             VStack(spacing: 2) {
@@ -95,7 +88,7 @@ struct JtDayView: View {
             Text(date == today ? "今天 \(JtDates.short(date))" : JtDates.short(date))
                 .font(.headline)
                 .foregroundStyle(DS.text)
-            if let holiday = store.calendar?.holidays[date], !holiday.isEmpty {
+            if let holiday = store.calendar?.holidays[date] ?? TaiwanHolidays.holiday(on: date), !holiday.isEmpty {
                 Text(holiday)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(DS.danger)
@@ -106,195 +99,6 @@ struct JtDayView: View {
             Spacer(minLength: 0)
         }
         .padding(.top, 8)
-    }
-
-    /// 這天的清單：照 JT 排好的 `days[date].groups`；範圍外的日子用落在這天的項目依種類分段。
-    private func sections(date: String, items: [String: JtCalItem]) -> [(kind: String, items: [JtCalItem], carried: Set<String>)] {
-        var result: [(kind: String, items: [JtCalItem], carried: Set<String>)] = []
-        if let day = store.calendar?.days[date] {
-            for group in day.groups {
-                let list = group.ids.compactMap { items[$0] }
-                if !list.isEmpty { result.append((group.kind, list, day.carried)) }
-            }
-        } else {
-            let onDay = items.values.filter { $0.day == date }.sorted { (a: JtCalItem, b: JtCalItem) -> Bool in a.start < b.start }
-            for kind in Self.kindOrder {
-                let list = onDay.filter { $0.kind == kind }
-                if !list.isEmpty { result.append((kind, list, [])) }
-            }
-        }
-        let added = store.pendingTodos(on: date)
-        if !added.isEmpty {
-            if let index = result.firstIndex(where: { $0.kind == "todo" }) {
-                result[index].items += added
-            } else {
-                result.insert(("todo", added, []), at: 0)
-            }
-        }
-        return result
-    }
-
-    private func section(_ kind: String, items: [JtCalItem], carried: Set<String>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(JtPalette.calendarKindTitles[kind] ?? kind)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(DS.textSecondary)
-            VStack(spacing: 0) {
-                ForEach(items) { item in
-                    itemRow(item, isCarried: carried.contains(item.id))
-                    if item.id != items.last?.id {
-                        Rectangle().fill(DS.hairline).frame(height: 0.5).padding(.leading, 36)
-                    }
-                }
-            }
-            .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.radius, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
-        }
-    }
-
-    private func itemRow(_ item: JtCalItem, isCarried: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            if item.isCheckable {
-                Button {
-                    guard !item.entryId.isEmpty else { return }
-                    store.setTodo(item.entryId, ["done": !item.done])
-                } label: {
-                    Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(item.done ? DS.success : DS.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .disabled(item.entryId.isEmpty)
-            } else {
-                Image(systemName: icon(for: item.kind))
-                    .font(.system(size: 14))
-                    .foregroundStyle(item.overdue ? DS.danger : DS.textSecondary)
-                    .frame(width: 18)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if let time = item.time {
-                        Text(time).font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(DS.textSecondary)
-                    }
-                    Text(item.title)
-                        .font(.subheadline)
-                        .foregroundStyle(item.done ? DS.textTertiary : (item.overdue ? DS.danger : DS.text))
-                        .strikethrough(item.done)
-                        .lineLimit(2)
-                    if item.isPending || store.isPending(entryId: item.entryId) {
-                        Image(systemName: "clock").font(.system(size: 10)).foregroundStyle(DS.textTertiary)
-                    }
-                }
-                let detail = detailText(item)
-                if !detail.isEmpty {
-                    Text(detail).font(.caption).foregroundStyle(DS.textSecondary).lineLimit(2)
-                }
-                if isCarried {
-                    Text("延續自 \(JtDates.short(item.day))")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(DS.warning)
-                }
-            }
-            Spacer(minLength: 0)
-            if let url = URL(string: item.joinURL), !item.joinURL.isEmpty {
-                Link(destination: url) {
-                    Image(systemName: "video").font(.system(size: 14))
-                }
-                .buttonStyle(CircleIconButtonStyle(size: 30))
-            }
-            if !item.caseId.isEmpty {
-                Button { onOpenCase(item.caseId) } label: {
-                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
-                }
-                .buttonStyle(CircleIconButtonStyle(size: 30))
-                .accessibilityLabel("打開案件")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-
-    private func detailText(_ item: JtCalItem) -> String {
-        var parts: [String] = [item.subtitle, item.customer]
-        if !item.progress.isEmpty { parts.append("進度 " + item.progress) }
-        parts.append(item.location)
-        if !item.mailSender.isEmpty { parts.append("信件：" + item.mailSender) }
-        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    private func icon(for kind: String) -> String {
-        switch kind {
-        case "meeting": return "person.2"
-        case "milestone": return "diamond"
-        case "etd": return "flag"
-        case "po": return "shippingbox"
-        default: return "circle"
-        }
-    }
-
-    private func addTodo(date: String) -> some View {
-        HStack(spacing: 8) {
-            TextField("新增待辦（寫到 Outlook）", text: $newTodo)
-                .textFieldStyle(.plain)
-                .font(.subheadline)
-                .onSubmit { submitTodo(date: date) }
-            Button("新增") { submitTodo(date: date) }
-                .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
-                .disabled(newTodo.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(DS.control, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
-    }
-
-    private func submitTodo(date: String) {
-        let title = newTodo.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return }
-        store.createTodo(title: title, date: date)
-        newTodo = ""
-    }
-
-    private func noteCard(date: String) -> some View {
-        let note = store.note(on: date)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("備忘").font(.caption.weight(.semibold)).foregroundStyle(DS.textSecondary)
-                Spacer()
-                if isEditingNote {
-                    Button("取消") { isEditingNote = false }
-                        .font(.footnote)
-                        .foregroundStyle(DS.textSecondary)
-                    Button("儲存") {
-                        store.setNote(date, noteDraft)
-                        isEditingNote = false
-                    }
-                    .buttonStyle(PillButtonStyle(kind: .primary, compact: true))
-                } else {
-                    Button(note.isEmpty ? "寫備忘" : "編輯") {
-                        noteDraft = note
-                        isEditingNote = true
-                    }
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(DS.link)
-                }
-            }
-            if isEditingNote {
-                TextEditor(text: $noteDraft)
-                    .font(.subheadline)
-                    .frame(minHeight: 120)
-                    .scrollContentBackground(.hidden)
-            } else if !note.isEmpty {
-                Text((try? AttributedString(markdown: note, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(note))
-                    .font(.subheadline)
-                    .foregroundStyle(DS.text)
-                    .textSelection(.enabled)
-            } else {
-                Text("這天還沒有備忘").font(.footnote).foregroundStyle(DS.textTertiary)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .pastelCard(.butter, padding: 0)
     }
 }
 

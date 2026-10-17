@@ -46,6 +46,26 @@ final class JtScreenshotProbeTests: XCTestCase {
             window.isHidden = true
             self.window = nil
         }
+
+        // 右側欄的待辦（JT 的待辦與行事曆）
+        let workspace = Workspace(defaults: try XCTUnwrap(UserDefaults(suiteName: "jt-shot-\(UUID().uuidString)")))
+        for style in [UIUserInterfaceStyle.dark, .light] {
+            let panel = HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                JtAgendaPanel(store: store)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 14)
+                    .frame(width: 330)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(DS.sidebar)
+            }
+            .environment(workspace)
+            let window = try host(panel, style: style)
+            try await Task.sleep(for: .seconds(3))
+            printShot(style == .dark ? "agenda-dark" : "agenda-light", window)
+            window.isHidden = true
+            self.window = nil
+        }
     }
 
     // MARK: - 假資料
@@ -57,6 +77,7 @@ final class JtScreenshotProbeTests: XCTestCase {
         let today = JtDayNumber.number(JtDates.string(Date())) ?? 0
         XCTAssertTrue(store.apply(kind: "meta", data: try snapshot("meta", Self.meta(today: today))))
         XCTAssertTrue(store.apply(kind: "cases", data: try snapshot("cases", Self.cases(today: today))))
+        XCTAssertTrue(store.apply(kind: "calendar", data: try snapshot("calendar", Self.calendar(today: today))))
         return store
     }
 
@@ -164,6 +185,28 @@ final class JtScreenshotProbeTests: XCTestCase {
         layouts["status"] = grouped("status", key: { $0["tone"] as? String ?? "" }, label: { statusTitles[$0] ?? $0 }, order: ["attention", "ready", "active", "done"])
         layouts["owner"] = grouped("owner", key: { $0["ownerId"] as? String ?? "" }, label: { $0 }, order: ["demo-a", "demo-b"])
         return ["cases": list, "layouts": layouts]
+    }
+
+    private static func calendar(today: Int) -> [String: Any] {
+        let day = JtDayNumber.string(today)
+        let carriedFrom = JtDayNumber.string(today - 3)
+        let items: [[String: Any]] = [
+            ["id": "todo:a@\(carriedFrom)", "kind": "todo", "title": "回覆示範客戶的報價", "start": carriedFrom, "allDay": true, "entryId": "a"],
+            ["id": "todo:b", "kind": "todo", "title": "確認樣品寄出", "start": day, "allDay": true, "entryId": "b", "done": true],
+            ["id": "todo:c", "kind": "todo", "title": "整理週報", "start": day, "allDay": true, "entryId": "c", "mail": ["sender": "示範同事"]],
+            ["id": "ms:d", "kind": "milestone", "title": "DEMO-1037 首試", "start": day, "allDay": true, "caseId": "demo-1", "customer": "Amkor"],
+            ["id": "etd:e", "kind": "etd", "title": "DEMO-1074 出貨", "start": day, "allDay": true, "caseId": "demo-2", "customer": "Qualcomm"],
+            ["id": "meet:f", "kind": "meeting", "title": "週會", "start": day + "T09:30", "end": day + "T10:00", "allDay": false, "location": "3F 會議室", "joinUrl": "https://example.com/meet"],
+            ["id": "todo:g", "kind": "todo", "title": "下週的待辦", "start": JtDayNumber.string(today + 4), "allDay": true, "entryId": "g"],
+        ]
+        let groups: [[String: Any]] = [
+            ["kind": "todo", "ids": ["todo:a@\(carriedFrom)", "todo:c", "todo:b"]],
+            ["kind": "milestone", "ids": ["ms:d"]],
+            ["kind": "etd", "ids": ["etd:e"]],
+            ["kind": "meeting", "ids": ["meet:f"]],
+        ]
+        let days: [String: Any] = [day: ["carried": ["todo:a@\(carriedFrom)"], "groups": groups] as [String: Any]]
+        return ["today": day, "items": items, "notes": [day: "**記得** 下午三點前回覆"], "days": days]
     }
 
     // MARK: - 截圖

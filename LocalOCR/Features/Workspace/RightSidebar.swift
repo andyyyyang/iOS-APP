@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 右側欄：開著筆記時是它的手寫備忘、大綱、連結、屬性與 AI 整理；其他時候是所有待辦（粉彩卡片）。
+/// 右側欄：開著筆記時是它的手寫備忘、大綱、連結、屬性與 AI 整理；其他時候是 JT 的待辦與行事曆
+/// （電腦的 JT 沒有配對時是筆記裡的待辦）。
 struct RightSidebar: View {
     @Environment(Workspace.self) private var workspace
     @AppStorage(AISettings.notePanelKey) private var showsAIPanel = true
@@ -32,6 +33,8 @@ struct RightSidebar: View {
                     }
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
+            } else if JtAgendaPanel.isAvailable {
+                JtAgendaPanel()
             } else {
                 TasksColumn()
             }
@@ -122,7 +125,7 @@ private struct LinkCard: View {
     }
 }
 
-// MARK: - 待辦（沒有開著筆記時）
+// MARK: - 筆記裡的待辦（沒有開著筆記、電腦的 JT 也沒有配對時）
 
 private struct TasksColumn: View {
     @Environment(Workspace.self) private var workspace
