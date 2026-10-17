@@ -108,17 +108,17 @@ extension JtSyncStore {
 
         // 在製料號
         for row in wip where !row.hidden {
-            let detailParts: [String] = [row.customerName, row.pns.joined(separator: "、"), JtPalette.wipTitle(row.state)]
+            let detailParts: [String] = [row.product == row.model ? "" : row.product, row.customerName, row.pns.joined(separator: "、"), row.retired ? "已結束" : JtPalette.wipTitle(row.state)]
             var entry = JtSearchEntry(
                 kind: .wip,
                 id: row.id,
-                title: row.label.isEmpty ? row.lead : row.label,
+                title: row.title,
                 detail: detailParts.filter { !$0.isEmpty }.joined(separator: " · "),
                 systemImage: "gearshape.2",
-                fields: [row.label, row.lead, row.customerName] + row.pns,
+                fields: [row.model, row.product, row.label, row.lead, row.customerName] + row.pns + row.machines,
                 facets: [row.customerName, JtPalette.wipTitle(row.state)].filter { !$0.isEmpty }
             )
-            entry.query = row.pns.first ?? row.label
+            entry.query = row.model.isEmpty ? (row.pns.first ?? row.label) : row.model
             entry.copyValue = row.pns.first ?? row.lead
             entries.append(entry)
         }

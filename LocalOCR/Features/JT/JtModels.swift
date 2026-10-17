@@ -489,6 +489,59 @@ struct JtCalendar {
 
 // MARK: - wip.json
 
+/// 追蹤中的一個料號（wip.json 的 tracked）：機種名稱、客戶品號、進度（各站批數）與上游機台。
+struct JtWipTracked {
+    let pn: String
+    let alias: String
+    let modelName: String
+    let caseProduct: String
+    let customerPn: String
+    let retiredAt: String
+    let totalQty: Int
+    let state: String
+    let stage: Int
+    let counts: [Int]
+    let machines: [String]
+
+    init(_ item: JtObject) {
+        pn = item.jtString("productPn")
+        alias = item.jtString("alias")
+        modelName = item.jtString("modelName")
+        caseProduct = item.jtString("caseProduct")
+        customerPn = item.jtString("customerPn")
+        retiredAt = item.jtString("retiredAt")
+        totalQty = item.jtInt("totalQty") ?? 0
+        let progress = item.jtObject("progress") ?? [:]
+        state = progress.jtString("state")
+        stage = progress.jtInt("stage") ?? -1
+        counts = ((progress["counts"] as? [Any]) ?? []).map { ($0 as? NSNumber)?.intValue ?? 0 }
+        machines = progress.jtStrings("upstreamEqps")
+    }
+
+    /// 顯示用的機種：自訂名稱 > 機種 > 案件品名（去掉括號）> 客戶品號（去掉尺寸）。
+    var displayModel: String {
+        if !alias.isEmpty { return alias }
+        if !modelName.isEmpty { return modelName }
+        let product = caseProduct.replacingOccurrences(of: #"\s*[(（].*$"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        if !product.isEmpty { return product }
+        return Self.shortPn(customerPn)
+    }
+
+    /// 「101432150_0851352HS_51.9x51.9t1.80」→「101432150 0851352HS」、「CV90-77584-1A 44.6x57.6 t3.245」→「CV90-77584-1A」。
+    static func shortPn(_ text: String) -> String {
+        let head = String(text.split(separator: "/", maxSplits: 1).first ?? "").replacingOccurrences(of: "_", with: " ")
+        var kept: [Substring] = []
+        for token in head.split(separator: " ") {
+            if token.range(of: #"^\d+(\.\d+)?[xX*]\d"#, options: .regularExpression) != nil { break }
+            if token.hasPrefix("=") || token.contains(":") { break }
+            kept.append(token)
+        }
+        return kept.joined(separator: " ")
+    }
+
+    static let stateRank: [String: Int] = ["stuck": 0, "run": 1, "wait": 2, "idle": 3]
+}
+
 struct JtWipRow: Identifiable {
     let lead: String
     let pns: [String]
@@ -498,8 +551,21 @@ struct JtWipRow: Identifiable {
     let state: String
     var pinned: Bool
     var hidden = false
+    /// 機種（從追蹤的料號取得；沒有時是空字串）。
+    var model = ""
+    /// 案件品名或客戶品號。
+    var product = ""
+    /// 案件已結案、寬限期內（桌面版的「已結束」分組）。
+    var retired = false
+    var totalQty = 0
+    /// 各站的批數與目前在哪一站（-1：沒有在線上）。
+    var counts: [Int] = []
+    var stage = -1
+    var machines: [String] = []
 
     var id: String { lead.isEmpty ? label : lead }
+    /// 列的標題：機種優先，沒有時用料號清單。
+    var title: String { model.isEmpty ? (label.isEmpty ? lead : label) : model }
 }
 
 struct JtMachine: Identifiable {
@@ -532,11 +598,16 @@ struct JtWip {
             if item.jtBool("hidden") { hidden.insert(pn) }
             if item.jtBool("pinned") { pinned.insert(pn) }
         }
+        var tracked: [String: JtWipTracked] = [:]
+        for item in data.jtObjects("tracked") {
+            let entry = JtWipTracked(item)
+            if !entry.pn.isEmpty, tracked[entry.pn] == nil { tracked[entry.pn] = entry }
+        }
         rows = data.jtObjects("merged").map { item in
             let pns = item.jtStrings("pns")
             let lead = item.jtString("lead")
             let keys = pns.isEmpty ? [lead] : pns
-            return JtWipRow(
+            var row = JtWipRow(
                 lead: lead,
                 pns: keys,
                 label: item.jtString("label"),
@@ -546,6 +617,20 @@ struct JtWip {
                 pinned: item.jtBool("pinned") || keys.contains { pinned.contains($0) },
                 hidden: keys.allSatisfy { hidden.contains($0) }
             )
+            let members = keys.compactMap { tracked[$0] }
+            row.model = members.lazy.map(\.displayModel).first { !$0.isEmpty } ?? ""
+            row.product = members.lazy.map { $0.caseProduct.isEmpty ? $0.customerPn : $0.caseProduct }.first { !$0.isEmpty } ?? ""
+            row.retired = !members.isEmpty && members.allSatisfy { !$0.retiredAt.isEmpty }
+            row.totalQty = members.reduce(0) { $0 + $1.totalQty }
+            // 進度：狀態最要緊的那一個料號（卡住 > 生產中 > 等待 > 閒置）
+            if let busiest = members.min(by: { (JtWipTracked.stateRank[$0.state] ?? 9) < (JtWipTracked.stateRank[$1.state] ?? 9) }) {
+                row.counts = busiest.counts
+                row.stage = busiest.stage
+            }
+            var machines: [String] = []
+            for machine in members.flatMap(\.machines) where !machines.contains(machine) { machines.append(machine) }
+            row.machines = machines
+            return row
         }
         let board = data.jtObject("board") ?? [:]
         boardConfigured = board.jtBool("configured")

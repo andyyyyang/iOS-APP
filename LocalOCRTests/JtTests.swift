@@ -509,4 +509,46 @@ final class JtTests: XCTestCase {
         XCTAssertEqual(store.openRequest?.section, .machines)
         XCTAssertEqual(store.openRequest?.query, "AP25")
     }
+
+    // MARK: - 在製的機種
+
+    func testWipRowsShowModelNamesProgressAndRetired() throws {
+        let raw = #"""
+        { "schema": "jt.v1", "kind": "wip", "rev": "w", "generatedAt": 1,
+          "data": {
+            "tracked": [
+              { "productPn": "60014565", "modelName": "0851488HS", "caseProduct": "101433878 0851488HS (Apple A-001 水果三凸)", "customerPn": "101433878 0851488HS_68.6x70.6 T1.595", "totalQty": 1200,
+                "progress": { "counts": [0, 1, 0, 0, 0, 4], "stage": 5, "state": "stuck", "upstreamEqps": ["CP02"] } },
+              { "productPn": "60015476", "modelName": "", "totalQty": 300, "progress": { "counts": [0, 1, 0, 0, 0, 0], "stage": 1, "state": "run", "upstreamEqps": ["AP31"] } },
+              { "productPn": "60012589", "customerPn": "CV90-77584-1A 44.6x57.6 t3.245_Nord", "retiredAt": "2026-10-14T08:38:40Z", "progress": { "counts": [0,0,0,0,0,0], "stage": -1, "state": "idle" } },
+              { "productPn": "60013948", "customerPn": "101432150_0851352HS_51.9x51.9t1.80" }
+            ],
+            "merged": [
+              { "lead": "60014565", "pns": ["60014565", "60015476"], "label": "Amkor 60014565 · 60015476", "customerName": "Amkor", "state": "stuck", "rowCount": 5 },
+              { "lead": "60012589", "pns": ["60012589"], "label": "Qualcomm 60012589", "customerName": "Qualcomm", "state": "idle" },
+              { "lead": "60013948", "pns": ["60013948"], "label": "Amkor 60013948", "customerName": "Amkor", "state": "wait" },
+              { "lead": "70000000", "pns": ["70000000"], "label": "Amkor 70000000", "customerName": "Amkor", "state": "idle" }
+            ],
+            "board": { "configured": false } } }
+        """#
+        let wip = JtWip(try XCTUnwrap(JtSnapshot(data: snapshot(raw))).data)
+        XCTAssertEqual(wip.rows.map(\.title), ["0851488HS", "CV90-77584-1A", "101432150 0851352HS", "Amkor 70000000"], "標題是機種；查不到機種時用料號清單")
+        let first = wip.rows[0]
+        XCTAssertEqual(first.product, "101433878 0851488HS (Apple A-001 水果三凸)")
+        XCTAssertEqual(first.totalQty, 1500)
+        XCTAssertEqual(first.stage, 5, "進度用卡住的那一個料號")
+        XCTAssertEqual(first.counts, [0, 1, 0, 0, 0, 4])
+        XCTAssertEqual(first.machines, ["CP02", "AP31"])
+        XCTAssertFalse(first.retired)
+        XCTAssertTrue(wip.rows[1].retired, "案件結案、寬限期內：已結束")
+        XCTAssertFalse(wip.rows[3].retired, "沒有追蹤資料的不算結束")
+
+        XCTAssertEqual(JtWipTracked.shortPn("CV90-94312-1A 57.6x44.6 t3.038=ATK PN:60015135"), "CV90-94312-1A")
+        XCTAssertEqual(JtWipTracked.shortPn("101434674_0851565HS_44.6x57.6t2.582_CNC/CV90-94312-2A"), "101434674 0851565HS")
+
+        let entries = JtSyncStore.searchEntries(cases: [], items: [:], wip: wip.rows, machines: [], po: [:], meta: nil, today: "2026-10-16")
+        let found = GlobalSearch.search("0851488HS", in: GlobalSearch.Sources(jt: entries))
+        XCTAssertEqual(found.first?.section, .jtWip, "用機種也找得到在製項目")
+        XCTAssertEqual(found.first?.hits.first?.id, "jt:wip:60014565")
+    }
 }

@@ -117,25 +117,59 @@ struct JtWipView: View {
     let store: JtSyncStore
     let query: String
     @State private var showsHidden = false
+    @State private var showsRetired = false
 
     var body: some View {
-        let rows = store.displayWipRows.filter { (row: JtWipRow) -> Bool in
+        let all = store.displayWipRows
+        let rows = all.filter { (row: JtWipRow) -> Bool in
             if row.hidden && !showsHidden { return false }
             return matches(row)
         }
-        let ordered = rows.filter(\.pinned) + rows.filter { !$0.pinned }
+        let active = rows.filter { !$0.retired }
+        let ordered = active.filter(\.pinned) + active.filter { !$0.pinned }
+        let retired = rows.filter(\.retired)
         ToolScroll {
             HStack(spacing: 8) {
-                MetricTile(title: "追蹤中", value: "\(store.displayWipRows.filter { !$0.hidden }.count)", pastel: .sky)
-                MetricTile(title: "卡住", value: "\(rows.filter { $0.state == "stuck" }.count)", pastel: .blush, valueColor: DS.danger)
-                MetricTile(title: "生產中", value: "\(rows.filter { $0.state == "run" }.count)", pastel: .mint)
+                MetricTile(title: "追蹤中", value: "\(all.filter { !$0.hidden && !$0.retired }.count)", pastel: .sky)
+                MetricTile(title: "卡住", value: "\(active.filter { $0.state == "stuck" }.count)", pastel: .blush, valueColor: DS.danger)
+                MetricTile(title: "生產中", value: "\(active.filter { $0.state == "run" }.count)", pastel: .mint)
             }
             ToggleChip(title: "顯示隱藏的料號", isOn: $showsHidden)
-            if ordered.isEmpty {
-                EmptyStateView(title: "沒有在製項目")
+            if ordered.isEmpty && retired.isEmpty {
+                EmptyStateView(title: query.isEmpty ? "沒有在製項目" : "找不到「\(query)」")
             }
             ForEach(ordered) { row in
-                wipRow(row)
+                JtWipRowView(row: row, store: store)
+            }
+            if !retired.isEmpty {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { showsRetired.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .rotationEffect(.degrees(showsRetired || !query.isEmpty ? 90 : 0))
+                        Text("已結束")
+                            .font(.caption.weight(.semibold))
+                        Text("\(retired.count)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(DS.textTertiary)
+                        Spacer(minLength: 0)
+                        Text("案件結案後保留 14 天")
+                            .font(.caption2)
+                            .foregroundStyle(DS.textTertiary)
+                    }
+                    .foregroundStyle(DS.textSecondary)
+                    .padding(.top, 6)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if showsRetired || !query.isEmpty {
+                    ForEach(retired) { row in
+                        JtWipRowView(row: row, store: store)
+                            .opacity(0.7)
+                    }
+                }
             }
         }
     }
@@ -143,30 +177,71 @@ struct JtWipView: View {
     private func matches(_ row: JtWipRow) -> Bool {
         let text = query.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return true }
-        let fields: [String] = [row.label, row.customerName, row.pns.joined(separator: " ")]
+        let fields: [String] = [row.model, row.product, row.label, row.customerName, row.pns.joined(separator: " "), row.machines.joined(separator: " ")]
         return fields.contains { $0.localizedCaseInsensitiveContains(text) }
     }
+}
 
-    private func wipRow(_ row: JtWipRow) -> some View {
-        HStack(spacing: 10) {
-            Circle().fill(JtPalette.wipColor(row.state)).frame(width: 10, height: 10)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    if row.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(DS.textSecondary) }
-                    Text(row.label.isEmpty ? row.lead : row.label)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(row.hidden ? DS.textTertiary : DS.text)
+/// 一個在製項目：機種、品名或客戶品號、料號，狀態、進度（各站批數）與上游機台。
+struct JtWipRowView: View {
+    let row: JtWipRow
+    let store: JtSyncStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Circle()
+                    .fill(JtPalette.wipColor(row.state))
+                    .frame(width: 10, height: 10)
+                    .padding(.top, 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        if row.pinned {
+                            Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(DS.textSecondary)
+                        }
+                        Text(row.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(row.hidden ? DS.textTertiary : DS.text)
+                            .lineLimit(1)
+                            .textSelection(.enabled)
+                    }
+                    if !row.product.isEmpty, row.product != row.model {
+                        Text(row.product)
+                            .font(.caption)
+                            .foregroundStyle(DS.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Text(([row.customerName] + [row.pns.joined(separator: " · ")]).filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(DS.textTertiary)
                         .lineLimit(1)
                 }
-                Text(wipDetail(row))
-                    .font(.caption)
-                    .foregroundStyle(DS.textSecondary)
-                    .lineLimit(2)
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(JtPalette.wipTitle(row.state))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(JtPalette.wipColor(row.state))
+                    if row.totalQty > 0 {
+                        Text("\(row.totalQty.formatted()) pcs")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(DS.textSecondary)
+                    }
+                }
             }
-            Spacer(minLength: 0)
-            Text(JtPalette.wipTitle(row.state))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(JtPalette.wipColor(row.state))
+            if row.stage >= 0 || !row.machines.isEmpty || row.rowCount > 0 {
+                HStack(spacing: 10) {
+                    if !row.counts.isEmpty {
+                        JtWipStages(counts: row.counts, stage: row.stage, tint: JtPalette.wipColor(row.state))
+                    }
+                    let parts: [String] = [row.machines.joined(separator: "、"), row.rowCount > 0 ? "\(row.rowCount) 批" : ""]
+                    Text(parts.filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(DS.textSecondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 20)
+            }
         }
         .padding(12)
         .background(DS.card, in: RoundedRectangle(cornerRadius: DS.radius, style: .continuous))
@@ -178,14 +253,35 @@ struct JtWipView: View {
             Button { store.setWip(row.pns, ["hidden": !row.hidden]) } label: {
                 Label(row.hidden ? "不再隱藏" : "隱藏", systemImage: row.hidden ? "eye" : "eye.slash")
             }
+            if let pn = row.pns.first {
+                Button { UIPasteboard.general.string = pn } label: {
+                    Label("複製料號 \(pn)", systemImage: "doc.on.doc")
+                }
+            }
         }
     }
 }
 
-private func wipDetail(_ row: JtWipRow) -> String {
-    var parts: [String] = [row.customerName, row.pns.joined(separator: "、")]
-    if row.rowCount > 0 { parts.append("\(row.rowCount) 筆") }
-    return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+/// 進度：各站一格，有批在那一站的填色並標批數，目前的站用狀態色。
+struct JtWipStages: View {
+    let counts: [Int]
+    let stage: Int
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(counts.enumerated()), id: \.offset) { index, count in
+                let isCurrent = index == stage
+                Text(count > 0 ? "\(count)" : "")
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundStyle(isCurrent ? Color.white : DS.text)
+                    .frame(width: 18, height: 14)
+                    .background(isCurrent ? tint : (count > 0 ? tint.opacity(0.25) : DS.control), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("進度：" + counts.map(String.init).joined(separator: "、"))
+    }
 }
 
 // MARK: - 機台
