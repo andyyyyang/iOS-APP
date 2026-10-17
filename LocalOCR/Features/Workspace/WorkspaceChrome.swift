@@ -210,6 +210,23 @@ private struct TabPill: View {
             } label: {
                 Label("關閉分頁", systemImage: "xmark")
             }
+            if workspace.tabs.count > 1 {
+                Button {
+                    workspace.closeOthers(tab)
+                } label: {
+                    Label("關閉其他分頁", systemImage: "xmark.square")
+                }
+                Button(role: .destructive) {
+                    workspace.closeAll()
+                } label: {
+                    Label("關閉全部分頁", systemImage: "xmark.rectangle.portrait")
+                }
+            }
+            Button {
+                workspace.newTab()
+            } label: {
+                Label("開新分頁", systemImage: "plus.square.on.square")
+            }
             if let path = tab.notePath, let url = NotesSettings.obsidianURL(for: path) {
                 Link(destination: url) {
                     Label("在 Obsidian 開啟", systemImage: "arrow.up.forward.app")
@@ -600,6 +617,7 @@ struct CompactTopBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("分頁（\(workspace.tabs.count) 個）")
+            .contextMenu { TabCountMenu() }
             Button(action: onRight) {
                 Image(systemName: "sidebar.right")
             }
@@ -660,12 +678,45 @@ struct TabSwitcher: View {
             .navigationTitle("分頁")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if workspace.tabs.count > 1 {
+                        Button("全部關閉", role: .destructive) {
+                            workspace.closeAll()
+                            dismiss()
+                        }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("新分頁") {
                         workspace.newTab()
                         dismiss()
                     }
                 }
+            }
+        }
+    }
+}
+
+/// 長按分頁數的選單：開新分頁、關閉目前分頁、關閉全部分頁。
+struct TabCountMenu: View {
+    @Environment(Workspace.self) private var workspace
+
+    var body: some View {
+        Button {
+            workspace.newTab()
+        } label: {
+            Label("開新分頁", systemImage: "plus.square.on.square")
+        }
+        Button {
+            workspace.closeActive()
+        } label: {
+            Label("關閉目前分頁", systemImage: "xmark")
+        }
+        if workspace.tabs.count > 1 {
+            Button(role: .destructive) {
+                workspace.closeAll()
+            } label: {
+                Label("關閉全部分頁（\(workspace.tabs.count) 個）", systemImage: "xmark.rectangle.portrait")
             }
         }
     }

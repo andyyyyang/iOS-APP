@@ -349,6 +349,25 @@ final class Workspace {
         close(active)
     }
 
+    /// 關閉全部分頁，只留一個空白的新分頁。
+    func closeAll() {
+        for path in tabs.compactMap(\.notePath) { liveText[path] = nil }
+        tabs = [.start]
+        active = .start
+        backStack.removeAll()
+        saveTabs()
+    }
+
+    /// 只留這個分頁。
+    func closeOthers(_ tab: WorkspaceTab) {
+        guard tabs.contains(tab) else { return }
+        for path in tabs.compactMap(\.notePath) where path != tab.notePath { liveText[path] = nil }
+        tabs = [tab]
+        active = tab
+        backStack.removeAll()
+        saveTabs()
+    }
+
     func newTab() {
         let wasOpen = tabs.contains(.start)
         if !wasOpen { tabs.append(.start) }

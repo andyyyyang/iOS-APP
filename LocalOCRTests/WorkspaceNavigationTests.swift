@@ -29,6 +29,31 @@ final class WorkspaceNavigationTests: XCTestCase {
         XCTAssertFalse(workspace.goBack())
     }
 
+    func testCloseAllAndCloseOthersFromTheTabMenu() {
+        let workspace = makeWorkspace()
+        workspace.open(.graph)
+        workspace.open(.tasks)
+        workspace.open(.jt)
+        XCTAssertEqual(workspace.tabs.count, 3)
+
+        workspace.closeOthers(.tasks)
+        XCTAssertEqual(workspace.tabs, [.tasks])
+        XCTAssertEqual(workspace.active, .tasks)
+        XCTAssertFalse(workspace.canGoBack, "關掉的分頁不會再被「上一頁」打開")
+
+        workspace.newTab()
+        XCTAssertEqual(workspace.tabs, [.tasks, .start])
+        XCTAssertEqual(workspace.active, .start)
+        workspace.closeActive()
+        XCTAssertEqual(workspace.tabs, [.tasks])
+
+        workspace.open(.graph)
+        workspace.closeAll()
+        XCTAssertEqual(workspace.tabs, [.start], "全部關閉後留一個空白的新分頁")
+        XCTAssertEqual(workspace.active, .start)
+        XCTAssertFalse(workspace.canGoBack)
+    }
+
     func testBackAfterSwitchingTabsKeepsBothOpen() {
         let workspace = makeWorkspace()
         workspace.open(.graph)
