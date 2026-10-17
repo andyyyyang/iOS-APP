@@ -14,8 +14,8 @@ struct ToolsPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PanelHeader(title: "業務快查", subtitle: "通訊錄、代碼、案件、物流") { EmptyView() }
-            SearchField(placeholder: "快速查詢：人名、分機、客戶、代碼、單號", text: $query)
+            PanelHeader(title: "業務快查") { EmptyView() }
+            SearchField(placeholder: "快速查詢", text: $query)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             ScrollView {
@@ -45,14 +45,10 @@ struct ToolsPanel: View {
 
     private func detail(for tab: WorkspaceTab) -> String {
         switch tab {
-        case .hub: return "七個工具的總覽"
-        case .logistics: return logistics.loadedAt == nil ? "快遞單號背景追蹤" : "追蹤中 \(logistics.active.count)"
+        case .logistics: return logistics.loadedAt == nil ? "" : "追蹤中 \(logistics.active.count)"
         case .jt: return jt.detailLine
-        case .contacts: return store.contacts.isEmpty ? "分機與 MVPN" : "\(store.contacts.count) 筆"
-        case .codes: return "客戶客代與 SAP T-Code"
-        case .cases: return "開案 Checklist"
-        case .bpm: return store.bpm.map { "要催 \($0.stuck.count)" } ?? "流程簽核進度"
-        case .cards: return "人員卡與客戶卡"
+        case .contacts: return store.contacts.isEmpty ? "" : "\(store.contacts.count) 筆"
+        case .bpm: return store.bpm.map { "要催 \($0.stuck.count)" } ?? ""
         case .sop: return "\(JentechLogic.sops.count) 個流程"
         default: return ""
         }
@@ -72,10 +68,13 @@ struct ToolsPanel: View {
                     Text(tab == .hub ? "業務看板" : tab.title)
                         .font(.system(size: 14, weight: isActive ? .semibold : .regular))
                         .foregroundStyle(DS.text)
-                    Text(detail(for: tab))
-                        .font(.caption)
-                        .foregroundStyle(DS.textSecondary)
-                        .lineLimit(1)
+                    let subtitle = detail(for: tab)
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(DS.textSecondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }

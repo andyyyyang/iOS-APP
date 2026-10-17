@@ -27,7 +27,7 @@ struct JentechCardsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageToolbar("編輯卡片", subtitle: editingPath == nil ? "新卡片" : "編輯中", query: $query, searchPlaceholder: kind == .person ? "載入現有人員卡（姓名、英文名）" : "載入現有客戶卡（名稱、英文名）", pinnedSearch: true) {
+            PageToolbar("編輯卡片", subtitle: editingPath == nil ? "新卡片" : "編輯中", query: $query, searchPlaceholder: kind == .person ? "載入現有人員卡" : "載入現有客戶卡", pinnedSearch: true) {
                 Button {
                     reset()
                 } label: {
@@ -144,7 +144,7 @@ struct JentechCardsPage: View {
                 }
             }
             HStack(spacing: 8) {
-                TextField("新增欄位名稱（例如 mvpn、phone）", text: $newKey)
+                TextField("新增欄位名稱", text: $newKey)
                     .font(.subheadline)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -237,7 +237,7 @@ struct JentechCardsPage: View {
     private func addField() {
         let key = newKey.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty, !fields.contains(where: { $0.key == key }), key.range(of: #"^[A-Za-z0-9_\-\p{Han}]+$"#, options: .regularExpression) != nil else {
-            toast = "欄位名稱只能用英數字、底線或中文，且不能重複"
+            toast = "欄位名稱無效或重複"
             return
         }
         fields.append(Field(key: key, value: "", isList: false))

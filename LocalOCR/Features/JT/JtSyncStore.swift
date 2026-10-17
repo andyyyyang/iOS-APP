@@ -86,7 +86,7 @@ final class JtSyncStore {
 
     /// 側欄選單的說明列。
     var detailLine: String {
-        guard hasData else { return notPaired ? "電腦的 JT 還沒連上" : "甘特、行事曆、在製與機台" }
+        guard hasData else { return notPaired ? "電腦的 JT 還沒連上" : "" }
         let open = cases?.cases.filter { !$0.isClosed }.count ?? 0
         let attention = cases?.cases.filter { $0.tone == "attention" }.count ?? 0
         return "進行中 \(open)" + (attention > 0 ? " · 要注意 \(attention)" : "") + (isComputerOffline ? " · 電腦離線" : "")

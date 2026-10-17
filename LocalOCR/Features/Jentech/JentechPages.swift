@@ -82,10 +82,10 @@ struct JentechHubPage: View {
         let exceptions = logistics.active.filter { $0.status == "exception" }.count
         return [
             Tool(tab: .logistics, detail: "追蹤中 \(logistics.active.count)" + (exceptions > 0 ? " · 異常 \(exceptions)" : ""), pastel: .sky),
-            Tool(tab: .contacts, detail: store.contacts.isEmpty ? "四大廠區分機與 MVPN" : "\(store.contacts.count) 筆 · 四大廠區", pastel: .mint),
+            Tool(tab: .contacts, detail: store.contacts.isEmpty ? "" : "\(store.contacts.count) 筆", pastel: .mint),
             Tool(tab: .codes, detail: "客戶 \(customers) · TCode \(codes.count - customers)", pastel: .butter),
             Tool(tab: .cases, detail: "開案 \(store.cases.count) 件", pastel: .lavender),
-            Tool(tab: .bpm, detail: store.bpm.map { "進行中 \($0.total) · 要催 \($0.stuck.count)" } ?? "流程簽核進度", pastel: .blush),
+            Tool(tab: .bpm, detail: store.bpm.map { "進行中 \($0.total) · 要催 \($0.stuck.count)" } ?? "", pastel: .blush),
             Tool(tab: .cards, detail: "人員 \(cards.filter { $0.kind == .person }.count) · 客戶 \(cards.filter { $0.kind == .customer }.count)", pastel: .sky),
             Tool(tab: .sop, detail: "\(JentechLogic.sops.count) 個流程", pastel: .mint),
         ]
@@ -93,7 +93,7 @@ struct JentechHubPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PageToolbar("業務快查", subtitle: "業務快查與物流中心", query: $query, searchPlaceholder: "搜尋人名、分機、客戶、代碼、案件、單號", pinnedSearch: true) {
+            PageToolbar("業務快查", query: $query, pinnedSearch: true) {
                 EmptyView()
             } chips: {
                 ForEach([WorkspaceTab.contacts, .logistics, .codes, .cases], id: \.id) { tab in
@@ -142,10 +142,12 @@ struct JentechHubPage: View {
                         Text(tool.tab.title)
                             .font(.headline)
                             .foregroundStyle(DS.text)
-                        Text(tool.detail)
-                            .font(.caption)
-                            .foregroundStyle(DS.onPastelSecondary)
-                            .lineLimit(1)
+                        if !tool.detail.isEmpty {
+                            Text(tool.detail)
+                                .font(.caption)
+                                .foregroundStyle(DS.onPastelSecondary)
+                                .lineLimit(1)
+                        }
                     }
                     .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
                     .pastelCard(tool.pastel, padding: 14)
@@ -256,7 +258,7 @@ struct JentechContactsPage: View {
                         })
                     }
                     if rows.count > limit {
-                        Text("只顯示前 \(limit) 筆，請輸入更多關鍵字縮小範圍。")
+                        Text("只顯示前 \(limit) 筆")
                             .font(.footnote)
                             .foregroundStyle(DS.textSecondary)
                     }
@@ -344,7 +346,7 @@ struct JentechCodesPage: View {
             }
             ToolScroll {
                 if rows.isEmpty {
-                    EmptyStateView(title: store.codes.isEmpty ? "還沒有客戶或代碼資料" : "沒有符合的結果", message: store.codes.isEmpty ? "客戶筆記（04 客戶，type: customer）與 T-Code 筆記（11 SOP/常用代碼/代碼紀錄/TCode，type: code）會出現在這裡。" : nil)
+                    EmptyStateView(title: store.codes.isEmpty ? "還沒有客戶或代碼資料" : "沒有符合的結果")
                 } else {
                     ForEach(rows) { code in CodeRow(code: code, onCopied: { toast = "已複製代碼：\($0)" }) }
                 }
@@ -407,7 +409,7 @@ struct JentechCasesPage: View {
             (customer == nil || item.customer == customer) && JentechLogic.matches(query, [item.caseNo, item.sapNo, item.product, item.customer, item.bpmRdmn, item.file])
         }
         VStack(spacing: 0) {
-            PageToolbar("案件查詢", subtitle: "共 \(rows.count) 筆", query: $query, searchPlaceholder: "開案號（T/S 號）、SAP 品號、產品、客戶、RDMN", pinnedSearch: true) {
+            PageToolbar("案件查詢", subtitle: "共 \(rows.count) 筆", query: $query, pinnedSearch: true) {
                 Button {
                     workspace.openLink("開案 Dashboard")
                 } label: {
@@ -425,7 +427,7 @@ struct JentechCasesPage: View {
             }
             ToolScroll {
                 if rows.isEmpty {
-                    EmptyStateView(title: all.isEmpty ? "還沒有開案 Checklist" : "沒有符合的案件", message: all.isEmpty ? "05 客戶案件/開案 Checklist 中 type: checklist 的筆記會出現在這裡。" : nil)
+                    EmptyStateView(title: all.isEmpty ? "還沒有開案 Checklist" : "沒有符合的案件")
                 } else {
                     ForEach(rows) { item in CaseRow(item: item) }
                 }
@@ -506,10 +508,6 @@ struct JentechBpmPage: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity).padding(30)
                 }
-                Text("BPM 在公司內網，資料由公司電腦的 Windows 排程（Jentech-BpmTracking，每天 08:30 與 14:00）抓取後同步到 vault；要立即重新抓取請在電腦的 Obsidian 執行。")
-                    .font(.footnote)
-                    .foregroundStyle(DS.textSecondary)
-                    .padding(.top, 6)
             }
             .refreshable { await store.loadBpm() }
         }
@@ -521,12 +519,12 @@ struct JentechBpmPage: View {
     private func content(_ bpm: JentechBpm) -> some View {
         HStack(spacing: 8) {
             MetricTile(title: "處理中案件", value: "\(bpm.total)", pastel: .sky)
-            MetricTile(title: "要催（卡 ≥ \(bpm.stuckThreshold) 天）", value: "\(bpm.stuck.count)", pastel: .blush, valueColor: bpm.stuck.isEmpty ? DS.text : DS.danger)
+            MetricTile(title: "要催", value: "\(bpm.stuck.count)", pastel: .blush, valueColor: bpm.stuck.isEmpty ? DS.text : DS.danger)
             MetricTile(title: "正常工作中", value: "\(bpm.working.count)", pastel: .mint)
         }
         if !bpm.stuck.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("卡 ≥ \(bpm.stuckThreshold) 天需追蹤（\(bpm.stuck.count) 件）")
+                Text("要催 \(bpm.stuck.count) 件")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(DS.danger)
                 ForEach(bpm.stuck) { item in
@@ -587,7 +585,7 @@ struct JentechSopPage: View {
     var body: some View {
         let rows = JentechLogic.sops.filter { (stage == "all" || $0.stage == stage) && JentechLogic.sopMatches($0, query) }
         VStack(spacing: 0) {
-            PageToolbar("SOP 導覽", subtitle: "共 \(rows.count) 個", query: $query, searchPlaceholder: "SOP 名稱或標籤（#billing、#va01、#dhl…）", pinnedSearch: true) {
+            PageToolbar("SOP 導覽", subtitle: "共 \(rows.count) 個", query: $query, pinnedSearch: true) {
                 EmptyView()
             } chips: {
                 SegmentedPills(options: [(value: "all", title: "全部")] + JentechLogic.sopStages.map { (value: $0, title: $0) }, selection: $stage)

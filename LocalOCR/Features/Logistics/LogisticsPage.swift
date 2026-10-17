@@ -57,7 +57,7 @@ struct LogisticsPage: View {
         }
         .overlay(alignment: .bottom) { toastView }
         .alert("修改案件備註", isPresented: Binding(get: { editingNote != nil }, set: { if !$0 { editingNote = nil } })) {
-            TextField("案件說明 / 客戶 / 備註", text: $noteDraft)
+            TextField("備註", text: $noteDraft)
             Button("取消", role: .cancel) { editingNote = nil }
             Button("儲存") {
                 if let item = editingNote { Task { await store.update(item, note: noteDraft) } }
@@ -233,10 +233,7 @@ struct LogisticsPage: View {
             if store.isLoading && store.loadedAt == nil {
                 ProgressView().frame(maxWidth: .infinity).padding(30)
             } else {
-                EmptyStateView(
-                    title: store.active.isEmpty ? "目前沒有追蹤中的單號" : "沒有符合的單號",
-                    message: store.active.isEmpty ? "在上方輸入或掃描單號，按「新增追蹤」開始管理。伺服器會在背景定時刷新。" : nil
-                )
+                EmptyStateView(title: store.active.isEmpty ? "目前沒有追蹤中的單號" : "沒有符合的單號")
             }
         } else {
             ForEach(items) { item in
@@ -271,11 +268,6 @@ struct LogisticsPage: View {
                 } label: {
                     FilterChip(title: store.courier(courier)?.name ?? courier, isActive: true, systemImage: "shippingbox")
                 }
-                if !courierPicked, LogisticsLogic.guessCourier(number) != nil {
-                    Text("依單號自動判斷")
-                        .font(.caption)
-                        .foregroundStyle(DS.textSecondary)
-                }
                 Spacer()
             }
             HStack(spacing: 8) {
@@ -301,7 +293,7 @@ struct LogisticsPage: View {
                     .accessibilityLabel("掃描託運單")
                 }
             }
-            TextField("案件說明 / 客戶 / 備註（選填）", text: $note)
+            TextField("備註", text: $note)
                 .submitLabel(.done)
                 .onSubmit { addItem() }
                 .padding(.horizontal, 12)
@@ -344,9 +336,9 @@ struct LogisticsPage: View {
     private var archivedList: some View {
         let items = store.archived.filter(matches)
         if items.isEmpty {
-            EmptyStateView(title: store.archived.isEmpty ? "目前沒有已結案的單號" : "沒有符合的單號", message: store.archived.isEmpty ? "已送達的包裹按「結案」後移到這裡，不再參與背景追蹤。" : nil)
+            EmptyStateView(title: store.archived.isEmpty ? "目前沒有已結案的單號" : "沒有符合的單號")
         } else {
-            Text("已結案歷史：共 \(store.archived.count) 筆（不參與背景追蹤）")
+            Text("共 \(store.archived.count) 筆")
                 .font(.footnote)
                 .foregroundStyle(DS.textSecondary)
             ForEach(items) { item in
@@ -388,24 +380,7 @@ struct LogisticsPage: View {
         if store.isLoadingLinked && store.linked.isEmpty {
             ProgressView("尋找筆記中的單號…").frame(maxWidth: .infinity).padding(30)
         } else if store.linked.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("筆記中尚未填寫物流單號欄位")
-                    .font(.headline)
-                    .foregroundStyle(DS.text)
-                Text("在案件筆記（例如 05 客戶案件/…）的屬性中填入以下欄位，就會出現在這裡，可以一鍵加入追蹤：")
-                    .font(.subheadline)
-                    .foregroundStyle(DS.textSecondary)
-                Text("customer: Qualcomm\ncase_no: RFQ-2608-01\ntracking_no: \"784920194820\"\ncourier: fedex")
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(DS.text)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DS.control, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                Text("也可以用 tcat_no、sf_no、dhl_no、fedex_no、waybill 或 tracking_number。")
-                    .font(.footnote)
-                    .foregroundStyle(DS.textSecondary)
-            }
-            .card(padding: 14)
+            EmptyStateView(title: "筆記中沒有物流單號")
         } else {
             ForEach(store.linked.filter { query.isEmpty || [$0.name, $0.customer, $0.trackingNumber, $0.caseNo].contains(where: { $0.localizedCaseInsensitiveContains(query) }) }) { linked in
                 HStack(alignment: .center, spacing: 12) {
@@ -483,7 +458,7 @@ struct LogisticsPage: View {
         }
         let rows = shipments.filter { query.isEmpty || [$0.recipient, $0.address, $0.orderNo, $0.item, $0.mobile, $0.phone].contains(where: { $0.localizedCaseInsensitiveContains(query) }) }
         if files.isEmpty {
-            EmptyStateView(title: "沒有託運名冊", message: "黑貓 ezprint 的批次託運單 CSV（檔名含 ezprint）放進 vault 後會出現在這裡。")
+            EmptyStateView(title: "沒有託運名冊")
         } else if rows.isEmpty {
             EmptyStateView(title: shipments.isEmpty ? "名冊是空的" : "沒有符合的收件人")
         } else {
@@ -532,9 +507,9 @@ struct LogisticsPage: View {
             settingsCard("背景追蹤", systemImage: "clock.arrow.circlepath") {
                 if let info = store.refreshInfo {
                     if info.intervalMinutes > 0 {
-                        Text("伺服器每 \(Self.interval(info.intervalMinutes)) 自動刷新追蹤中的單號，電腦和手機都不必開著。")
+                        Text("每 \(Self.interval(info.intervalMinutes)) 自動刷新")
                     } else {
-                        Text("背景刷新已關閉（Railway 變數 LOGISTICS_REFRESH_MINUTES=0）。按右上角的刷新鈕手動更新。")
+                        Text("背景刷新已關閉")
                     }
                     if let last = info.lastRunAt.flatMap(Self.parseDate) {
                         Text("上次刷新：\(last.formatted(date: .abbreviated, time: .shortened))，共 \(info.lastRefreshed) 筆")
@@ -556,28 +531,21 @@ struct LogisticsPage: View {
                             .foregroundStyle(option.live ? DS.success : DS.textSecondary)
                     }
                 }
-                Text("黑貓由伺服器直接讀取官網的貨態；順豐官網目前多半要開啟查件頁查看。")
-                    .font(.footnote)
-                    .foregroundStyle(DS.textSecondary)
             }
-            settingsCard("DHL 官方 API（選填）", systemImage: "key") {
+            settingsCard("DHL 官方 API", systemImage: "key") {
                 if store.dhl {
-                    Label("已設定，DHL 單號會自動抓取完整軌跡", systemImage: "checkmark.circle.fill").foregroundStyle(DS.success)
+                    Label("已設定", systemImage: "checkmark.circle.fill").foregroundStyle(DS.success)
                 } else {
-                    Text("免費申請（每天 250 次，只需 Email，不需手機與信用卡）：")
-                    Text("1. 到 DHL Developer Portal 註冊\n2. 建立 App 並啟用 Shipment Tracking - Unified\n3. 把 API Key 加到 Railway 伺服器變數 DHL_API_KEY")
-                        .foregroundStyle(DS.textSecondary)
                     Button("開啟 DHL Developer Portal") {
                         if let url = URL(string: "https://developer.dhl.com/user/register") { openURL(url) }
                     }
                     .buttonStyle(SmallPillStyle())
                 }
             }
-            settingsCard("17TRACK API（選填）", systemImage: "globe") {
+            settingsCard("17TRACK API", systemImage: "globe") {
                 if store.track17 {
-                    Label("已設定，FedEx、UPS、新竹、嘉里大榮、郵局等會自動抓取", systemImage: "checkmark.circle.fill").foregroundStyle(DS.success)
+                    Label("已設定", systemImage: "checkmark.circle.fill").foregroundStyle(DS.success)
                 } else {
-                    Text("FedEx、UPS、新竹物流、嘉里大榮、中華郵政等由 17TRACK 提供軌跡：到 17TRACK API 申請金鑰，加到 Railway 伺服器變數 TRACK17_API_KEY。沒有設定時，按「查件」開啟官網或 17TRACK 查看。")
                     Button("開啟 17TRACK API") {
                         if let url = URL(string: "https://api.17track.net") { openURL(url) }
                     }
@@ -588,8 +556,6 @@ struct LogisticsPage: View {
                 Text(store.path)
                     .font(.system(.footnote, design: .monospaced))
                     .textSelection(.enabled)
-                Text("電腦上 Obsidian 的「物流追蹤中心」讀寫同一個檔案，兩邊的清單一致。")
-                    .foregroundStyle(DS.textSecondary)
             }
         }
     }
@@ -760,7 +726,7 @@ struct LogisticsItemCard: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(DS.textSecondary)
             if item.trackinfo.isEmpty {
-                Text(item.latestEvent.isEmpty ? "目前尚無節點歷程明細，可按「查件」開啟官方網站查閱。" : "目前尚無節點歷程明細（\(item.latestEvent)）。可按「查件」開啟官方網站查閱。")
+                Text("尚無歷程明細")
                     .font(.footnote)
                     .foregroundStyle(DS.textSecondary)
             } else {

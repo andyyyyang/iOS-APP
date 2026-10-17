@@ -155,9 +155,6 @@ struct JtWipView: View {
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(DS.textTertiary)
                         Spacer(minLength: 0)
-                        Text("案件結案後保留 14 天")
-                            .font(.caption2)
-                            .foregroundStyle(DS.textTertiary)
                     }
                     .foregroundStyle(DS.textSecondary)
                     .padding(.top, 6)
@@ -312,7 +309,7 @@ struct JtMachinesView: View {
             }
             .scrollIndicators(.hidden)
             if let wip = store.wip, !wip.boardConfigured, wip.machines.isEmpty {
-                EmptyStateView(title: "機台看板還沒設定", message: "在電腦的 JT 設定機台看板（MES）後就會出現。")
+                EmptyStateView(title: "機台看板還沒設定")
             } else if machines.isEmpty {
                 EmptyStateView(title: filter == "mine" ? "沒有跑你的料號的機台" : "沒有符合的機台")
             }
@@ -432,7 +429,7 @@ struct JtPoView: View {
         let items = jtFiltered(JtListRow.rows(data.jtObjects("items")), query)
         ToolScroll {
             if overdue.isEmpty && items.isEmpty {
-                EmptyStateView(title: "沒有出貨追蹤", message: "電腦的 JT 會列出前 14 天到後 60 天的交期。")
+                EmptyStateView(title: "沒有出貨追蹤")
             }
             if !overdue.isEmpty {
                 JtListSection(title: "逾期", rows: overdue, tint: DS.danger)
@@ -440,9 +437,6 @@ struct JtPoView: View {
             if !items.isEmpty {
                 JtListSection(title: "交期", rows: items)
             }
-            Text("出貨日期與備註請在電腦的 JT 或 PO LIST 修改。")
-                .font(.caption)
-                .foregroundStyle(DS.textTertiary)
         }
     }
 }
@@ -502,7 +496,7 @@ struct JtCaseDetail: View {
                 if let item = store.displayCase(caseId) {
                     content(item)
                 } else {
-                    EmptyStateView(title: "找不到這個案件", message: "可能已在電腦的 JT 刪除。")
+                    EmptyStateView(title: "找不到這個案件")
                 }
             }
             .background(DS.pane)
@@ -694,7 +688,7 @@ struct JtCaseDetail: View {
                 .background(DS.control, in: RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous))
             }
             HStack(spacing: 8) {
-                TextField("寫留言（寫到 Outlook 案件）", text: $commentDraft, axis: .vertical)
+                TextField("寫留言", text: $commentDraft, axis: .vertical)
                     .font(.subheadline)
                     .lineLimit(1...4)
                 Button("送出") {

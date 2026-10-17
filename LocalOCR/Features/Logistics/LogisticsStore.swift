@@ -65,7 +65,7 @@ final class LogisticsStore {
 
     private func client() -> LogisticsClient? {
         guard let client = LogisticsClient.configured() else {
-            error = "還沒有連接伺服器（設定 → 伺服器與同步）。"
+            error = "還沒有連接伺服器"
             return nil
         }
         return client

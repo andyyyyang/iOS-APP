@@ -348,8 +348,6 @@ struct JtGanttView: View {
                 projectCase = nil
             }
             Button("取消", role: .cancel) { projectCase = nil }
-        } message: {
-            Text("同一個專案的案件在「專案」排序時收成一組，並寫回 Outlook。")
         }
         .alert("重新命名專案", isPresented: Binding(get: { renamingGroup != nil }, set: { if !$0 { renamingGroup = nil } })) {
             TextField("專案名稱", text: $renameDraft)
@@ -701,7 +699,7 @@ struct JtGanttView: View {
         } else {
             title = "沒有「\(filter.title)」的案件"
         }
-        return EmptyStateView(title: title, message: filter == .all ? "完成與取消的案件在「完成」分頁。" : nil)
+        return EmptyStateView(title: title)
     }
 }
 
@@ -1173,12 +1171,12 @@ struct JtGanttLegend: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("圖例").font(.headline).foregroundStyle(DS.text)
-            row("進行中", detail: "業務色，填到目前進度") { sampleBar(fill: ownerColor.opacity(0.15), progress: 0.55, stroke: ownerColor.opacity(0.35), dashed: false) }
-            row("待出貨", detail: "整條填滿") { sampleBar(fill: ownerColor.opacity(0.72), progress: 0, stroke: ownerColor, dashed: false) }
-            row("注意", detail: "里程碑逾期未完成，延伸到今天") { sampleBar(fill: ownerColor.opacity(0.15), progress: 0.4, stroke: DS.warning, dashed: true) }
-            row("完成／取消", detail: "灰色；平常隱藏，在「完成」分頁") { sampleBar(fill: DS.textTertiary.opacity(0.24), progress: 0, stroke: .clear, dashed: false) }
+            row("進行中") { sampleBar(fill: ownerColor.opacity(0.15), progress: 0.55, stroke: ownerColor.opacity(0.35), dashed: false) }
+            row("待出貨") { sampleBar(fill: ownerColor.opacity(0.72), progress: 0, stroke: ownerColor, dashed: false) }
+            row("注意") { sampleBar(fill: ownerColor.opacity(0.15), progress: 0.4, stroke: DS.warning, dashed: true) }
+            row("完成／取消") { sampleBar(fill: DS.textTertiary.opacity(0.24), progress: 0, stroke: .clear, dashed: false) }
             Divider()
-            row("里程碑", detail: "空心未完成、實心完成、紅圈逾期、數字＝重疊") {
+            row("里程碑") {
                 HStack(spacing: 6) {
                     dot(done: false, color: ownerColor)
                     dot(done: true, color: ownerColor)
@@ -1191,34 +1189,28 @@ struct JtGanttLegend: View {
                         .background(ownerColor, in: Capsule())
                 }
             }
-            row("延期", detail: "原訂日到延期後的淡紅條") {
+            row("延期") {
                 Capsule().fill(DS.danger.opacity(0.3)).frame(width: 44, height: 3)
             }
-            row("ETD", detail: "剩幾天或逾期幾天（紅）；拖動旗子改 ETD") {
+            row("ETD") {
                 HStack(spacing: 4) {
                     JtFlagShape().fill(ownerColor).frame(width: 8, height: 10)
                     Text("剩 7d").font(.system(size: 11, weight: .medium)).foregroundStyle(DS.textSecondary)
                 }
             }
-            row("今天", detail: "藍線與日期") {
+            row("今天") {
                 Rectangle().fill(JtPalette.today).frame(width: 1.5, height: 18)
             }
-            Text("長按案件：專案、終端客戶、狀態。捏合切換日／週／月。")
-                .font(.caption)
-                .foregroundStyle(DS.textSecondary)
         }
         .padding(16)
         .frame(width: 330)
     }
 
-    private func row<Sample: View>(_ title: String, detail: String, @ViewBuilder sample: () -> Sample) -> some View {
+    private func row<Sample: View>(_ title: String, @ViewBuilder sample: () -> Sample) -> some View {
         HStack(spacing: 10) {
             sample()
                 .frame(width: 70, alignment: .leading)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(DS.text)
-                Text(detail).font(.caption).foregroundStyle(DS.textSecondary)
-            }
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(DS.text)
         }
     }
 

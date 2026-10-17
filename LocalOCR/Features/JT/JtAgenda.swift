@@ -227,7 +227,7 @@ struct JtAddTodoField: View {
             Image(systemName: "plus")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(DS.textTertiary)
-            TextField(compact ? "新增待辦" : "新增待辦（寫到 Outlook）", text: $text)
+            TextField("新增待辦", text: $text)
                 .textFieldStyle(.plain)
                 .font(compact ? .system(size: 13.5) : .subheadline)
                 .submitLabel(.done)
@@ -369,7 +369,7 @@ struct JtAgendaPanel: View {
                         Rectangle().fill(DS.hairline).frame(height: 1)
                         dayHeader(date)
                         if sections.isEmpty {
-                            Text(date == today ? "今天沒有待辦或行程。" : "這天沒有待辦或行程。")
+                            Text(date == today ? "今天沒有待辦或行程" : "這天沒有待辦或行程")
                                 .font(.footnote)
                                 .foregroundStyle(DS.textTertiary)
                         }
@@ -553,11 +553,11 @@ struct JtAgendaPanel: View {
     @ViewBuilder
     private var statusLine: some View {
         if store.isComputerOffline {
-            Label("電腦的 JT 離線中：打勾與新增會在電腦開機後套用", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
+            Label("電腦離線", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
                 .font(.caption)
                 .foregroundStyle(DS.warning)
         } else if store.unsentCount > 0 {
-            Label("\(store.unsentCount) 個修改還沒送出", systemImage: "icloud.slash")
+            Label("\(store.unsentCount) 個修改待送出", systemImage: "icloud.slash")
                 .font(.caption)
                 .foregroundStyle(DS.textSecondary)
         }

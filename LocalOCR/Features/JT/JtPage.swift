@@ -62,9 +62,9 @@ struct JtPage: View {
                 }
             }
             if store.isComputerOffline {
-                banner("電腦的 JT 離線中：這裡顯示的是最後一次的資料，編輯會在電腦開機後依編輯時間套用", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
+                banner("電腦離線", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
             } else if store.unsentCount > 0 {
-                banner("\(store.unsentCount) 個編輯還沒送出（連上網路後自動送出）", systemImage: "icloud.slash")
+                banner("\(store.unsentCount) 個修改待送出", systemImage: "icloud.slash")
             }
             content
         }
@@ -99,7 +99,7 @@ struct JtPage: View {
     private var subtitle: String {
         if let manifest = store.manifest, manifest.heartbeatAt > 0 {
             let date = Date(timeIntervalSince1970: manifest.heartbeatAt / 1000)
-            return "電腦 \(manifest.device.isEmpty ? "JT" : manifest.device) · 更新於 \(date.formatted(date: .omitted, time: .shortened))"
+            return "更新於 \(date.formatted(date: .omitted, time: .shortened))"
         }
         return store.isLoading ? "讀取中…" : ""
     }
@@ -119,10 +119,10 @@ struct JtPage: View {
     @ViewBuilder
     private var content: some View {
         if !store.isConfigured {
-            EmptyStateView(title: "還沒有與同步伺服器配對", message: "先在「設定」與 Obsidian 配對，JT 的資料會經由同一個伺服器同步過來。")
+            EmptyStateView(title: "還沒有與同步伺服器配對")
         } else if !store.hasData {
             if store.notPaired {
-                EmptyStateView(title: "電腦的 JT 還沒連上", message: "在電腦的 JT Sales Tracker 打開「設定 → iPhone／iPad」，輸入 Obsidian「LocalOCR：配對 iPhone／iPad」產生的配對碼，資料就會自動出現在這裡。")
+                EmptyStateView(title: "電腦的 JT 還沒連上")
             } else if let error = store.lastError {
                 EmptyStateView(title: "讀不到 JT 的資料", message: error)
             } else {
