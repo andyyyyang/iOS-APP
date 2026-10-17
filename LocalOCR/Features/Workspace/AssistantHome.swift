@@ -176,19 +176,10 @@ struct AssistantHome: View {
 
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("想找什麼，或要整理什麼？")
-                    .font(.system(size: isCompact ? 22 : 26, weight: .semibold))
-                    .foregroundStyle(DS.text)
-                Text("AI 會在線上搜尋你的 vault（不下載到這台裝置），回答附上來源筆記；也可以直接請它新增、補充或修改筆記，改過的都能復原。")
-                    .font(.subheadline)
-                    .foregroundStyle(DS.textSecondary)
-            }
             if !sync.isConfigured || !assistant.isServerConfigured {
                 pairingCard
             } else {
                 statusLines
-                suggestions
             }
             journalCard
             if !assistant.sessions.isEmpty {
@@ -199,26 +190,11 @@ struct AssistantHome: View {
         .padding(.top, 12)
     }
 
+    /// 只在不能用時說一聲。
+    @ViewBuilder
     private var statusLines: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if case .unavailable(let reason) = OnDeviceAIStatus.current {
-                statusLine("sparkles", "\(reason)。目前只會列出搜尋結果。", tint: DS.warning)
-            }
-            if let path = assistant.rulesPath {
-                Button { workspace.openNote(path) } label: {
-                    statusLine("list.bullet.clipboard", "照著「\(KnowledgeAssistant.title(of: path))」的編輯規則\(assistant.rulesTruncated ? "（太長，只用前 \(KnowledgeAssistant.rulesLimit) 字）" : "")", tint: DS.textSecondary)
-                }
-                .buttonStyle(.plain)
-            } else if assistant.rulesOverride != "" {
-                Button { workspace.open(.settings) } label: {
-                    statusLine("list.bullet.clipboard", "vault 最上層沒有找到編輯規則檔（可以在設定指定）", tint: DS.textTertiary)
-                }
-                .buttonStyle(.plain)
-            }
-            // AI 執行位置（裝置端／雲端預算）在輸入列上切換
-            if VaultBackend.storage == .webdav {
-                statusLine("externaldrive.badge.icloud", "AI 搜尋的是同步伺服器上的 vault，不是 WebDAV。", tint: DS.textTertiary)
-            }
+        if case .unavailable = OnDeviceAIStatus.current, !assistant.cloudAvailable {
+            statusLine("exclamationmark.triangle", "裝置端 AI 無法使用，只會列出搜尋結果", tint: DS.warning)
         }
     }
 
@@ -231,37 +207,6 @@ struct AssistantHome: View {
                 .multilineTextAlignment(.leading)
         }
         .foregroundStyle(tint)
-    }
-
-    private static let prompts: [(text: String, sendsNow: Bool)] = [
-        ("最近的筆記有哪些重點？", true),
-        ("幫我找關於「」的筆記", false),
-        ("把今天的待辦整理成一則筆記", true),
-        ("在「」這則筆記補上：", false),
-    ]
-
-    private var suggestions: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(Self.prompts, id: \.text) { prompt in
-                Button {
-                    if prompt.sendsNow {
-                        send(prompt.text)
-                    } else {
-                        draft = prompt.text
-                        inputFocused = true
-                    }
-                } label: {
-                    Text(prompt.text)
-                        .font(.subheadline)
-                        .foregroundStyle(DS.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Capsule().strokeBorder(DS.cardBorder, lineWidth: 1))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
     }
 
     private var history: some View {
@@ -277,7 +222,7 @@ struct AssistantHome: View {
                     .buttonStyle(.plain)
             }
             VStack(spacing: 0) {
-                ForEach(assistant.sessions.prefix(5)) { session in
+                ForEach(assistant.sessions.prefix(3)) { session in
                     Button { open(session) } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "bubble.left.and.text.bubble.right")
@@ -321,7 +266,7 @@ struct AssistantHome: View {
                 }
             }
             if store.notes.isEmpty {
-                Text(sync.isConfigured ? "vault 裡還沒有筆記，按輸入列左邊的 + 新增一則。" : "配對後，整個 vault 的筆記都會出現在這裡。")
+                Text("還沒有筆記")
                     .font(.subheadline)
                     .foregroundStyle(DS.textTertiary)
             } else {
@@ -352,13 +297,12 @@ struct AssistantHome: View {
                     .frame(width: 42, height: 42)
                     .background(DS.card.opacity(0.7), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("日誌筆記本")
+                    Text("日誌")
                         .font(.headline)
                         .foregroundStyle(DS.text)
-                    Text(exists ? "打開今天（\(Date().formatted(.dateTime.month().day()))）的一頁，寫 #機種代號 會連到機種主卡" : "一頁一頁手寫、依日期自動整理，寫 #機種代號 會連到機種主卡")
+                    Text(Date().formatted(.dateTime.month().day().weekday(.abbreviated)))
                         .font(.subheadline)
                         .foregroundStyle(DS.onPastelSecondary)
-                        .multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
                 Text(exists ? "打開" : "建立")
@@ -380,7 +324,7 @@ struct AssistantHome: View {
                 Text("與 Obsidian 配對")
                     .font(.headline)
                     .foregroundStyle(DS.text)
-                Text("在電腦的 Obsidian 執行「LocalOCR Sync：配對 iPhone／iPad」並掃描 QR Code。配對後 AI 才能在線上搜尋與整理你的 vault。")
+                Text("配對後就能使用")
                     .font(.subheadline)
                     .foregroundStyle(DS.onPastelSecondary)
             }
@@ -398,7 +342,7 @@ struct AssistantHome: View {
     /// 上面是輸入框（整個寬度），下面一排是新增、AI 執行位置與送出。
     private var inputBar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextField("問問題，或請 AI 整理、修改筆記", text: $draft, axis: .vertical)
+            TextField("問 AI", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .font(.body)
                 .foregroundStyle(DS.text)
