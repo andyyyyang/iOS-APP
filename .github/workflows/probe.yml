@@ -1,12 +1,13 @@
 name: Probe
 
-# 在 iOS 27 iPad 模擬器上只跑幾個實驗用的測試（比整套 CI 快）：目前是 JT 甘特的截圖（假資料，以 base64 印在記錄裡）。
+# 在 iOS 27 iPad 模擬器上只跑幾個實驗用的測試（比整套 CI 快）：目前是 JT 甘特、右側欄待辦與 iPhone 浮動搜尋的截圖（假資料，以 base64 印在記錄裡）。
 on:
   workflow_dispatch:
   push:
     paths:
       - ".github/workflows/probe.yml"
       - "LocalOCR/Features/JT/**"
+      - "LocalOCR/Features/Workspace/**"
       - "LocalOCRTests/JtScreenshotProbeTests.swift"
 
 jobs:
