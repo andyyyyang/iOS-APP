@@ -179,7 +179,8 @@ final class KeyboardLayoutTests: XCTestCase {
             add(attachment)
         }
         XCTAssertGreaterThan(opened, 0.1, "輸入後頂部列下面沒有出現結果列表")
-        XCTAssertGreaterThan(updated, 0.02, "改字後結果列表沒有更新")
+        // 列只剩標題（沒有說明文字），多一列「快速通訊錄查詢」約 2%；沒更新是 0
+        XCTAssertGreaterThan(updated, 0.01, "改字後結果列表沒有更新")
         // 頂部列的搜尋欄沒有被列表蓋住：還在原位、還是最上層可以點的
         let center = CGPoint(x: fieldFrame.midX, y: fieldFrame.midY)
         let hit = window.hitTest(center, with: nil)
