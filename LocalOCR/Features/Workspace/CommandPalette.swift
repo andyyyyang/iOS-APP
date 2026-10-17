@@ -237,11 +237,13 @@ struct CommandPalette: View {
                 Rectangle().fill(DS.hairline).frame(height: 1)
             }
             if hugsContent {
-                ViewThatFits(in: .vertical) {
-                    listBody(items: items, rows: rows)
-                    scrollingList(items: items, rows: rows, maxHeight: maxHeight)
+                // 放得下就只有內容的高度，放不下才捲動（frame(maxHeight:) 會撐滿可用的高度）
+                CappedHeight(maxHeight: maxHeight) {
+                    ViewThatFits(in: .vertical) {
+                        listBody(items: items, rows: rows)
+                        scrollingList(items: items, rows: rows, maxHeight: maxHeight)
+                    }
                 }
-                .frame(maxHeight: maxHeight)
             } else {
                 scrollingList(items: items, rows: rows, maxHeight: maxHeight)
             }
@@ -817,6 +819,21 @@ struct CommandPalette: View {
 
     private func close() {
         workspace.showsPalette = false
+    }
+}
+
+/// 高度上限：子畫面最多這麼高，但比較矮時就用它自己的高度（不像 frame(maxHeight:) 會撐滿）。
+private struct CappedHeight: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let height = min(proposal.height ?? maxHeight, maxHeight)
+        return child.sizeThatFits(ProposedViewSize(width: proposal.width, height: height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }
 
