@@ -58,6 +58,12 @@ final class JtSyncStore {
     private(set) var loadedAt: Date?
     /// 編輯被略過或失敗時的提示。
     var notice: String?
+    /// 從搜尋打開 JT 頁的某個地方（JT 頁收到後清掉）。
+    var openRequest: JtOpenRequest?
+    /// 「今天」分頁要切到的日期（收到後清掉）。
+    var focusDate: String?
+    /// 資料或待送的編輯變了就加一（搜尋用來決定要不要重新整理資料）。
+    private(set) var revision = 0
 
     @ObservationIgnored private var revs: [String: String] = [:]
     @ObservationIgnored private var isSending = false
@@ -176,6 +182,7 @@ final class JtSyncStore {
         guard let snapshot = JtSnapshot(data: data) else { return false }
         revs[kind] = snapshot.rev
         clocks[kind] = snapshot.clocks
+        revision += 1
         switch kind {
         case "meta": meta = JtMeta(snapshot.data)
         case "cases": cases = JtCases(snapshot.data)
@@ -212,6 +219,7 @@ final class JtSyncStore {
     }
 
     private func savePending() {
+        revision += 1
         guard let data = try? JSONEncoder().encode(pending) else { return }
         save(data, as: "pending")
     }

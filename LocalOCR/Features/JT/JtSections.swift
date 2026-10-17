@@ -38,6 +38,15 @@ struct JtDayView: View {
                 }
             }
         }
+        .onAppear(perform: applyFocus)
+        .onChange(of: store.focusDate) { _, _ in applyFocus() }
+    }
+
+    /// 從搜尋打開某一天。
+    private func applyFocus() {
+        guard let date = store.focusDate else { return }
+        store.focusDate = nil
+        selected = date
     }
 
     private func dateStrip(today: String, selected: String) -> some View {

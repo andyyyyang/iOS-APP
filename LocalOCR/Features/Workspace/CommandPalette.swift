@@ -10,6 +10,7 @@ struct CommandPalette: View {
     @State private var store = NotesStore.shared
     @State private var jentech = JentechStore.shared
     @State private var logistics = LogisticsStore.shared
+    @State private var jt = JtSyncStore.shared
     @State private var index = VaultIndexStore.shared
     @State private var sources = GlobalSearch.Sources()
     /// 搜尋的狀態（頂部列的搜尋欄也用同一份）。
@@ -167,6 +168,8 @@ struct CommandPalette: View {
             async let parcels: Void = logistics.ensureLoaded()
             _ = await (index, contacts, parcels)
             if jentech.bpm == nil { await jentech.loadBpm() }
+            // JT 的資料平常由推送更新；超過五分鐘沒有讀過時讀一次（版本沒變不會重抓）
+            if jt.isConfigured, jt.loadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true { await jt.refresh() }
         }
         .task(id: sourcesVersion) { sources = currentSources() }
         .onChange(of: query) { _, _ in selection = 0 }
@@ -529,7 +532,7 @@ struct CommandPalette: View {
 
     /// 資料有變（索引更新、通訊錄或 BPM 讀到了、物流清單更新）時重新取一次要搜尋的資料。
     private var sourcesVersion: String {
-        "\(index.updatedAt?.timeIntervalSince1970 ?? 0)|\(index.notes.count)|\(jentech.contacts.count)|\(jentech.bpm?.fetchedAt ?? "")|\(logistics.items.count)"
+        "\(index.updatedAt?.timeIntervalSince1970 ?? 0)|\(index.notes.count)|\(jentech.contacts.count)|\(jentech.bpm?.fetchedAt ?? "")|\(logistics.items.count)|\(jt.revision)"
     }
 
     private func currentSources() -> GlobalSearch.Sources {
@@ -541,7 +544,8 @@ struct CommandPalette: View {
             bpm: jentech.bpm?.items ?? [],
             people: jentech.cards.filter { $0.kind == .person },
             sops: JentechLogic.sops,
-            parcels: logistics.items
+            parcels: logistics.items,
+            jt: jt.searchEntries()
         )
     }
 
@@ -616,6 +620,16 @@ struct CommandPalette: View {
                 systemImage: WorkspaceTab.logistics.systemImage,
                 trailing: AnyView(CopyButton(value: item.trackingNumber))
             ) { workspace.open(.logistics) }
+        case .jt(let entry):
+            return Item(
+                id: hit.id, title: entry.title,
+                detail: entry.detail,
+                systemImage: entry.systemImage,
+                trailing: entry.copyValue.isEmpty ? nil : AnyView(CopyButton(value: entry.copyValue))
+            ) {
+                jt.open(entry)
+                workspace.open(.jt)
+            }
         }
     }
 

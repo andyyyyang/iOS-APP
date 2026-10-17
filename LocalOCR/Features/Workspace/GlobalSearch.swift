@@ -1,10 +1,10 @@
 import Foundation
 
-/// 全域搜尋（指令面板）裡的業務快查：通訊錄、客戶與代碼、機種、開案案件、BPM、人員、SOP、物流單號，
-/// 跟筆記、指令一起搜尋，不必先打開各個工具頁。
+/// 全域搜尋（指令面板）裡的業務快查：通訊錄、客戶與代碼、機種、JT 案件與待辦、開案案件、BPM、人員、SOP、
+/// 物流單號、JT 在製與出貨，跟筆記、指令一起搜尋，不必先打開各個工具頁。
 enum GlobalSearch {
     enum Section: String, CaseIterable, Sendable {
-        case contacts, codes, models, cases, bpm, people, sops, parcels
+        case contacts, codes, models, jtCases, jtAgenda, cases, bpm, people, sops, parcels, jtWip, jtPo
 
         var title: String {
             switch self {
@@ -16,6 +16,10 @@ enum GlobalSearch {
             case .people: return "人員"
             case .sops: return "SOP"
             case .parcels: return "物流單號"
+            case .jtCases: return "JT 案件"
+            case .jtAgenda: return "JT 待辦與行程"
+            case .jtWip: return "在製與機台"
+            case .jtPo: return "出貨交期"
             }
         }
 
@@ -26,6 +30,10 @@ enum GlobalSearch {
             case .codes, .models, .cases: return 5
             case .bpm, .people: return 4
             case .sops, .parcels: return 3
+            case .jtCases: return 6
+            case .jtAgenda: return 5
+            case .jtWip: return 4
+            case .jtPo: return 3
             }
         }
     }
@@ -39,6 +47,7 @@ enum GlobalSearch {
         case person(JentechCard)
         case sop(JentechSop)
         case parcel(LogisticsClient.Item)
+        case jt(JtSearchEntry)
     }
 
     struct Hit: Identifiable, Equatable, Sendable {
@@ -56,6 +65,7 @@ enum GlobalSearch {
             case .person(let card): return "person:\(card.id)"
             case .sop(let sop): return "sop:\(sop.id)"
             case .parcel(let item): return "parcel:\(item.id)"
+            case .jt(let entry): return "jt:\(entry.kind.rawValue):\(entry.id)"
             }
         }
     }
@@ -80,6 +90,8 @@ enum GlobalSearch {
         var people: [JentechCard] = []
         var sops: [JentechSop] = []
         var parcels: [LogisticsClient.Item] = []
+        /// JT 業務追蹤（案件、待辦與行程、在製、機台、出貨）。
+        var jt: [JtSearchEntry] = []
     }
 
     /// 篩選建議：從目前符合的資料整理出可以再加的關鍵字（廠區、課別、客戶、流程…），有幾筆。
@@ -116,7 +128,19 @@ enum GlobalSearch {
             return sources.sops.map { Entry(target: .sop($0), fields: [$0.name, $0.file, $0.stage] + $0.tags + $0.tags.map { String($0.dropFirst()) }, facets: [$0.stage]) }
         case .parcels:
             return sources.parcels.map { Entry(target: .parcel($0), fields: [$0.trackingNumber, $0.note, $0.courierName, $0.latestEvent], facets: [$0.courierName]) }
+        case .jtCases:
+            return jtEntries(sources.jt, kinds: [.caseItem])
+        case .jtAgenda:
+            return jtEntries(sources.jt, kinds: [.agenda])
+        case .jtWip:
+            return jtEntries(sources.jt, kinds: [.wip, .machine])
+        case .jtPo:
+            return jtEntries(sources.jt, kinds: [.po])
         }
+    }
+
+    private static func jtEntries(_ entries: [JtSearchEntry], kinds: Set<JtSearchEntry.Kind>) -> [Entry] {
+        entries.filter { kinds.contains($0.kind) }.map { Entry(target: .jt($0), fields: $0.fields, facets: $0.facets) }
     }
 
     /// 依最符合的一筆排序各區（一樣時照固定順序：通訊錄、客戶與代碼、機種…）。

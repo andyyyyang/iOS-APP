@@ -455,4 +455,58 @@ final class JtTests: XCTestCase {
         XCTAssertEqual(marks["2026-10-20"]?.open, 2)
         XCTAssertNil(marks["2026-10-21"])
     }
+
+    // MARK: - 全域搜尋
+
+    func testGlobalSearchFindsJtCasesAgendaPartsMachinesAndShipments() throws {
+        let fixture = try casesFixture()
+        let calendar = JtCalendar(try XCTUnwrap(JtSnapshot(data: snapshot(Self.agendaCalendar))).data)
+        let items = Dictionary(uniqueKeysWithValues: calendar.items.map { ($0.id, $0) })
+        let wip = JtWip(try XCTUnwrap(JtSnapshot(data: snapshot(#"""
+        { "schema": "jt.v1", "kind": "wip", "rev": "w", "generatedAt": 1,
+          "data": { "tracked": [], "merged": [{ "lead": "PN-77831", "pns": ["PN-77831"], "label": "散熱片 A", "customerName": "Amkor", "state": "stuck" }],
+            "board": { "configured": true, "machines": [{ "eqp": "AP25", "group": "down", "summary": "AP25 停機 2.3h" }] } } }
+        """#))).data)
+        let po: JtObject = ["items": [["model": "DEMO-1", "customer": "Amkor", "etd": "2026-10-20"] as JtObject]]
+        let entries = JtSyncStore.searchEntries(cases: fixture.cases, items: items, wip: wip.rows, machines: wip.machines, po: po, meta: nil, today: "2026-10-16")
+        let sources = GlobalSearch.Sources(jt: entries)
+
+        let cases = GlobalSearch.search("cv90", in: sources)
+        XCTAssertEqual(cases.first?.section, .jtCases)
+        guard case .jt(let found) = try XCTUnwrap(cases.first?.hits.first).target else { return XCTFail("應該是 JT 的結果") }
+        XCTAssertEqual(found.caseId, "outlook-1")
+        XCTAssertEqual(found.copyValue, "101434675 0851563HS")
+        XCTAssertEqual(GlobalSearch.search("散熱蓋", in: sources).first?.hits.first?.id, "jt:caseItem:outlook-2", "完成的案件也找得到")
+        XCTAssertEqual(GlobalSearch.search("Qualcomm", in: sources).first?.section, .jtCases, "終端客戶也找得到")
+
+        XCTAssertEqual(GlobalSearch.search("週會", in: sources).first?.section, .jtAgenda)
+        XCTAssertTrue(GlobalSearch.search("10/20", in: sources).contains { $0.section == .jtAgenda }, "日期也找得到")
+
+        let part = GlobalSearch.search("PN-77831", in: sources)
+        XCTAssertEqual(part.first?.section, .jtWip)
+        guard case .jt(let row) = try XCTUnwrap(part.first?.hits.first).target else { return XCTFail() }
+        XCTAssertEqual(row.query, "PN-77831")
+        XCTAssertEqual(GlobalSearch.search("AP25", in: sources).first?.section, .jtWip, "機台也在「在製與機台」")
+        XCTAssertEqual(GlobalSearch.search("DEMO-1", in: sources).first?.section, .jtPo)
+        XCTAssertTrue(GlobalSearch.search("jt", in: GlobalSearch.Sources()).isEmpty)
+    }
+
+    func testSearchResultOpensTheRightPlaceInJt() {
+        let store = makeStore()
+        store.open(JtSearchEntry(kind: .caseItem, id: "c1", title: "", detail: "", systemImage: "", fields: [], facets: [], caseId: "c1"))
+        XCTAssertEqual(store.openRequest?.section, .gantt)
+        XCTAssertEqual(store.openRequest?.caseId, "c1")
+        XCTAssertEqual(store.openRequest?.query, "", "打開案件時清掉甘特的篩選")
+
+        store.open(JtSearchEntry(kind: .agenda, id: "todo:a", title: "", detail: "", systemImage: "", fields: [], facets: [], date: "2026-10-20"))
+        XCTAssertEqual(store.openRequest?.section, .today)
+        XCTAssertEqual(store.openRequest?.date, "2026-10-20")
+
+        store.open(JtSearchEntry(kind: .agenda, id: "ms:d", title: "", detail: "", systemImage: "", fields: [], facets: [], caseId: "c2", date: "2026-10-20"))
+        XCTAssertEqual(store.openRequest?.caseId, "c2", "里程碑、出貨直接打開案件")
+
+        store.open(JtSearchEntry(kind: .machine, id: "AP25", title: "", detail: "", systemImage: "", fields: [], facets: [], query: "AP25"))
+        XCTAssertEqual(store.openRequest?.section, .machines)
+        XCTAssertEqual(store.openRequest?.query, "AP25")
+    }
 }

@@ -82,6 +82,18 @@ struct JtPage: View {
             JtCaseDetail(caseId: reference.id)
         }
         .toast($store.notice)
+        .onAppear(perform: consumeRequest)
+        .onChange(of: store.openRequest) { _, _ in consumeRequest() }
+    }
+
+    /// 從搜尋打開：切到那個分頁，打開案件、切到那一天，或帶入搜尋字。
+    private func consumeRequest() {
+        guard let request = store.openRequest else { return }
+        store.openRequest = nil
+        sectionRaw = request.section.rawValue
+        if let text = request.query { query = text }
+        if let date = request.date { store.focusDate = date }
+        if let caseId = request.caseId, !caseId.isEmpty { openCase = JtCaseReference(id: caseId) }
     }
 
     private var subtitle: String {
