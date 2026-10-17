@@ -99,7 +99,11 @@ final class KeyboardLayoutTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(800))
         let fieldFrame = field.convert(field.bounds, to: window)
-        let listArea = CGRect(x: 0, y: fieldFrame.maxY + 48, width: window.bounds.width, height: 260)
+        // iPad：結果在搜尋欄下面；iPhone：搜尋欄在下方（浮動搜尋列展開），結果在搜尋欄上面
+        let fieldAtBottom = fieldFrame.minY > window.bounds.height * 0.4
+        let listArea = fieldAtBottom
+            ? CGRect(x: 0, y: max(fieldFrame.minY - 16 - 200, 0), width: window.bounds.width, height: 200)
+            : CGRect(x: 0, y: fieldFrame.maxY + 48, width: window.bounds.width, height: 260)
         let before = Self.render(window)
         field.insertText("zzqx")
         field.sendActions(for: .editingChanged)
