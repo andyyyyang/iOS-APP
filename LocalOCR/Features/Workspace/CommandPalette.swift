@@ -224,59 +224,75 @@ struct CommandPalette: View {
         return "可以直接搜尋人名、分機、客戶、客代、T-Code、機種、開案號、SAP 品號、BPM、SOP、物流單號；打空白就能再加一個關鍵字"
     }
 
-    /// 建議與結果列表（置中的面板與頂部列下面的列表共用）。
-    private func panel(results: (sections: [Section], suggestions: [Suggestion]), items: [Item], rows: [Row], maxHeight: CGFloat) -> some View {
+    /// 建議與結果列表（置中的面板、頂部列下面的列表與 iPhone 下方的搜尋共用）。
+    /// `hugsContent`：結果少時只有內容的高度（iPhone 的列表接在下方的搜尋欄上面）。
+    private func panel(results: (sections: [Section], suggestions: [Suggestion]), items: [Item], rows: [Row], maxHeight: CGFloat, hugsContent: Bool = false) -> some View {
         let showsChips = scope != nil || !keywords.isEmpty || !results.suggestions.isEmpty
         return VStack(spacing: 0) {
             if showsChips {
                 chipRow(results.suggestions)
-                    .padding(.top, isAttached ? 8 : 0)
+                    .padding(.top, isAttached || hugsContent ? 8 : 0)
             }
             if showsChips || !isAttached {
                 Rectangle().fill(DS.hairline).frame(height: 1)
             }
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    // 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）
-                    VStack(alignment: .leading, spacing: 1) {
-                        if searchText.isEmpty && scope == nil {
-                            Text(hint)
-                                .font(.caption)
-                                .foregroundStyle(DS.textTertiary)
-                                .padding(.horizontal, 10)
-                                .padding(.top, 6)
-                        }
-                        ForEach(rows) { row in
-                            switch row {
-                            case .header(_, let title, let count):
-                                sectionHeader(title, count: count)
-                            case .item(let item, let index):
-                                self.row(item, isSelected: index == selection)
-                                    .id(item.id)
-                                    .onTapGesture {
-                                        selection = index
-                                        run(items)
-                                    }
-                            }
-                        }
-                        if items.isEmpty {
-                            Text(searchText.isEmpty ? "沒有資料" : "找不到「\(searchText)」")
-                                .font(.subheadline)
-                                .foregroundStyle(DS.textTertiary)
-                                .padding(16)
-                        }
-                    }
-                    .padding(6)
-                    .id(searchText + "|" + (scope?.title ?? ""))
+            if hugsContent {
+                ViewThatFits(in: .vertical) {
+                    listBody(items: items, rows: rows)
+                    scrollingList(items: items, rows: rows, maxHeight: maxHeight)
                 }
                 .frame(maxHeight: maxHeight)
-                .onChange(of: selection) { _, value in
-                    guard items.indices.contains(value) else { return }
-                    withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(items[value].id) }
-                }
+            } else {
+                scrollingList(items: items, rows: rows, maxHeight: maxHeight)
             }
         }
+    }
+
+    private func scrollingList(items: [Item], rows: [Row], maxHeight: CGFloat) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                listBody(items: items, rows: rows)
+            }
+            .frame(maxHeight: maxHeight)
+            .onChange(of: selection) { _, value in
+                guard items.indices.contains(value) else { return }
+                withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(items[value].id) }
+            }
+        }
+    }
+
+    /// 結果最多幾十列：不用 LazyVStack，每次輸入整個重建（列不會沿用上一次的內容）。
+    private func listBody(items: [Item], rows: [Row]) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if searchText.isEmpty && scope == nil {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(DS.textTertiary)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+            }
+            ForEach(rows) { row in
+                switch row {
+                case .header(_, let title, let count):
+                    sectionHeader(title, count: count)
+                case .item(let item, let index):
+                    self.row(item, isSelected: index == selection)
+                        .id(item.id)
+                        .onTapGesture {
+                            selection = index
+                            run(items)
+                        }
+                }
+            }
+            if items.isEmpty {
+                Text(searchText.isEmpty ? "沒有資料" : "找不到「\(searchText)」")
+                    .font(.subheadline)
+                    .foregroundStyle(DS.textTertiary)
+                    .padding(16)
+            }
+        }
+        .padding(6)
+        .id(searchText + "|" + (scope?.title ?? ""))
     }
 
     private static func rows(_ sections: [Section]) -> [Row] {
@@ -775,7 +791,7 @@ struct CommandPalette: View {
                     .ignoresSafeArea()
                     .onTapGesture { close() }
                 VStack(spacing: 8) {
-                    panel(results: results, items: items, rows: rows, maxHeight: listHeight)
+                    panel(results: results, items: items, rows: rows, maxHeight: listHeight, hugsContent: true)
                         .background(DS.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(DS.cardBorder, lineWidth: 1))
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
