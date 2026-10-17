@@ -47,14 +47,7 @@ struct AIFeaturesView: View {
 
     private var placeSection: some View {
         Section {
-            Toggle(isOn: $localOnly) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("只使用裝置端模型")
-                    Text("不使用雲端 AI 與 Jev")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Toggle("只使用裝置端模型", isOn: $localOnly)
             if !localOnly {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("AI 預算")
@@ -65,18 +58,11 @@ struct AIFeaturesView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    Text(AssistantEngineMode.from(engine).title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 2)
             }
         } header: {
             Text("執行位置")
-        } footer: {
-            Text(localOnly
-                 ? "所有 AI 都在這台裝置的 Apple Intelligence 上執行，伺服器只用來搜尋與同步 vault。"
-                 : "Jev 依要求的種類與難度選裝置端或哪一級的雲端模型，以成本為先：簡單的每個預算都用裝置端（免費）。")
         }
     }
 
@@ -103,12 +89,7 @@ struct AIFeaturesView: View {
                         Text(KnowledgeAssistant.modelLabel(pinned)).tag(pinned)
                     }
                 } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(AISettings.tierTitle(tier))
-                        Text(tierCaption(tier))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(AISettings.tierTitle(tier))
                 }
             }
             if isLoading, settings == nil {
@@ -124,8 +105,6 @@ struct AIFeaturesView: View {
             }
         } header: {
             Text("雲端模型")
-        } footer: {
-            Text("Jev 依難度選等級，再用那一級的模型。「自動」會跟著 Anthropic 的新模型更新（伺服器每 6 小時檢查一次）；固定一個模型後就不會自動換新，模型無法使用時改回自動。")
         }
     }
 
@@ -142,14 +121,6 @@ struct AIFeaturesView: View {
         return "自動（\(KnowledgeAssistant.modelLabel(id))）"
     }
 
-    private func tierCaption(_ tier: String) -> String {
-        switch tier {
-        case "small": return "簡單的雲端工作，費用最低"
-        case "medium": return "大部分的問題與修改"
-        default: return "困難的多步驟工作"
-        }
-    }
-
     /// 這一級系列的模型，以及其他模型（新的在前）。
     private func choices(for tier: String) -> (family: [AssistantClient.ModelSettings.Model], others: [AssistantClient.ModelSettings.Model]) {
         let models = settings?.models ?? []
@@ -161,22 +132,8 @@ struct AIFeaturesView: View {
 
     private var toolsSection: some View {
         Section {
-            Toggle(isOn: choiceBinding($webSearch, default: settings?.webSearch ?? false)) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("網路搜尋")
-                    Text("查 vault 以外的最新資料（每次搜尋另外計費）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Toggle(isOn: choiceBinding($codeExecution, default: settings?.codeExecution ?? true)) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("執行程式")
-                    Text("在沙盒中計算、分析表格、產生檔案存回 vault")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Toggle("網路搜尋", isOn: choiceBinding($webSearch, default: settings?.webSearch ?? false))
+            Toggle("執行程式", isOn: choiceBinding($codeExecution, default: settings?.codeExecution ?? true))
             Picker("每次最多步驟", selection: $maxTurns) {
                 Text(settings.map { "伺服器上限（\($0.maxTurns)）" } ?? "伺服器上限").tag(0)
                 ForEach(turnOptions, id: \.self) { count in
@@ -192,8 +149,6 @@ struct AIFeaturesView: View {
             }
         } header: {
             Text("雲端 AI 能做的事")
-        } footer: {
-            Text("一步是一次模型呼叫（讀檔、搜尋、修改各算一步）。步驟越少，每次的費用上限越低，但大型的整理工作可能做不完。")
         }
     }
 
@@ -222,26 +177,10 @@ struct AIFeaturesView: View {
 
     private var notesSection: some View {
         Section {
-            Toggle(isOn: $noteButton) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("筆記上的 AI 按鈕")
-                    Text("選取文字或整則筆記，請 AI 修改")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Toggle(isOn: $notePanel) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("右側欄的 AI 整理")
-                    Text("摘要、重點、待辦與標籤")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Toggle("筆記上的 AI 按鈕", isOn: $noteButton)
+            Toggle("右側欄的 AI 整理", isOn: $notePanel)
         } header: {
             Text("筆記")
-        } footer: {
-            Text("筆記的 AI 都在裝置端的 Apple Intelligence 上執行，內容不會離開這台裝置。關掉後仍可選取文字使用系統的「書寫工具」。")
         }
     }
 
@@ -256,10 +195,6 @@ struct AIFeaturesView: View {
             }
         } header: {
             Text("智慧掃描")
-        } footer: {
-            Text(localOnly
-                 ? "情境由裝置端 Apple Intelligence 與關鍵字判斷。JSON 一律由裝置端模型產生。"
-                 : "判斷情境的順序：Jev（經你的伺服器，速度快、費用極低）→ 裝置端 Apple Intelligence → 關鍵字。JSON 一律由裝置端模型產生。")
         }
     }
 
@@ -296,7 +231,7 @@ struct AIFeaturesView: View {
                         .foregroundStyle(DS.warning)
                 }
             } else if AssistantClient.configured() == nil {
-                SettingsStatusRow(title: "雲端 AI 與 Jev", value: "還沒有連接伺服器", color: .secondary)
+                SettingsStatusRow(title: "雲端 AI 與 Jev", value: "未連接伺服器", color: .secondary)
             } else if isLoading {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -307,15 +242,13 @@ struct AIFeaturesView: View {
             }
         } header: {
             Text("狀態")
-        } footer: {
-            Text("雲端 AI 與 Jev 的 API key 設在 Railway 的伺服器變數（ANTHROPIC_API_KEY、JEV_API_KEY），不會存在這台裝置。")
         }
     }
 
     private func load() async {
         aiStatus = OnDeviceAIStatus.current
         guard let client = AssistantClient.configured() else {
-            loadError = "還沒有連接伺服器（設定 → 伺服器與同步）。"
+            loadError = "未連接伺服器"
             return
         }
         isLoading = true

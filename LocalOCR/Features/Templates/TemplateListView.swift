@@ -143,7 +143,7 @@ struct TemplateDetailView: View {
                     copy.origin = .custom
                     editing = copy
                 } label: {
-                    Label("自訂這個情境的輸出樣式", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
+                    Label("自訂輸出樣式", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -152,7 +152,7 @@ struct TemplateDetailView: View {
                 Button {
                     Task { await uploadToServer() }
                 } label: {
-                    Label("上傳到伺服器，讓所有 harness 共用", systemImage: "icloud.and.arrow.up").frame(maxWidth: .infinity)
+                    Label("上傳到伺服器", systemImage: "icloud.and.arrow.up").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
             }

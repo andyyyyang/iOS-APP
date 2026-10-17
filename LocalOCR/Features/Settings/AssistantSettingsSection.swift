@@ -22,12 +22,12 @@ struct AssistantSettingsSection: View {
                 }
             if usesRules {
                 LabeledContent("目前使用", value: assistant.rulesPath ?? "沒有找到")
-                TextField("規則檔路徑（空白＝自動尋找）", text: $customPath)
+                TextField("規則檔路徑", text: $customPath)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .onSubmit { assistant.setRules(customPath.isEmpty ? nil : normalized(customPath)) }
                 if !assistant.rootNotes.isEmpty {
-                    Picker("從最上層的筆記選擇", selection: Binding(
+                    Picker("規則筆記", selection: Binding(
                         get: { assistant.rulesPath ?? "" },
                         set: { path in
                             customPath = path
@@ -41,15 +41,13 @@ struct AssistantSettingsSection: View {
                     }
                 }
                 if assistant.rulesTruncated {
-                    Text("規則超過 \(KnowledgeAssistant.rulesLimit) 字，只會用前面的部分（裝置端模型能讀的長度有限）。")
+                    Text("規則太長，只用前 \(KnowledgeAssistant.rulesLimit) 字")
                         .font(.footnote)
                         .foregroundStyle(DS.warning)
                 }
             }
         } header: {
             Text("首頁 AI")
-        } footer: {
-            Text("首頁的 AI 透過同步伺服器在線上搜尋與修改 vault，不會把筆記下載到這台裝置。每段對話都記在對話紀錄資料夾中的一則筆記。每次新對話都會讀取編輯規則；沒有指定時，自動使用 vault 最上層名為 AGENTS.md、CLAUDE.md、編輯規則.md、rules.md，或名稱含「規則」「規範」的筆記。")
         }
         .task { await assistant.loadRules() }
     }

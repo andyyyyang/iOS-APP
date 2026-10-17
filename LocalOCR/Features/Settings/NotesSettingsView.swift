@@ -41,14 +41,12 @@ struct NotesSettingsView: View {
                 }
             } header: {
                 Text("配對")
-            } footer: {
-                Text("在電腦（Windows 或 Mac）的 Obsidian 執行「LocalOCR Sync：配對 iPhone／iPad」，掃描 QR Code 或輸入配對碼即可，不需要輸入網址或金鑰。")
             }
 
             StorageSettingsSection()
 
             Section {
-                Toggle("日誌整理使用 Private Cloud Compute", isOn: $journalPrivateCloud)
+                Toggle("使用 Private Cloud Compute", isOn: $journalPrivateCloud)
                     .disabled(!JournalAI.isEntitled)
                 LabeledContent("狀態", value: JournalAI.cloudStatus)
                 if let issue = JournalAI.lastIssue {
@@ -58,18 +56,14 @@ struct NotesSettingsView: View {
                 }
             } header: {
                 Text("日誌整理")
-            } footer: {
-                Text("手寫日誌會自動辨識與整理：停筆後辨識，閒置一分鐘或離開時整理內容有變的日子，打開 App 時整理其他日誌並更新「日誌統整」。Private Cloud Compute 是 Apple 伺服器上的模型（較準確、可以看比較長的內容，資料不會被保存），需要 iOS 27、網路與每天的額度（iCloud+ 較高），以及 App 取得 Apple 核准的授權；不能用時自動改用裝置端模型。")
             }
 
             Section {
-                Toggle("限制行寬（易讀寬度）", isOn: $limitsLineWidth)
-                Toggle("開啟筆記時右側欄顯示手寫備忘", isOn: $autoInkMemo)
-                Toggle("鍵盤版面診斷（除錯用）", isOn: $showsKeyboardDiagnostics)
+                Toggle("限制行寬", isOn: $limitsLineWidth)
+                Toggle("自動顯示手寫備忘", isOn: $autoInkMemo)
+                Toggle("鍵盤版面診斷", isOn: $showsKeyboardDiagnostics)
             } header: {
                 Text("版面")
-            } footer: {
-                Text("關閉行寬限制時筆記內容跟著畫面全寬自適應（表格與 Dataview 也會用滿寬度）；開啟時每行最寬約 760 點，在大螢幕上比較好讀。手寫備忘每則筆記一份，存在附件資料夾（ink-memo-筆記名稱），可以插入筆記讓 Obsidian 也看得到。鍵盤版面診斷會在右上角顯示鍵盤出現前後視窗與畫面的位置，打開鍵盤時截圖給開發者。")
             }
 
             Section {
@@ -93,13 +87,13 @@ struct NotesSettingsView: View {
                         .font(.footnote)
                 }
                 if let report = sync.lastReport, !report.isEmpty {
-                    Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.moves.isEmpty ? "" : "、搬移 \(report.moves.count)")\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)（兩份都保留）")")
+                    Text("上次：下載 \(report.downloaded)、上傳 \(report.uploaded)、刪除 \(report.deleted)\(report.moves.isEmpty ? "" : "、搬移 \(report.moves.count)")\(report.conflicts.isEmpty ? "" : "、衝突 \(report.conflicts.count)")")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 if !sync.failedFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(sync.failedFiles.count) 個檔案沒有同步（其他檔案已同步，下次會再試）")
+                        Text("\(sync.failedFiles.count) 個檔案同步失敗")
                             .foregroundStyle(.orange)
                         ForEach(sync.failedFiles.prefix(5), id: \.self) { failure in
                             Text(failure).foregroundStyle(.secondary)
@@ -116,8 +110,6 @@ struct NotesSettingsView: View {
                 }
             } header: {
                 Text("同步")
-            } footer: {
-                Text("與伺服器保持即時推送的連線（WebSocket），不輪詢：正在編輯的筆記停手後約 1 秒上傳，電腦的 Obsidian（LocalOCR Sync 插件 1.5.0 以上）收到通知後立即用 Remotely Save 同步；電腦上修改並上傳後，伺服器也會立刻通知這台裝置。打開 App 與重新連線時會同步一次；兩邊同時修改同一個檔案時會保留兩份。")
             }
 
             Section {
@@ -140,7 +132,7 @@ struct NotesSettingsView: View {
                     Task {
                         let count = await sync.clearDownloads()
                         localUsage = await sync.localUsage()
-                        clearedMessage = "已從這台裝置移除 \(count) 個檔案"
+                        clearedMessage = "已移除 \(count) 個檔案"
                     }
                 }
                 .disabled(sync.isSyncing)
@@ -151,8 +143,6 @@ struct NotesSettingsView: View {
                 }
             } header: {
                 Text("空間")
-            } footer: {
-                Text("「打開時才下載」只同步檔案清單：筆記與圖片打開時才下載，最近 7 天沒打開的筆記與 1 天沒打開的圖片、PDF 會自動從這台裝置移除（Railway 空間與電腦上的不受影響）。標籤、待辦、反向連結與關聯圖使用伺服器的即時索引，涵蓋整個 vault（不必下載筆記）；內文搜尋也在伺服器上進行。移除已下載的檔案時，開著的筆記與還沒上傳的修改會保留。")
             }
 
             Section {
@@ -176,8 +166,6 @@ struct NotesSettingsView: View {
                 }
             } header: {
                 Text("Obsidian（Remotely Save）")
-            } footer: {
-                Text("先在這台裝置的 Obsidian 安裝並啟用 Remotely Save，再按上面的按鈕，Obsidian 會自動套用同步設定；套用後請完全關閉並重新開啟 Obsidian，自動同步才會開始。")
             }
 
             Section {
@@ -188,15 +176,13 @@ struct NotesSettingsView: View {
                         .autocorrectionDisabled()
                 }
                 LabeledContent("vault 名稱") {
-                    TextField("配對時自動填入", text: $vaultName)
+                    TextField("未設定", text: $vaultName)
                         .multilineTextAlignment(.trailing)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
             } header: {
                 Text("筆記")
-            } footer: {
-                Text("筆記可以放在 vault 的任何資料夾：在資料夾中新增的筆記就放在那個資料夾；從首頁新增的放在「新筆記位置」（空白代表 vault 最上層，也可以填「日記/2026」這樣的路徑）。vault 名稱用來「在 Obsidian 開啟」。")
             }
         }
         .canvasList()
@@ -213,7 +199,7 @@ struct NotesSettingsView: View {
         do {
             let uri = try await PairingClient.remotelySaveURI(vaultName: vaultName, client: client)
             openURL(uri) { accepted in
-                obsidianMessage = accepted ? nil : "無法開啟 Obsidian，請先安裝 Obsidian。"
+                obsidianMessage = accepted ? nil : "請先安裝 Obsidian"
             }
         } catch {
             obsidianMessage = error.localizedDescription

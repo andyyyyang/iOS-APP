@@ -134,7 +134,7 @@ struct MultiShotCameraView: View {
             flash()
             let thumbnail = await image.byPreparingThumbnail(ofSize: CGSize(width: 96, height: 128))
             shots.append(Shot(image: image, thumbnail: thumbnail))
-            message = "已拍 \(shots.count) 頁，可以繼續拍下一頁"
+            message = "已拍 \(shots.count) 頁"
         } catch {
             message = error.localizedDescription
         }

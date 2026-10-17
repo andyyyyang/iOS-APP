@@ -77,19 +77,19 @@ struct ScanView: View {
     private var bannerTitle: String {
         let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
         let count = records.filter { $0.createdAt >= weekAgo }.count
-        return count > 0 ? "本週已辨識 \(count) 份文件" : "把文件的每一頁加進來，自動整理成 JSON"
+        return count > 0 ? "本週已辨識 \(count) 份文件" : "本週還沒有文件"
     }
 
     private var bannerSubtitle: String {
         switch aiStatus {
-        case .available: return "Apple Intelligence 在裝置上判斷情境與擷取資料"
-        case .unavailable(let reason): return "文字辨識在裝置上完成 · \(reason)"
+        case .available: return "Apple Intelligence 可以使用"
+        case .unavailable(let reason): return reason
         }
     }
 
     private var sourceGrid: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(draft.isEmpty ? "加入頁面：可混用各種來源，全部加入後再開始分析" : "繼續加入頁面")
+            Text(draft.isEmpty ? "加入頁面" : "繼續加入頁面")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             LazyVGrid(columns: columns, spacing: 12) {
@@ -99,7 +99,7 @@ struct ScanView: View {
                     } label: {
                         SourceCard(
                             title: source.title,
-                            subtitle: source.isAvailable ? subtitle(for: source) : "此裝置無法使用",
+                            subtitle: source.isAvailable ? nil : "此裝置無法使用",
                             systemImage: source.systemImage
                         )
                     }
@@ -108,15 +108,6 @@ struct ScanView: View {
             }
             .buttonStyle(.plain)
             .disabled(model.isProcessing)
-        }
-    }
-
-    private func subtitle(for source: PageSource) -> String {
-        switch source {
-        case .documentScanner: return "自動裁切，連續掃多頁"
-        case .camera: return "連續拍多頁"
-        case .photoLibrary: return "可多選，一次最多 50 頁"
-        case .pasteboard: return "從剪貼簿"
         }
     }
 
@@ -212,7 +203,7 @@ struct ScanView: View {
 
 private struct SourceCard: View {
     let title: String
-    let subtitle: String
+    let subtitle: String?
     let systemImage: String
 
     @Environment(\.isEnabled) private var isEnabled
@@ -226,9 +217,11 @@ private struct SourceCard: View {
                 Text(title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
@@ -251,11 +244,7 @@ struct TemplateRecordsView: View {
     var body: some View {
         Group {
             if filtered.isEmpty {
-                ContentUnavailableView(
-                    "還沒有「\(template.name)」",
-                    systemImage: "tray",
-                    description: Text("掃描後被判斷為這個情境的文件會出現在這裡。")
-                )
+                ContentUnavailableView("還沒有「\(template.name)」", systemImage: "tray")
             } else {
                 List(filtered) { record in
                     NavigationLink {

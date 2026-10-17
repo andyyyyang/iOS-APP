@@ -27,19 +27,10 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 } header: {
                     Text("外觀")
-                } footer: {
-                    Text("預設為淺色；深色模式改用深灰底。")
                 }
 
                 Section {
-                    Toggle(isOn: $localOnly) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("只使用裝置端模型")
-                            Text("不使用雲端 AI 與 Jev")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    Toggle("只使用裝置端模型", isOn: $localOnly)
                     if !localOnly {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("AI 預算")
@@ -70,10 +61,6 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("AI")
-                } footer: {
-                    Text(localOnly
-                         ? "所有 AI 都在這台裝置的 Apple Intelligence 上執行：首頁 AI 不交給雲端、不請 Jev 判斷，智慧掃描用裝置端判斷情境。伺服器只用來搜尋與同步 vault。"
-                         : "Jev 依要求的種類與難度自動選裝置端或雲端模型，以成本為先：簡單的每個等級都用裝置端（免費）。低：盡量留在裝置端；中：依難度用 Haiku、Sonnet 或 Opus 級；高：難的工作早一點用上最好的模型。各級的模型、網路搜尋、執行程式與筆記的 AI 在「AI 功能」中設定。")
                 }
 
                 Section {
@@ -86,10 +73,6 @@ struct SettingsView: View {
                         .disabled(localOnly)
                 } header: {
                     Text("智慧掃描")
-                } footer: {
-                    Text(localOnly
-                         ? "已開啟「只使用裝置端模型」：情境由裝置端 Apple Intelligence 與關鍵字判斷。JSON 一律由裝置端模型產生，不需網路。"
-                         : "判斷情境的順序：Jev（經你的伺服器，速度快、費用極低）→ 裝置端 Apple Intelligence → 關鍵字。JSON 一律由裝置端模型產生，不需網路。")
                 }
 
                 Section {
@@ -100,8 +83,6 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("筆記")
-                } footer: {
-                    Text("整個 Obsidian vault（所有資料夾的筆記、圖片與檔案）都存在這台裝置並與 Railway 空間雙向同步；電腦（Windows／Mac）與其他裝置上的 Obsidian 以 Remotely Save 同步同一份 vault。")
                 }
 
                 Section {
@@ -112,8 +93,6 @@ struct SettingsView: View {
                     }
                 } header: {
                     Text("伺服器")
-                } footer: {
-                    Text("連接 Railway 上的同步伺服器後，掃描結果可同步到 Obsidian，並透過 MCP 提供給 Claude Code 等 harness 使用。")
                 }
 
                 Section {
@@ -131,8 +110,6 @@ struct SettingsView: View {
                     Toggle("自動偵測語言", isOn: $automaticallyDetectsLanguage)
                 } header: {
                     Text("文字辨識")
-                } footer: {
-                    Text("精確模式支援中文、日文、韓文等語言；快速模式速度較快，但只支援拉丁字母語言。清單順序代表語言優先順序。")
                 }
 
                 Section("紀錄") {
@@ -140,8 +117,6 @@ struct SettingsView: View {
                 }
 
                 Section("關於") {
-                    Label("文字辨識使用 Apple Vision、JSON 擷取使用 Apple Foundation Models，都在裝置上執行。只有你啟用伺服器時，資料才會上傳到你自己的伺服器。", systemImage: "lock.shield")
-                        .font(.footnote)
                     LabeledContent("版本", value: appVersion)
                 }
             }

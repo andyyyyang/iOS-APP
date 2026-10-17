@@ -84,10 +84,12 @@ struct LiveScanView: View {
                 }
             }
 
-            Text(hint)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let hint {
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             HStack {
                 Button(role: .destructive) {
@@ -123,10 +125,10 @@ struct LiveScanView: View {
 
     // MARK: - Helpers
 
-    private var hint: String {
+    private var hint: String? {
         if draft.pendingCount > 0 { return "處理中…" }
-        if draft.pages.isEmpty { return "對準文件按下快門；多頁文件（例如發票＋報單）全部拍完再按「分析」。" }
-        return "已拍 \(draft.pages.count) 頁，可以繼續拍下一頁。長按縮圖可調整順序。"
+        if draft.pages.isEmpty { return nil }
+        return "已拍 \(draft.pages.count) 頁"
     }
 
     /// 拍一張高解析度照片，加入正在收集的文件；拍完立刻可以再拍，壓縮在背景進行。

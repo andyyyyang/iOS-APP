@@ -13,9 +13,9 @@ final class CameraController: NSObject, @unchecked Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .unavailable: return "相機尚未就緒，請稍候再試。"
-            case .timedOut: return "拍照逾時，請再按一次快門。"
-            case .noImage: return "沒有取得照片，請再試一次。"
+            case .unavailable: return "相機尚未就緒"
+            case .timedOut: return "拍照逾時"
+            case .noImage: return "沒有取得照片"
             case .failed(let message): return message
             }
         }
@@ -222,11 +222,7 @@ struct CameraAccessView<Content: View>: View {
     var body: some View {
         Group {
             if !CameraController.isAvailable {
-                ContentUnavailableView(
-                    "此裝置沒有可用的相機",
-                    systemImage: "camera",
-                    description: Text("模擬器無法使用相機。你仍可在「掃描」分頁從相簿加入頁面。")
-                )
+                ContentUnavailableView("沒有可用的相機", systemImage: "camera")
             } else {
                 switch status {
                 case .authorized:
@@ -241,7 +237,7 @@ struct CameraAccessView<Content: View>: View {
                     ContentUnavailableView {
                         Label("需要相機權限", systemImage: "camera")
                     } description: {
-                        Text("請到「設定」允許本 App 使用相機。照片與辨識全程在裝置上處理。")
+                        EmptyView()
                     } actions: {
                         Button("前往設定") {
                             if let url = URL(string: UIApplication.openSettingsURLString) {

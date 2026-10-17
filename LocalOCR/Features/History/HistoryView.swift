@@ -25,7 +25,7 @@ struct HistoryView: View {
             content
                 .canvasList()
                 .navigationTitle("紀錄")
-                .searchable(text: $searchText, prompt: "搜尋名稱、文字或 JSON")
+                .searchable(text: $searchText, prompt: "搜尋")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("全部刪除", role: .destructive) {
@@ -55,11 +55,7 @@ struct HistoryView: View {
     @ViewBuilder
     private var content: some View {
         if records.isEmpty {
-            ContentUnavailableView(
-                "尚無紀錄",
-                systemImage: "clock",
-                description: Text("辨識完成的文字與 JSON 會自動儲存在這裡，可於設定中關閉。")
-            )
+            ContentUnavailableView("尚無紀錄", systemImage: "clock")
         } else if filteredRecords.isEmpty {
             ContentUnavailableView.search(text: searchText)
         } else {

@@ -77,7 +77,7 @@ struct ResultView: View {
             if let progress = addingPages {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("正在辨識新加入的第 \(progress.current)／\(progress.total) 頁…")
+                    Text("辨識第 \(progress.current)／\(progress.total) 頁…")
                         .font(.subheadline)
                 }
                 .padding(24)
@@ -121,7 +121,7 @@ struct ResultView: View {
                 mode = .json
                 Task { await runSmartScan(forcedTemplate: nil) }
             } label: {
-                Label("以目前文字重新產生 JSON", systemImage: "arrow.clockwise")
+                Label("重新產生 JSON", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -273,7 +273,7 @@ struct ResultView: View {
         if !newText.isEmpty {
             editedText = editedText.isEmpty ? newText : editedText + "\n\n" + newText
         }
-        toast = "已加入 \(added.count) 頁，共 \(pages.count) 頁，重新分析中"
+        toast = "已加入 \(added.count) 頁，共 \(pages.count) 頁"
         save()
         mode = .json
         await runSmartScan(forcedTemplate: nil)

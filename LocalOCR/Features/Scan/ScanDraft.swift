@@ -87,10 +87,6 @@ struct DraftTray: View {
                 .padding(.vertical, 2)
             }
 
-            Text("可以繼續拍照或從其他來源加入頁面；全部頁面（例如發票＋報單）加入後再開始分析。長按縮圖可調整順序。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             HStack(spacing: 12) {
                 Button(role: .destructive) {
                     draft.clear()

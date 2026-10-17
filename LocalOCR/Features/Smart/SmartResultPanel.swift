@@ -70,14 +70,8 @@ struct SmartResultPanel: View {
 
     private func templateSummary(_ template: ScanTemplate, classification: Classification) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(template.name)
-                    .font(.system(size: 30, weight: .semibold))
-                Text(template.description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            Text(template.name)
+                .font(.system(size: 30, weight: .semibold))
             Spacer(minLength: 0)
             if let confidence = classification.confidence {
                 ConfidenceGauge(value: confidence)
@@ -106,10 +100,10 @@ struct SmartResultPanel: View {
                 HStack(spacing: 10) {
                     ProgressView()
                     if let progress = model.pageProgress, progress.total > 1 {
-                        Text("Apple Intelligence 正在分析第 \(progress.current)／\(progress.total) 頁…")
+                        Text("分析第 \(progress.current)／\(progress.total) 頁…")
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("Apple Intelligence 正在依樣板產生資料…")
+                        Text("產生 JSON…")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -142,13 +136,10 @@ struct SmartResultPanel: View {
                     Label(outcome.extractionError ?? "無法產生 JSON", systemImage: "exclamationmark.triangle")
                         .font(.subheadline)
                         .foregroundStyle(.orange)
-                    Text("辨識文字仍會保存；上傳到伺服器後，也可以由接入的 harness 透過 MCP 產生並回寫 JSON。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     NavigationLink {
                         AIDiagnosticsView()
                     } label: {
-                        Label("查看 Apple Intelligence 診斷", systemImage: "stethoscope")
+                        Label("查看診斷", systemImage: "stethoscope")
                             .font(.subheadline.weight(.medium))
                     }
                 }

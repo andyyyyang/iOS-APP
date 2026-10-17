@@ -110,9 +110,6 @@ struct ToolMenuView: View {
                 .padding(.bottom, 12)
                 Text("工具")
                     .font(.largeTitle.bold())
-                Text("上下滑動選擇，點一下開啟")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
             .padding()
         }

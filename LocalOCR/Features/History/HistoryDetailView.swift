@@ -67,7 +67,7 @@ struct HistoryDetailView: View {
             if let progress = addingPages {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text("正在辨識新加入的第 \(progress.current)／\(progress.total) 頁…")
+                    Text("辨識第 \(progress.current)／\(progress.total) 頁…")
                         .font(.subheadline)
                 }
                 .padding(24)
@@ -141,11 +141,6 @@ struct HistoryDetailView: View {
                 }
             }
             .card()
-        } else if record.thumbnail != nil {
-            Label("這筆紀錄是舊版建立的，只保存了縮圖；之後的紀錄都會保存每一頁的照片。", systemImage: "info.circle")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .card()
         }
     }
 
@@ -154,7 +149,7 @@ struct HistoryDetailView: View {
             Button {
                 showsAnalysis = true
             } label: {
-                Label(record.jsonText == nil ? "用 Apple Intelligence 分析欄位" : "重新分析欄位", systemImage: "arrow.clockwise")
+                Label(record.jsonText == nil ? "分析欄位" : "重新分析欄位", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -163,7 +158,7 @@ struct HistoryDetailView: View {
             Button {
                 showsAddPages = true
             } label: {
-                Label("補充頁面（目前 \(record.pageCount) 頁）", systemImage: "doc.badge.plus")
+                Label("補充頁面（\(record.pageCount) 頁）", systemImage: "doc.badge.plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -213,10 +208,10 @@ struct HistoryDetailView: View {
                 Label("已上傳 \(syncedAt.formatted(date: .abbreviated, time: .shortened))", systemImage: "checkmark.icloud")
                     .foregroundStyle(.green)
             } else if ServerSettings.isConfigured {
-                Label("尚未上傳最新內容", systemImage: "icloud")
+                Label("尚未上傳", systemImage: "icloud")
                     .foregroundStyle(.secondary)
             } else {
-                Label("在設定中連接伺服器即可同步到 Obsidian 與 harness", systemImage: "icloud.slash")
+                Label("未連接伺服器", systemImage: "icloud.slash")
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -247,7 +242,7 @@ struct HistoryDetailView: View {
         addingPages = nil
         let newText = added.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
         guard !newText.isEmpty else {
-            toast = "新加入的頁面沒有辨識到文字"
+            toast = "沒有辨識到文字"
             return
         }
         record.text = record.text.isEmpty ? newText : record.text + "\n\n" + newText

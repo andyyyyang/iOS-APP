@@ -61,8 +61,6 @@ struct AIDiagnosticsView: View {
                 }
             } header: {
                 Text("測試")
-            } footer: {
-                Text("在裝置上判斷情境並產生 JSON，不會上傳。若失敗，請把這裡的訊息提供給開發者。")
             }
         }
         .canvasList()
@@ -74,7 +72,7 @@ struct AIDiagnosticsView: View {
     private var localeSupportText: String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *), status.isAvailable {
-            return OnDeviceAIDiagnostics.supportsCurrentLocale ? "是" : "否（請在「設定 → Apple Intelligence 與 Siri」選擇支援的語言）"
+            return OnDeviceAIDiagnostics.supportsCurrentLocale ? "是" : "否"
         }
         #endif
         return "—"

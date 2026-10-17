@@ -104,7 +104,7 @@ private struct PageSourcesModifier: ViewModifier {
             }
         }
         if images.isEmpty {
-            onError("無法載入所選的照片。")
+            onError("無法載入照片")
         } else {
             onPick(images, .photoLibrary)
         }
@@ -113,7 +113,7 @@ private struct PageSourcesModifier: ViewModifier {
     private func paste() {
         let images = UIPasteboard.general.images ?? []
         if images.isEmpty {
-            onError("剪貼簿中沒有圖片。")
+            onError("剪貼簿中沒有圖片")
         } else {
             onPick(images, .pasteboard)
         }
@@ -135,8 +135,6 @@ extension View {
             ForEach(PageSource.allCases.filter(\.isAvailable)) { source in
                 Button(source.title) { request.wrappedValue = source }
             }
-        } message: {
-            Text("加入的頁面會與原有頁面合併，重新判斷情境並產生 JSON。")
         }
     }
 }

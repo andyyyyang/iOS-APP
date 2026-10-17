@@ -22,13 +22,8 @@ struct PairingView: View {
     var body: some View {
         Form {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("在電腦的 Obsidian 按 Ctrl+P（Mac 為 ⌘P），執行「LocalOCR Sync：配對 iPhone／iPad」，畫面會顯示 QR Code 與配對碼（10 分鐘內有效）。")
-                    Text("配對後，筆記會在這台裝置、Railway 空間與 Obsidian 之間雙向同步。")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.subheadline)
-                .padding(.vertical, 4)
+                Text("在 Obsidian 執行「配對 iPhone／iPad」")
+                    .font(.subheadline)
             }
 
             Section {
@@ -82,13 +77,11 @@ struct PairingView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                NavigationLink("手動輸入網址與 API 金鑰") {
+                NavigationLink("手動設定") {
                     ServerSettingsView()
                 }
             } header: {
                 Text("進階")
-            } footer: {
-                Text("掃描 QR Code 會自動帶入伺服器網址；只有輸入配對碼時才會使用這裡的網址。")
             }
         }
         .canvasList()
@@ -127,7 +120,7 @@ struct PairingView: View {
             let result = try await PairingClient.claim(link)
             PairingClient.apply(result, server: link.server)
             let vault = result.vaultName.map { "「\($0)」" } ?? ""
-            phase = .paired("已與 Obsidian \(vault)配對，開始同步筆記")
+            phase = .paired("已與 Obsidian \(vault)配對")
             await VaultSyncCenter.shared.syncNow()
             await NotesStore.shared.reload()
         } catch {

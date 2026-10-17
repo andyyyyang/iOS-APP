@@ -44,17 +44,15 @@ struct ServerSettingsView: View {
                 }
             } header: {
                 Text("連線")
-            } footer: {
-                Text("API 金鑰存在 iOS 鑰匙圈。伺服器端的 Jev 金鑰只放在伺服器，不會傳到手機。")
             }
 
             Section("同步") {
-                Toggle("辨識完成後自動上傳", isOn: $autoUpload)
+                Toggle("自動上傳", isOn: $autoUpload)
                 Button("上傳未同步的紀錄（\(pendingRecords.count)）") {
                     Task { await uploadPending() }
                 }
                 .disabled(isWorking || pendingRecords.isEmpty || !ServerSettings.isConfigured)
-                Button("從伺服器更新情境樣板") {
+                Button("更新情境樣板") {
                     Task { await syncTemplates() }
                 }
                 .disabled(isWorking || !ServerSettings.isConfigured)
@@ -70,8 +68,6 @@ struct ServerSettingsView: View {
                     endpointRow("OpenAPI", "\(url.absoluteString)/v1/openapi.json")
                 } header: {
                     Text("接入點")
-                } footer: {
-                    Text("Claude Code、Obsidian 插件與自建 harness 都使用同一把 API 金鑰（Authorization: Bearer）。")
                 }
             }
         }

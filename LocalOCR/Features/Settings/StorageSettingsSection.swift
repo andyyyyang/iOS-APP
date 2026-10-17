@@ -20,7 +20,7 @@ struct StorageSettingsSection: View {
         Section {
             LabeledContent("目前使用", value: storage.title)
             if showsWebDAVForm {
-                TextField("網址（例如 https://webdav-xxx.up.railway.app）", text: $url)
+                TextField("網址", text: $url)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -28,11 +28,11 @@ struct StorageSettingsSection: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField("密碼", text: $password)
-                TextField("vault 所在的資料夾（空白代表最上層）", text: $folder)
+                TextField("資料夾", text: $folder)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 if !testFolders.isEmpty {
-                    Picker("從資料夾中選擇", selection: $folder) {
+                    Picker("選擇資料夾", selection: $folder) {
                         Text("最上層").tag("")
                         ForEach(testFolders, id: \.self) { name in
                             Text(name).tag(name)
@@ -77,8 +77,6 @@ struct StorageSettingsSection: View {
             }
         } header: {
             Text("同步空間")
-        } footer: {
-            Text("vault 可以放在同步伺服器（Railway Bucket，電腦用 Remotely Save 的 S3 同步）或自己的 WebDAV（例如 Railway 上的 WebDAV，電腦用 Remotely Save 的 WebDAV 同步，資料夾預設是 vault 名稱）。WebDAV 本身沒有推送：有配對同步伺服器時仍會即時通知其他裝置，沒有時每分鐘同步一次。切換時會先上傳這台裝置上的修改，再從新的空間重新取得檔案，兩邊的檔案不會混在一起。")
         }
         .confirmationDialog(
             pendingSwitch == .server ? "改回同步伺服器？" : "改用這個 WebDAV？",
@@ -90,7 +88,7 @@ struct StorageSettingsSection: View {
                 pendingSwitch = nil
             }
         } message: {
-            Text("會先把這台裝置上的修改上傳到目前的空間，再清掉這台裝置上已下載的檔案，從新的空間重新取得。原本空間的檔案不受影響。")
+            Text("會重新取得檔案，原空間不受影響。")
         }
     }
 
@@ -106,7 +104,7 @@ struct StorageSettingsSection: View {
         defer { isTesting = false }
         testResult = nil
         guard let server = WebDAVSettings.vaultURL(server: url, folder: "") else {
-            testResult = "網址格式不正確。"
+            testResult = "網址格式不正確"
             return
         }
         let root = WebDAVClient(baseURL: server, username: username, password: password)
@@ -120,9 +118,9 @@ struct StorageSettingsSection: View {
             }
             if !folder.isEmpty, let vaultURL = WebDAVSettings.vaultURL(server: url, folder: folder) {
                 let inFolder = try await WebDAVClient(baseURL: vaultURL, username: username, password: password).testConnection()
-                testResult = "連線成功。「\(folder)」中有 \(inFolder.count) 個項目。"
+                testResult = "連線成功 · \(inFolder.count) 個項目"
             } else {
-                testResult = "連線成功。最上層有 \(items.count) 個項目\(testFolders.isEmpty ? "" : "，可以在上方選擇 vault 所在的資料夾")。"
+                testResult = "連線成功 · \(items.count) 個項目"
             }
         } catch {
             testResult = error.localizedDescription

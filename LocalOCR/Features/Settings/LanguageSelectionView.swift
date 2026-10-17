@@ -23,7 +23,7 @@ struct LanguageSelectionView: View {
         List {
             Section {
                 if selected.isEmpty {
-                    Text("未選擇，將使用系統預設語言")
+                    Text("系統預設")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(selected, id: \.self) { identifier in
@@ -32,10 +32,10 @@ struct LanguageSelectionView: View {
                 .onMove(perform: move)
                 .onDelete(perform: remove)
             } header: {
-                Text("已選擇（依優先順序）")
+                Text("已選擇")
             } footer: {
                 if hasUnsupportedSelection {
-                    Text("標示警告的語言在「\(level.displayName)」模式下不支援，辨識時會略過。")
+                    Text("部分語言此模式不支援")
                 }
             }
 
