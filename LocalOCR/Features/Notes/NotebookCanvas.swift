@@ -159,6 +159,8 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
     private var canvasWidth = CanvasLayout.width
     /// 出現時就取得焦點、顯示 Apple Pencil 工具列（側欄的手寫備忘要等開始書寫才顯示）。
     var activatesOnAppear = true
+    /// 正在換成其他裝置寫的版本：畫布回報的變動不是在這裡寫的。
+    private var isLoading = false
 
     var onDrawingChange: ((PKDrawing) -> Void)?
 
@@ -264,7 +266,17 @@ final class CanvasNotebookController: UIViewController, PKCanvasViewDelegate, PK
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         updateLayout()
+        guard !isLoading else { return }
         onDrawingChange?(canvasView.drawing)
+    }
+
+    /// 換成其他裝置寫的版本（不回報成這台裝置的修改）。
+    func loadRemote(_ drawing: PKDrawing) {
+        guard canvasView.drawing != drawing else { return }
+        isLoading = true
+        canvasView.drawing = drawing
+        isLoading = false
+        updateLayout()
     }
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
@@ -299,6 +311,11 @@ final class CanvasNotebookHandle {
     /// 換掉畫布上的筆跡（其他裝置改過、清除）。
     func replace(_ drawing: PKDrawing) {
         controller?.canvasView.drawing = drawing
+    }
+
+    /// 換成其他裝置寫的版本：不會被當成在這裡寫的、再存一次。
+    func loadRemote(_ drawing: PKDrawing) {
+        controller?.loadRemote(drawing)
     }
 }
 

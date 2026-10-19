@@ -24,6 +24,8 @@ struct NotebookEditorView: View {
     @State private var isPublishing = false
     /// 有沒有還沒更新到 Obsidian 圖片的修改（沒改過就不必重新產生、上傳圖片）。
     @State private var hasUnpublishedChanges = false
+    /// 載入筆跡時的同步 revision：之後其他裝置的版本下載下來就換過去。
+    @State private var loadedRevision = 0
     @State private var toast: String?
     @FocusState private var titleFocused: Bool
     private let store = NotesStore.shared
@@ -72,6 +74,7 @@ struct NotebookEditorView: View {
         }
         // 同步前先把畫布上的最新筆跡存進檔案
         .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in captureDrawing() }
+        .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
         .onChange(of: scenePhase) { _, phase in
             // 切到其他 App、鎖定螢幕或被系統關閉前：立即存檔，並更新 Obsidian 中的圖片與 Markdown
             guard phase != .active else { return }
@@ -145,12 +148,28 @@ struct NotebookEditorView: View {
         guard archive == nil, !loadFailed else { return }
         path = initialPath
         title = ((initialPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        loadedRevision = sync.revision
         if let loaded = await NotebookFiles.load(notePath: initialPath, id: notebookID) {
             archive = loaded
             sync.touch(initialPath)
         } else {
             loadFailed = true
         }
+    }
+
+    /// 其他裝置（iPhone、另一台 iPad）在這本寫了字、同步下載了新版本：這裡沒有還沒存的筆跡時換成新版本。
+    private func reloadIfChangedElsewhere() {
+        guard let current = archive, pendingDrawing == nil, saveTask == nil else { return }
+        let archivePath = LocalVault.normalize(NotebookFiles.archivePath(notePath: path, id: current.id))
+        guard let downloaded = sync.downloadedAt[archivePath], downloaded > loadedRevision else { return }
+        loadedRevision = sync.revision
+        guard let data = try? sync.vault.read(archivePath),
+              var latest = try? NotebookArchive.decoder.decode(NotebookArchive.self, from: data) else { return }
+        latest.migrateToCanvas()
+        guard latest != current else { return }
+        archive = latest
+        handle.loadRemote(latest.pkDrawing)
+        if latest.paper != current.paper { revision += 1 }
     }
 
     private func scheduleSave(_ drawing: PKDrawing) {

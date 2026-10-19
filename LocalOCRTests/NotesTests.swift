@@ -695,7 +695,11 @@ final class FakeVaultRemote: VaultRemote, @unchecked Sendable {
         lock.withLock { frozen = nil }
     }
 
+    /// 列出過的資料夾（「前綴」，整個 vault 遞迴列出時是「*」）。
+    private(set) var listings: [String] = []
+
     func list(prefix: String, recursive: Bool) async throws -> VaultListing {
+        lock.withLock { listings.append(recursive ? "*" + prefix : prefix) }
         if let frozen = lock.withLock({ frozen }) { return frozen }
         return currentListing()
     }
@@ -890,21 +894,75 @@ final class VaultSyncEngineTests: XCTestCase {
         XCTAssertEqual(vault.readText("a.md"), "Obsidian")
     }
 
-    func testRefreshPullsRemoteEditsOfTheOpenFile() async throws {
+    func testPullDownloadsOnlyTheChangedFiles() async throws {
         remote.put("工作/a.md", "v1")
+        remote.put("工作/b.md", "b1")
+        remote.put("c.md", "c1")
         _ = try await engine.sync(remote: remote)
         remote.put("工作/a.md", "v2")
-        let updated = try await engine.refresh("工作/a.md", remote: remote)
-        XCTAssertTrue(updated)
+        remote.put("c.md", "c2")
+        let before = remote.listings.count
+        let result = try await engine.pull(["工作/a.md", "c.md"], remote: remote, policy: .onDemand)
+        XCTAssertEqual(Set(result.downloaded), ["工作/a.md", "c.md"])
+        XCTAssertFalse(result.needsFullSync)
         XCTAssertEqual(vault.readText("工作/a.md"), "v2")
-        let unchanged = try await engine.refresh("工作/a.md", remote: remote)
-        XCTAssertFalse(unchanged)
+        XCTAssertEqual(vault.readText("c.md"), "c2")
+        XCTAssertEqual(Set(remote.listings.dropFirst(before)), ["工作/", ""], "只列出改過的檔案所在的資料夾，不列出整個 vault")
 
-        remote.put("工作/a.md", "v3")
+        let again = try await engine.pull(["工作/a.md"], remote: remote, policy: .onDemand)
+        XCTAssertEqual(again.unchanged, ["工作/a.md"], "電腦還沒上傳完：遠端還是同一版")
+        XCTAssertTrue(again.downloaded.isEmpty)
+        let report = try await engine.sync(remote: remote)
+        XCTAssertTrue(report.isEmpty, "下載過的版本已經記下，完整同步不會再下載")
+    }
+
+    func testPullKeepsLocalEditsAndLeavesConflictsToFullSync() async throws {
+        remote.put("工作/a.md", "v1")
+        _ = try await engine.sync(remote: remote)
+        remote.put("工作/a.md", "Obsidian")
         try vault.writeText("本機修改", to: "工作/a.md")
-        let blocked = try await engine.refresh("工作/a.md", remote: remote)
-        XCTAssertFalse(blocked, "有未上傳的修改時不覆蓋")
-        XCTAssertEqual(vault.readText("工作/a.md"), "本機修改")
+        let result = try await engine.pull(["工作/a.md"], remote: remote, policy: .everything)
+        XCTAssertTrue(result.needsFullSync)
+        XCTAssertTrue(result.downloaded.isEmpty)
+        XCTAssertEqual(vault.readText("工作/a.md"), "本機修改", "有未上傳的修改時不覆蓋")
+    }
+
+    func testPullAddsNewFilesByDownloadPolicy() async throws {
+        remote.put("a.md", "v1")
+        _ = try await engine.sync(remote: remote, policy: .onDemand)
+        remote.put("新/b.md", "b")
+        let listed = try await engine.pull(["新/b.md"], remote: remote, policy: .onDemand)
+        XCTAssertEqual(listed.listed, ["新/b.md"])
+        XCTAssertFalse(vault.exists("新/b.md"), "按需模式只加進清單，打開時才下載")
+        let pending = await engine.pendingRemoteFiles().map(\.path)
+        XCTAssertTrue(pending.contains("新/b.md"))
+
+        remote.put("新/c.md", "c")
+        let fetched = try await engine.pull(["新/c.md"], remote: remote, policy: .notes)
+        XCTAssertEqual(fetched.downloaded, ["新/c.md"])
+        XCTAssertEqual(vault.readText("新/c.md"), "c")
+    }
+
+    func testPullLeavesMovesToFullSync() async throws {
+        remote.put("a.md", "內容")
+        _ = try await engine.sync(remote: remote)
+        remote.move("a.md", to: "工作/改名.md")
+        let result = try await engine.pull(["a.md", "工作/改名.md"], remote: remote, policy: .everything)
+        XCTAssertTrue(result.needsFullSync, "舊位置不見了：完整同步才認得出搬移")
+        XCTAssertTrue(result.downloaded.isEmpty, "新位置不先下載，搬移才不會變成刪除再下載")
+        XCTAssertTrue(vault.exists("a.md"))
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.moves, [.init(from: "a.md", to: "工作/改名.md")])
+        XCTAssertEqual(vault.readText("工作/改名.md"), "內容")
+    }
+
+    func testFullSyncReportsDownloadedPaths() async throws {
+        remote.put("a.md", "v1")
+        remote.put("b.md", "b1")
+        _ = try await engine.sync(remote: remote)
+        remote.put("a.md", "v2")
+        let report = try await engine.sync(remote: remote)
+        XCTAssertEqual(report.downloadedPaths, ["a.md"])
     }
 
     func testPrepareOverwriteReplacesOrDeletesFilesNotOnThisDevice() async throws {

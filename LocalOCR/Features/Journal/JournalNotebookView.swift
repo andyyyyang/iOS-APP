@@ -27,6 +27,8 @@ struct JournalNotebookView: View {
     @State private var pendingDrawing: (drawing: PKDrawing, mode: JournalViewMode)?
     @State private var hasUnpublishedChanges = false
     @State private var isOrganizing = false
+    /// 載入筆記本時的同步 revision：之後其他裝置的版本下載下來就換過去。
+    @State private var loadedRevision = 0
     @State private var pendingDelete: Int?
     @State private var picking: TagReference?
     @State private var toast: String?
@@ -103,6 +105,7 @@ struct JournalNotebookView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in captureDrawing() }
+        .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
         .onChange(of: scenePhase) { _, phase in
             guard phase != .active else { return }
             captureDrawing()
@@ -256,6 +259,7 @@ struct JournalNotebookView: View {
         guard notebook == nil, !loadFailed else { return }
         path = initialPath
         title = ((initialPath as NSString).lastPathComponent as NSString).deletingPathExtension
+        loadedRevision = sync.revision
         guard var loaded = await JournalFiles.load(notePath: initialPath, id: notebookID) else {
             loadFailed = true
             return
@@ -271,6 +275,22 @@ struct JournalNotebookView: View {
         let last = loaded.pages.count - 1
         try? await Task.sleep(for: .milliseconds(350))
         handle.scrollToPage(last, animated: false)
+    }
+
+    /// 其他裝置（iPhone、另一台 iPad）在這本日誌寫了字、同步下載了新版本：這裡沒有還沒存的筆跡時換成新版本。
+    private func reloadIfChangedElsewhere() {
+        guard let current = notebook, pendingDrawing == nil, saveTask == nil else { return }
+        let archivePath = LocalVault.normalize(JournalFiles.archivePath(notePath: path, id: current.id))
+        guard let downloaded = sync.downloadedAt[archivePath], downloaded > loadedRevision else { return }
+        loadedRevision = sync.revision
+        guard let data = try? sync.vault.read(archivePath),
+              var latest = try? JournalNotebook.decoder.decode(JournalNotebook.self, from: data),
+              latest != current else { return }
+        if latest.ensurePage(for: JournalLayout.day()) {
+            try? JournalFiles.save(latest, notePath: path)
+        }
+        notebook = latest
+        revision += 1
     }
 
     private func scheduleSave(_ drawing: PKDrawing, mode: JournalViewMode) {
