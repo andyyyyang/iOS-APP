@@ -21,8 +21,12 @@ export const REMOTE_SYNC_DEBOUNCE_MS = 1_000;
 /** Remotely Save was already syncing: try again after this long, at most REMOTE_SYNC_MAX_BUSY_RETRIES times. */
 export const REMOTE_SYNC_BUSY_RETRY_MS = 3_000;
 export const REMOTE_SYNC_MAX_BUSY_RETRIES = 10;
-/** Local edits are reported this long after the last one: Remotely Save's sync on save uploads ~3 s after an edit. */
-export const LOCAL_REPORT_DEBOUNCE_MS = 8_000;
+/** Local edits are reported this long after the last one: Remotely Save's sync on save starts uploading ~3 s after an edit. */
+export const LOCAL_REPORT_DEBOUNCE_MS = 4_000;
+/** A report is due while Remotely Save is still syncing: check again this often… */
+export const REPORT_UPLOAD_CHECK_MS = 1_000;
+/** …for at most this long, then report anyway (the other devices look at the files again a few times). */
+export const REPORT_UPLOAD_MAX_WAIT_MS = 30_000;
 /** Vault events this soon after live sync started Remotely Save are its downloads, not edits made here. */
 export const IGNORE_AFTER_REMOTE_SYNC_MS = 20_000;
 /** …and, for a long sync, until this long after it finished. */
@@ -370,8 +374,7 @@ export async function startRemotelySaveSync(app: unknown): Promise<RemoteSyncRes
 		| null
 		| undefined;
 	const plugin = host?.plugins?.plugins?.[REMOTELY_SAVE_PLUGIN_ID];
-	const status = plugin?.syncStatus;
-	if (plugin?.isSyncing === true || (typeof status === "string" && status !== "idle" && status !== "finish")) return "busy";
+	if (isRemotelySaveSyncing(app)) return "busy";
 	if (typeof plugin?.syncRun === "function") {
 		await plugin.syncRun("auto");
 		return "started";
@@ -381,6 +384,14 @@ export async function startRemotelySaveSync(app: unknown): Promise<RemoteSyncRes
 		return "started";
 	}
 	return "unavailable";
+}
+
+/** True while Remotely Save is syncing (`isSyncing` in newer versions, `syncStatus` in older ones). */
+export function isRemotelySaveSyncing(app: unknown): boolean {
+	const host = app as { plugins?: { plugins?: Record<string, RemotelySavePlugin | undefined> } } | null | undefined;
+	const plugin = host?.plugins?.plugins?.[REMOTELY_SAVE_PLUGIN_ID];
+	const status = plugin?.syncStatus;
+	return plugin?.isSyncing === true || (typeof status === "string" && status !== "idle" && status !== "finish");
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +424,8 @@ export interface LiveSyncDeps {
 	configDir: string;
 	/** Starts Remotely Save's sync (startRemotelySaveSync in the plugin). */
 	syncRemote: () => Promise<RemoteSyncResult>;
+	/** True while Remotely Save syncs (isRemotelySaveSyncing in the plugin): a due report waits until it has uploaded. */
+	isRemoteSyncing?: () => boolean;
 	/** The WebSocket GET /v1/vault/stream, preferred when given; null or omitted = long-poll only. */
 	stream?: StreamDeps | null;
 	timers?: Timers;
@@ -456,6 +469,8 @@ export class LiveSync {
 	private remoteSyncRunning = false;
 	private remoteSyncAgain = false;
 	private busyRetries = 0;
+	/** How long the due report has waited for Remotely Save to finish uploading. */
+	private reportWaitedMs = 0;
 	private readonly queue = new PathQueue();
 	private readonly timers: Timers;
 	private readonly now: () => number;
@@ -500,6 +515,7 @@ export class LiveSync {
 		this.generation++;
 		this.remoteSync.cancel();
 		this.report.cancel();
+		this.reportWaitedMs = 0;
 		this.queue.clear();
 		this.endStream?.();
 		this.wake?.();
@@ -772,6 +788,13 @@ export class LiveSync {
 	}
 
 	private async sendReport(): Promise<void> {
+		// Remotely Save is still uploading: tell the others once the files are in the bucket
+		if (this.running && this.deps.isRemoteSyncing?.() === true && this.reportWaitedMs < REPORT_UPLOAD_MAX_WAIT_MS) {
+			this.reportWaitedMs += REPORT_UPLOAD_CHECK_MS;
+			this.report.schedule(REPORT_UPLOAD_CHECK_MS);
+			return;
+		}
+		this.reportWaitedMs = 0;
 		const paths = this.queue.take();
 		if (paths === null || !this.running) return;
 		const generation = this.generation;

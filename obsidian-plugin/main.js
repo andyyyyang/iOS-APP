@@ -3074,7 +3074,9 @@ var MIN_POLL_INTERVAL_MS = 1e3;
 var REMOTE_SYNC_DEBOUNCE_MS = 1e3;
 var REMOTE_SYNC_BUSY_RETRY_MS = 3e3;
 var REMOTE_SYNC_MAX_BUSY_RETRIES = 10;
-var LOCAL_REPORT_DEBOUNCE_MS = 8e3;
+var LOCAL_REPORT_DEBOUNCE_MS = 4e3;
+var REPORT_UPLOAD_CHECK_MS = 1e3;
+var REPORT_UPLOAD_MAX_WAIT_MS = 3e4;
 var IGNORE_AFTER_REMOTE_SYNC_MS = 2e4;
 var IGNORE_AFTER_REMOTE_SYNC_END_MS = 2e3;
 var RETRY_DELAYS_MS = [5e3, 15e3, 6e4];
@@ -3258,8 +3260,7 @@ async function startRemotelySaveSync(app) {
   if (isPluginEnabled(app, REMOTELY_SAVE_PLUGIN_ID) === false) return "unavailable";
   const host = app;
   const plugin = (_b = (_a = host == null ? void 0 : host.plugins) == null ? void 0 : _a.plugins) == null ? void 0 : _b[REMOTELY_SAVE_PLUGIN_ID];
-  const status = plugin == null ? void 0 : plugin.syncStatus;
-  if ((plugin == null ? void 0 : plugin.isSyncing) === true || typeof status === "string" && status !== "idle" && status !== "finish") return "busy";
+  if (isRemotelySaveSyncing(app)) return "busy";
   if (typeof (plugin == null ? void 0 : plugin.syncRun) === "function") {
     await plugin.syncRun("auto");
     return "started";
@@ -3269,6 +3270,13 @@ async function startRemotelySaveSync(app) {
     return "started";
   }
   return "unavailable";
+}
+function isRemotelySaveSyncing(app) {
+  var _a, _b;
+  const host = app;
+  const plugin = (_b = (_a = host == null ? void 0 : host.plugins) == null ? void 0 : _a.plugins) == null ? void 0 : _b[REMOTELY_SAVE_PLUGIN_ID];
+  const status = plugin == null ? void 0 : plugin.syncStatus;
+  return (plugin == null ? void 0 : plugin.isSyncing) === true || typeof status === "string" && status !== "idle" && status !== "finish";
 }
 function describeStreamEnd({ ready, code, idle }) {
   if (idle) return `\u9023\u7DDA\u903E\u6642\uFF08${STREAM_IDLE_TIMEOUT_MS / 1e3} \u79D2\u6C92\u6709\u56DE\u61C9\uFF09`;
@@ -3291,6 +3299,8 @@ var LiveSync = class {
     this.remoteSyncRunning = false;
     this.remoteSyncAgain = false;
     this.busyRetries = 0;
+    /** How long the due report has waited for Remotely Save to finish uploading. */
+    this.reportWaitedMs = 0;
     this.queue = new PathQueue();
     this.current = {
       state: "stopped",
@@ -3327,6 +3337,7 @@ var LiveSync = class {
     this.generation++;
     this.remoteSync.cancel();
     this.report.cancel();
+    this.reportWaitedMs = 0;
     this.queue.clear();
     (_a = this.endStream) == null ? void 0 : _a.call(this);
     (_b = this.wake) == null ? void 0 : _b.call(this);
@@ -3585,6 +3596,13 @@ var LiveSync = class {
     }
   }
   async sendReport() {
+    var _a, _b;
+    if (this.running && ((_b = (_a = this.deps).isRemoteSyncing) == null ? void 0 : _b.call(_a)) === true && this.reportWaitedMs < REPORT_UPLOAD_MAX_WAIT_MS) {
+      this.reportWaitedMs += REPORT_UPLOAD_CHECK_MS;
+      this.report.schedule(REPORT_UPLOAD_CHECK_MS);
+      return;
+    }
+    this.reportWaitedMs = 0;
     const paths = this.queue.take();
     if (paths === null || !this.running) return;
     const generation = this.generation;
@@ -4293,6 +4311,7 @@ ${this.settings.apiKey}` : "";
       clientId: this.deviceClientId(),
       configDir: this.app.vault.configDir,
       syncRemote: () => startRemotelySaveSync(this.app),
+      isRemoteSyncing: () => isRemotelySaveSyncing(this.app),
       stream: url && open ? { url, token: this.settings.apiKey, open } : null,
       log: (message) => console.info(LOG_PREFIX, message)
     });

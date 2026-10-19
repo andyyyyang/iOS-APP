@@ -108,7 +108,7 @@ App 以配對碼呼叫 `POST /pair`，取得**這個插件使用的 API 金鑰**
 Remotely Save 直接同步儲存桶，本身不知道其他裝置何時修改了筆記，只能定時同步。插件設定「裝置設定 → 即時同步」開啟時（預設開啟，需已填伺服器網址與 API 金鑰）：
 
 - 插件與伺服器保持一條 WebSocket 連線（`wss://<伺服器>/v1/vault/stream`，第一個訊息以 API 金鑰登入），伺服器在 iPad App、Claude（MCP）或其他 Obsidian 裝置修改後立即推送；約 1 秒內執行這台裝置的 Remotely Save 同步（與 Remotely Save 的定時同步相同的方式，不會跳出進度通知；Remotely Save 正在同步時，等它完成後再執行一次）。重新連線時帶上次的進度（`since`），斷線期間的修改會一併補上。
-- 在這台裝置新增、修改、刪除或改名筆記後（最後一次修改 8 秒後，Remotely Save 的儲存時同步已上傳），經由同一條連線（`{"type":"report"}`；未連線時以 `POST /v1/vault/changes`）通知 iPad 與其他裝置。`.obsidian` 等 `.` 開頭的檔案、插件自己同步掃描時寫入的筆記，以及即時同步觸發的 Remotely Save 下載（20 秒內）都不會回報。
+- 在這台裝置新增、修改、刪除或改名筆記後（最後一次修改 4 秒後；Remotely Save 還在同步時等它上傳完，最多 30 秒），經由同一條連線（`{"type":"report"}`；未連線時以 `POST /v1/vault/changes`）通知 iPad 與其他裝置。`.obsidian` 等 `.` 開頭的檔案、插件自己同步掃描時寫入的筆記，以及即時同步觸發的 Remotely Save 下載（20 秒內）都不會回報。
 - 每台裝置有自己的代碼（`X-LocalOCR-Client: obsidian-…`，存在這台裝置的 localStorage，不在 `data.json`，以免 Remotely Save 同步設定資料夾時多台裝置共用），自己的修改不會再通知自己。
 - 每 30 秒送一次 ping，75 秒完全沒有回應就重新連線；斷線後依 1、2、5、15、60 秒逐步重試。API 金鑰無效時停止連線並在設定頁顯示，10 分鐘後再試；伺服器未設定儲存桶時每 60 秒重試。不會跳出通知。
 - 還沒連上過就連續失敗 3 次（例如伺服器是舊版、沒有 WebSocket 端點，或網路不允許 WebSocket）時，改用原本的長輪詢（`GET /v1/vault/changes?since=…&wait=25`，見 [`../docs/API.md`](../docs/API.md) 的「變更通知（即時同步）」；失敗時依 5 秒、15 秒、60 秒重試，舊版伺服器、未設定儲存桶或 API 金鑰無效時每 10 分鐘重試），並每 10 分鐘再嘗試一次 WebSocket。設定頁顯示目前狀態（「即時推送」或「輪詢」）。

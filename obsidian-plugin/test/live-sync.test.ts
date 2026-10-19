@@ -10,6 +10,8 @@ import {
 	REMOTELY_SAVE_SYNC_COMMAND,
 	REMOTE_SYNC_BUSY_RETRY_MS,
 	REMOTE_SYNC_DEBOUNCE_MS,
+	REPORT_UPLOAD_CHECK_MS,
+	REPORT_UPLOAD_MAX_WAIT_MS,
 	SLOW_RETRY_MS,
 	STREAM_IDLE_TIMEOUT_MS,
 	STREAM_NOT_CONFIGURED_MESSAGE,
@@ -23,6 +25,7 @@ import {
 	describeLiveSync,
 	hasRemoteChanges,
 	isClientId,
+	isRemotelySaveSyncing,
 	isReportablePath,
 	isSlowFailure,
 	parseStreamMessage,
@@ -210,6 +213,17 @@ describe("startRemotelySaveSync", () => {
 		expect(syncRun).not.toHaveBeenCalled();
 	});
 
+	it("tells whether Remotely Save is syncing (isSyncing, or syncStatus in older versions)", () => {
+		const app = (plugin: unknown) => ({ plugins: { plugins: { "remotely-save": plugin } } });
+		expect(isRemotelySaveSyncing(app({ isSyncing: true }))).toBe(true);
+		expect(isRemotelySaveSyncing(app({ isSyncing: false }))).toBe(false);
+		expect(isRemotelySaveSyncing(app({ syncStatus: "syncing" }))).toBe(true);
+		expect(isRemotelySaveSyncing(app({ syncStatus: "idle" }))).toBe(false);
+		expect(isRemotelySaveSyncing(app({ syncStatus: "finish" }))).toBe(false);
+		expect(isRemotelySaveSyncing({})).toBe(false);
+		expect(isRemotelySaveSyncing(null)).toBe(false);
+	});
+
 	it("falls back to the start-sync command", async () => {
 		const commands = { executeCommandById: vi.fn((id: string) => id === "remotely-save:start-sync") };
 		expect(REMOTELY_SAVE_SYNC_COMMAND).toBe("remotely-save:start-sync");
@@ -257,7 +271,7 @@ describe("LiveSync", () => {
 	afterEach(() => vi.useRealTimers());
 
 	/** A server whose answers the test gives by hand. */
-	function harness(syncResult: () => Promise<RemoteSyncResult> = async () => "started") {
+	function harness(syncResult: () => Promise<RemoteSyncResult> = async () => "started", isRemoteSyncing?: () => boolean) {
 		const calls: Call[] = [];
 		const client = {
 			requestJson: (path: string, options: JsonRequestOptions = {}) =>
@@ -265,7 +279,7 @@ describe("LiveSync", () => {
 		};
 		const syncRemote = vi.fn(syncResult);
 		const log = vi.fn();
-		const live = new LiveSync({ client, clientId: ME, configDir: ".obsidian", syncRemote, log });
+		const live = new LiveSync({ client, clientId: ME, configDir: ".obsidian", syncRemote, isRemoteSyncing, log });
 		const polls = () => calls.filter((call) => (call.options.method ?? "GET") === "GET");
 		const reports = () => calls.filter((call) => call.options.method === "POST");
 		const lastPoll = () => polls()[polls().length - 1];
@@ -396,12 +410,13 @@ describe("LiveSync", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it("reports local edits 8 s after the last one, deduplicated and filtered", async () => {
+	it("reports local edits 4 s after the last one, deduplicated and filtered", async () => {
+		expect(LOCAL_REPORT_DEBOUNCE_MS).toBe(4_000);
 		const h = harness();
 		h.live.start();
 		await h.answer({ cursor: "e:0", reset: false, changes: [] });
 		h.live.noteLocalChange(["Daily/2026-10-14.md"]);
-		await vi.advanceTimersByTimeAsync(5000);
+		await vi.advanceTimersByTimeAsync(3000);
 		h.live.noteLocalChange([".obsidian/workspace.json"]);
 		h.live.noteLocalChange(["Inbox/舊.md", "Inbox/新.md"]); // a rename
 		h.live.noteLocalChange(["Daily/2026-10-14.md"]);
@@ -428,6 +443,30 @@ describe("LiveSync", () => {
 		h.reports()[1].reject(new ApiError("伺服器錯誤（502）", 502));
 		await h.flush();
 		expect(h.log).toHaveBeenCalledWith(expect.stringContaining("無法通知其他裝置"));
+		h.live.stop();
+	});
+
+	it("waits for Remotely Save to finish uploading before reporting, at most 30 s", async () => {
+		let syncing = true;
+		const h = harness(undefined, () => syncing);
+		h.live.start();
+		await h.answer({ cursor: "e:0", reset: false, changes: [] });
+		h.live.noteLocalChange(["a.md"]);
+		await vi.advanceTimersByTimeAsync(LOCAL_REPORT_DEBOUNCE_MS + 2 * REPORT_UPLOAD_CHECK_MS);
+		expect(h.reports()).toHaveLength(0);
+		syncing = false;
+		await vi.advanceTimersByTimeAsync(REPORT_UPLOAD_CHECK_MS);
+		expect(h.reports().map((r) => r.options.body)).toEqual([{ paths: ["a.md"] }]);
+		h.reports()[0].resolve({ cursor: "e:1" });
+		await h.flush();
+
+		// Remotely Save never finishes: report anyway after the longest wait
+		syncing = true;
+		h.live.noteLocalChange(["b.md"]);
+		await vi.advanceTimersByTimeAsync(LOCAL_REPORT_DEBOUNCE_MS + REPORT_UPLOAD_MAX_WAIT_MS - 1);
+		expect(h.reports()).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(h.reports().map((r) => r.options.body)).toEqual([{ paths: ["a.md"] }, { paths: ["b.md"] }]);
 		h.live.stop();
 	});
 

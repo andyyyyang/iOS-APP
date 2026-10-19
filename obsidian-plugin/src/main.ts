@@ -43,6 +43,7 @@ import {
 	createClientId,
 	describeLiveSync,
 	isClientId,
+	isRemotelySaveSyncing,
 	startRemotelySaveSync,
 	streamUrl,
 } from "./live-sync";
@@ -366,6 +367,7 @@ export default class LocalOcrSyncPlugin extends Plugin {
 			clientId: this.deviceClientId(),
 			configDir: this.app.vault.configDir,
 			syncRemote: () => startRemotelySaveSync(this.app),
+			isRemoteSyncing: () => isRemotelySaveSyncing(this.app),
 			stream: url && open ? { url, token: this.settings.apiKey, open } : null,
 			log: (message) => console.info(LOG_PREFIX, message),
 		});
