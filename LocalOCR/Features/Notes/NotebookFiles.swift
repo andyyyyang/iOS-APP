@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import PencilKit
 import UIKit
@@ -92,8 +93,17 @@ struct NotebookArchive: Codable, Equatable {
     var drawing: Data
     var recognizedText: String?
     var insights: NoteInsights?
+    /// 辨識時的筆跡（指紋）：沒改過就不必重新辨識。
+    var recognizedFingerprint: String?
+    /// 手寫的「@時間」換成的提醒時間（原文 → 時間），重新辨識時沿用。
+    var mentionDates: [String: Date]?
 
     static let fileExtension = "localocr-notebook"
+
+    /// 筆跡的指紋（比對有沒有改過）。
+    var drawingFingerprint: String {
+        SHA256.hash(data: drawing).prefix(12).map { String(format: "%02x", $0) }.joined()
+    }
 
     static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -255,18 +265,49 @@ enum NotebookFiles {
         VaultSyncCenter.shared.fileDidChange(path)
     }
 
-    /// 完整儲存（離開筆記、AI 整理後）：筆跡、畫布圖片（依筆跡之間的空白分段）、更新 Markdown 中 App 管理的區段與標籤。
-    static func publish(_ archive: NotebookArchive, notePath: String, store: NotesStore) async throws {
-        var archive = archive
+    /// 筆跡改過就重新辨識手寫（Vision，在裝置上）：Obsidian 中看得到文字、搜得到；@人名補上號碼、@時間換成提醒。
+    /// 沒改過或辨識失敗時 nil。
+    static func recognize(_ archive: NotebookArchive) async -> NotebookArchive? {
+        let fingerprint = archive.drawingFingerprint
+        guard archive.recognizedFingerprint != fingerprint else { return nil }
+        var updated = archive
         let drawing = archive.pkDrawing
-        let paper = archive.paper
+        if drawing.strokes.isEmpty {
+            updated.recognizedText = nil
+            updated.mentionDates = nil
+        } else {
+            guard let raw = try? await NoteIntelligence.recognizeHandwriting(drawing: drawing) else { return nil }
+            await JentechStore.shared.loadContacts()
+            let enriched = HandwritingMentions.enrich(raw, contacts: JentechStore.shared.contacts, known: archive.mentionDates ?? [:], now: Date())
+            updated.recognizedText = enriched.text
+            updated.mentionDates = enriched.dates.isEmpty ? nil : enriched.dates
+        }
+        updated.recognizedFingerprint = fingerprint
+        return updated
+    }
+
+    /// 這則筆記的 Markdown 換上目前的辨識結果後的內容（提醒依此排程）。
+    static func markdown(for archive: NotebookArchive, notePath: String, vault: LocalVault, pageCount: Int? = nil) -> String {
+        let text = vault.readText(notePath) ?? NotebookMarkdown.newNotebook(id: archive.id, createdAt: archive.createdAt)
+        let section = NotebookMarkdown.managedSection(id: archive.id, pageCount: pageCount ?? archive.pageCount, insights: archive.insights, recognizedText: archive.recognizedText)
+        return NotebookMarkdown.replacingManagedSection(in: text, with: section)
+    }
+
+    /// 完整儲存（離開筆記、AI 整理後）：辨識手寫、筆跡、畫布圖片（依筆跡之間的空白分段）、更新 Markdown 中 App 管理的區段與標籤。
+    /// 回傳更新後的筆跡資料（含辨識結果）。
+    @discardableResult
+    static func publish(_ archive: NotebookArchive, notePath: String, store: NotesStore) async throws -> NotebookArchive {
+        var archive = archive
+        if let recognized = await recognize(archive) { archive = recognized }
+        let drawing = archive.pkDrawing
         let bands = CanvasLayout.bands(for: drawing)
         archive.pageCount = bands.count
         try saveArchive(archive, notePath: notePath)
         let vault = store.vault
         let pageCount = bands.count
+        // Obsidian 中看的圖片：白底、不畫格線，字比較清楚
         let images = await Task.detached(priority: .userInitiated) {
-            bands.compactMap { PaperRenderer.canvasImage(drawing: drawing, rect: $0, paper: paper, scale: 2).pngData() }
+            bands.compactMap { PaperRenderer.canvasImage(drawing: drawing, rect: $0, paper: .blank, scale: 2).pngData() }
         }.value
         // 圖片每次整個重新產生；按需模式下這台裝置上可能沒有舊的圖片，直接取代遠端版本
         let sync = VaultSyncCenter.shared
@@ -289,21 +330,20 @@ enum NotebookFiles {
             }
             page += 1
         }
-        let text = vault.readText(notePath) ?? NotebookMarkdown.newNotebook(id: archive.id, createdAt: archive.createdAt)
-        let section = NotebookMarkdown.managedSection(id: archive.id, pageCount: pageCount, insights: archive.insights, recognizedText: archive.recognizedText)
-        var updated = NotebookMarkdown.replacingManagedSection(in: text, with: section)
+        var updated = markdown(for: archive, notePath: notePath, vault: vault, pageCount: pageCount)
         let tags = (archive.insights?.tags ?? []).map(NoteIntelligence.cleanTag).filter { !$0.isEmpty }
         if !tags.isEmpty {
             updated = NoteMarkdownEditing.mergingTagsInto(markdown: updated, tags: tags)
         }
         try store.save(updated, to: notePath)
         VaultSyncCenter.shared.localDidChange()
+        return archive
     }
 
     private static func writePageImages(_ archive: NotebookArchive, notePath: String, vault: LocalVault) throws {
         let drawing = archive.pkDrawing
         for (index, band) in CanvasLayout.bands(for: drawing).enumerated() {
-            if let data = PaperRenderer.canvasImage(drawing: drawing, rect: band, paper: archive.paper, scale: 2).pngData() {
+            if let data = PaperRenderer.canvasImage(drawing: drawing, rect: band, paper: .blank, scale: 2).pngData() {
                 try vault.write(data, to: pageImagePath(notePath: notePath, id: archive.id, page: index + 1))
             }
         }

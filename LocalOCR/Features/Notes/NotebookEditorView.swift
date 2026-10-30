@@ -19,6 +19,7 @@ struct NotebookEditorView: View {
     @State private var revision = 0
     @State private var showsInspector = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var recognizeTask: Task<Void, Never>?
     /// 畫布回報、還沒寫進檔案的最新筆跡（離開時畫布可能已經不在，靠它保住最後幾筆）。
     @State private var pendingDrawing: PKDrawing?
     @State private var isPublishing = false
@@ -104,6 +105,7 @@ struct NotebookEditorView: View {
             }
             .disabled(archive == nil)
             .accessibilityLabel("紙張")
+            HandwritingMentionsMenu(text: archive?.recognizedText ?? "")
             Button {
                 Task { await syncNow() }
             } label: {
@@ -183,6 +185,24 @@ struct NotebookEditorView: View {
             archive?.pkDrawing = drawing
             pendingDrawing = nil
             saveArchiveNow()
+            scheduleRecognition()
+        }
+    }
+
+    /// 停筆 4 秒辨識手寫：@人名補上號碼、@時間排提醒（不必等離開筆記）。
+    private func scheduleRecognition() {
+        recognizeTask?.cancel()
+        recognizeTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, let current = archive, let recognized = await NotebookFiles.recognize(current) else { return }
+            // 辨識期間又寫了字：等下次停筆
+            guard !Task.isCancelled, var latest = archive, latest.drawing == recognized.drawing else { return }
+            latest.recognizedText = recognized.recognizedText
+            latest.recognizedFingerprint = recognized.recognizedFingerprint
+            latest.mentionDates = recognized.mentionDates
+            archive = latest
+            saveArchiveNow()
+            NoteReminderCenter.shared.update(path: path, text: NotebookFiles.markdown(for: latest, notePath: path, vault: store.vault))
         }
     }
 
@@ -223,7 +243,15 @@ struct NotebookEditorView: View {
         isPublishing = true
         defer { isPublishing = false }
         do {
-            try await NotebookFiles.publish(current, notePath: path, store: store)
+            let published = try await NotebookFiles.publish(current, notePath: path, store: store)
+            // 辨識結果記在畫面上的筆跡資料（筆跡沒變時），之後存檔不會蓋掉
+            if var latest = archive, latest.drawing == published.drawing {
+                latest.recognizedText = published.recognizedText
+                latest.recognizedFingerprint = published.recognizedFingerprint
+                latest.mentionDates = published.mentionDates
+                latest.pageCount = published.pageCount
+                archive = latest
+            }
             hasUnpublishedChanges = false
         } catch {
             toast = "儲存失敗：\(error.localizedDescription)"
@@ -372,10 +400,14 @@ private struct NotebookInspector: View {
             let text = try await NoteIntelligence.recognizeHandwriting(drawing: drawing) { part, total in
                 phase = .recognizing(part, total)
             }
+            await JentechStore.shared.loadContacts()
+            let enriched = HandwritingMentions.enrich(text, contacts: JentechStore.shared.contacts, known: archive?.mentionDates ?? [:], now: Date())
             archive?.pkDrawing = drawing
-            archive?.recognizedText = text
+            archive?.recognizedText = enriched.text
+            archive?.mentionDates = enriched.dates.isEmpty ? nil : enriched.dates
+            archive?.recognizedFingerprint = archive?.drawingFingerprint
             phase = .thinking
-            archive?.insights = try await NoteIntelligence.insights(for: text)
+            archive?.insights = try await NoteIntelligence.insights(for: enriched.text)
             onChange()
             await onPublish()
             phase = .idle

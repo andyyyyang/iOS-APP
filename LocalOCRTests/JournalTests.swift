@@ -233,7 +233,8 @@ final class JournalTests: XCTestCase {
         XCTAssertTrue(section.contains("**日誌** [[2026-10-15]]"))
         XCTAssertTrue(section.contains("![[jn-test-b2.png]]"))
         XCTAssertTrue(section.contains("> [!summary] 摘要\n> 確認交期"))
-        XCTAssertTrue(section.contains("> [!quote]- 手寫內容（第 2 頁）\n> #0851563HS 交期"))
+        XCTAssertTrue(section.contains("#0851563HS 交期\n\n![[jn-test-b2.png]]"), "辨識出來的文字在原稿前面，直接讀得到")
+        XCTAssertFalse(section.contains("[!quote]"), "文字不再收在摺疊的區塊裡")
         XCTAssertFalse(section.contains("- [ ]"), "依 vault 規範，日誌不放待辦勾選框")
 
         let note = JournalMarkdown.newJournal(id: "jn-test", createdAt: Date())

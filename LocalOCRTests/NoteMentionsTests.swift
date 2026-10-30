@@ -112,6 +112,33 @@ final class NoteMentionsTests: XCTestCase {
         XCTAssertEqual(presets, [date(2026, 10, 30, 11, 0), date(2026, 10, 30, 20, 0), date(2026, 10, 31, 9, 0)])
     }
 
+    // MARK: - 手寫
+
+    func testHandwritingGetsNumbersAndReminders() {
+        let contacts = [
+            JentechContact(order: 0, plant: "大園一廠", dept: "業務課", rawName: "王小明", ext: "1234", mvpn: "61234"),
+            JentechContact(order: 1, plant: "大園一廠", dept: "業務課", rawName: "王小", ext: "5555", mvpn: ""),
+            JentechContact(order: 2, plant: "華亞廠", dept: "品保課", rawName: "陳美", ext: "2345", mvpn: ""),
+        ]
+        let written = "找@王小明確認報價\n@明天3點開會\nandy@example.com\n＠陳美 回電\n@某人說"
+        let result = HandwritingMentions.enrich(written, contacts: contacts, known: [:], now: now, calendar: calendar)
+        XCTAssertEqual(result.text, "找@王小明 MVPN 61234 確認報價\n(@2026-10-31 15:00) 開會\nandy@example.com\n@陳美 分機 2345 回電\n@某人說",
+                       "手寫沒有空白：名字取最長的相符名字、時間取最長看得懂的一段；email 與不認識的不動")
+        XCTAssertEqual(result.dates, ["明天3點": date(2026, 10, 31, 15, 0)])
+        XCTAssertEqual(HandwritingMentions.people(in: result.text).map(\.insertText), ["@王小明 MVPN 61234", "@陳美 分機 2345"])
+
+        // 重新辨識時沿用第一次的時間（隔天再辨識，「明天」不會變成後天）
+        let later = HandwritingMentions.enrich("@明天3點開會", contacts: [], known: result.dates, now: date(2026, 11, 2, 9, 0), calendar: calendar)
+        XCTAssertEqual(later.text, "(@2026-10-31 15:00) 開會")
+        XCTAssertEqual(later.dates, result.dates)
+        XCTAssertEqual(HandwritingMentions.enrich("沒有提到人", contacts: contacts, known: [:], now: now, calendar: calendar).text, "沒有提到人")
+    }
+
+    func testJournalPagesResolveTimesFromTheirOwnDay() {
+        XCTAssertEqual(JournalIntelligence.anchor(for: "2026-10-28", now: now, calendar: calendar), date(2026, 10, 28, 12, 0), "前幾天的頁面：那天中午")
+        XCTAssertEqual(JournalIntelligence.anchor(for: JournalLayout.day(now), now: now, calendar: calendar), now)
+    }
+
     // MARK: - 筆記中的提醒
 
     func testRemindersInANote() {

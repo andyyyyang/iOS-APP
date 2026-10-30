@@ -78,6 +78,8 @@ struct JournalPage: Codable, Equatable, Identifiable {
     var publishedFingerprint: String?
     /// 這頁寫的 #機種。
     var tags: [JournalTag] = []
+    /// 手寫的「@時間」換成的提醒時間（原文 → 時間），重新辨識時沿用。
+    var mentionDates: [String: Date]?
 
     init(id: String = UUID().uuidString.prefix(6).lowercased(), date: String, drawing: Data = PKDrawing().dataRepresentation()) {
         self.id = id
@@ -439,13 +441,13 @@ enum JournalMarkdown {
             }
             lines.append("**日誌** [[\(day)]]")
             lines.append("")
-            for (offset, page) in pages.enumerated() where !page.isBlank {
-                let number = indices[offset] + 1
-                lines.append("![[\(imageName(page))]]")
+            // 每頁先放辨識出來的文字（Obsidian 中直接讀得到、搜得到），再放手寫原稿
+            for page in pages where !page.isBlank {
                 if let text = page.recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-                    lines.append("> [!quote]- 手寫內容（第 \(number) 頁）")
-                    lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 })
+                    lines.append(text)
+                    lines.append("")
                 }
+                lines.append("![[\(imageName(page))]]")
                 lines.append("")
             }
         }

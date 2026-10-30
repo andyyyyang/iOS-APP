@@ -183,18 +183,33 @@ enum JournalIntelligence {
         var notebook = notebook
         var count = 0
         let service = OCRService()
+        guard notebook.pages.contains(where: \.needsRecognition) else { return (notebook, 0) }
+        await JentechStore.shared.loadContacts()
+        let contacts = JentechStore.shared.contacts
         for index in notebook.pages.indices where notebook.pages[index].needsRecognition {
             let page = notebook.pages[index]
             let image = JournalRenderer.inkImage(page)
             guard let result = try? await service.recognize(image) else { continue }
             // 辨識期間又改過的頁面不更新（下次再辨識）
             guard notebook.pages.indices.contains(index), notebook.pages[index].fingerprint == page.fingerprint else { continue }
-            notebook.pages[index].recognizedText = result.text
+            // @人名補上號碼、@時間換成提醒（以這頁的日期為準：前幾天寫的「明天」是那天的明天）
+            let enriched = HandwritingMentions.enrich(result.text, contacts: contacts, known: page.mentionDates ?? [:], now: anchor(for: page.date))
+            notebook.pages[index].recognizedText = enriched.text
+            notebook.pages[index].mentionDates = enriched.dates.isEmpty ? nil : enriched.dates
             notebook.pages[index].tags = JournalTags.pageTags(lines: result.lines, pageSize: JournalLayout.pageSize, models: models, previous: page.tags)
             notebook.pages[index].recognizedFingerprint = page.fingerprint
             count += 1
         }
         return (notebook, count)
+    }
+
+    /// 解析「@時間」的基準：今天的頁面是現在，之前的頁面是那天中午。
+    static func anchor(for day: String, now: Date = Date(), calendar: Calendar = .current) -> Date {
+        guard day != JournalLayout.day(now) else { return now }
+        let parts = day.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let date = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) else { return now }
+        return date
     }
 
     /// 內容有變的日子請 Apple Intelligence 整理（摘要、重點、待跟進；Private Cloud Compute 可以時用它）；

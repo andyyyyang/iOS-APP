@@ -130,6 +130,9 @@ struct JournalNotebookView: View {
                     .lineLimit(1)
                     .layoutPriority(-1)
             }
+            if let notebook, notebook.pages.indices.contains(visiblePage) {
+                HandwritingMentionsMenu(text: notebook.pages[visiblePage].recognizedText ?? "")
+            }
             Button {
                 addPage()
             } label: {
@@ -374,6 +377,10 @@ struct JournalNotebookView: View {
             if announce { toast = count > 0 ? "已辨識 \(count) 頁並整理" : "已整理" }
         } else if count > 0, let current = notebook {
             try? JournalFiles.save(current, notePath: path)
+            // 手寫的 @時間：馬上排提醒（不必等整理完）
+            let section = JournalMarkdown.managedSection(current) { JournalFiles.pageImageName(id: current.id, page: $0) }
+            let markdown = JournalMarkdown.replacingManagedSection(in: store.vault.readText(path) ?? "", with: section)
+            NoteReminderCenter.shared.update(path: path, text: markdown)
         }
     }
 
@@ -385,6 +392,7 @@ struct JournalNotebookView: View {
             current.pages[index].recognizedText = page.recognizedText
             current.pages[index].recognizedFingerprint = page.recognizedFingerprint
             current.pages[index].tags = page.tags
+            current.pages[index].mentionDates = page.mentionDates
         }
         if days { current.days = result.days }
         if current != notebook {

@@ -367,3 +367,80 @@ enum NoteReminderParser {
         return result.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
+
+/// 手寫辨識出來的文字中的「@」：@人名補上號碼（MVPN 優先），@時間換成提醒「(@2026-10-31 15:00)」。
+/// 手寫的中文沒有空白：名字取通訊錄中最長的相符名字，時間取最長、看得懂的一段。
+enum HandwritingMentions {
+    struct Result: Equatable {
+        var text: String
+        /// 這次換成提醒的原文與時間：存下來，下次重新辨識時沿用（「明天」不會隔天變成後天）。
+        var dates: [String: Date]
+    }
+
+    static func enrich(_ text: String, contacts: [JentechContact], known: [String: Date], now: Date, calendar: Calendar = .current) -> Result {
+        guard text.contains("@") || text.contains("＠") else { return Result(text: text, dates: [:]) }
+        let names = Set(contacts.map(\.name).filter { $0.count >= 2 }).sorted { $0.count > $1.count }
+        var output = ""
+        var dates: [String: Date] = [:]
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let next = text.index(after: index)
+            guard character == "@" || character == "＠" else {
+                output.append(character)
+                index = next
+                continue
+            }
+            // email 的 @
+            if let last = output.last, last.isASCII, last.isLetter || last.isNumber {
+                output.append("@")
+                index = next
+                continue
+            }
+            let rest = Array(text[next...].prefix { $0 != "\n" }.prefix(16))
+            let skipped = rest.prefix { $0 == " " }.count
+            let words = String(rest.dropFirst(skipped))
+            if let name = names.first(where: { words.hasPrefix($0) }) {
+                let person = NoteMentions.people(matching: name, in: contacts).first { $0.name == name }
+                output += person?.insertText ?? "@" + name
+                index = text.index(next, offsetBy: skipped + name.count)
+                // 號碼後面直接接著寫的字：隔開
+                if person?.number.isEmpty == false, index < text.endIndex, !text[index].isWhitespace { output.append(" ") }
+                continue
+            }
+            let characters = Array(words)
+            var matched: (length: Int, date: Date)?
+            for length in stride(from: characters.count, through: 1, by: -1) {
+                let phrase = String(characters[0..<length]).trimmingCharacters(in: .whitespaces)
+                guard !phrase.isEmpty, let date = known[phrase] ?? ReminderTime.parse(phrase, now: now, calendar: calendar) else { continue }
+                matched = (length, date)
+                dates[phrase] = date
+                break
+            }
+            if let matched {
+                output += ReminderTime.token(for: matched.date, calendar: calendar)
+                index = text.index(next, offsetBy: skipped + matched.length)
+                if index < text.endIndex, !text[index].isWhitespace { output.append(" ") }
+                continue
+            }
+            output.append("@")
+            index = next
+        }
+        return Result(text: output, dates: dates)
+    }
+
+    /// 文字中補上號碼的人（「@王小明 MVPN 61234」），依出現順序、不重複。
+    static func people(in text: String) -> [NoteMentions.Person] {
+        let ns = text as NSString
+        var seen = Set<String>()
+        return personPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+            let name = ns.substring(with: match.range(at: 1))
+            let label = ns.substring(with: match.range(at: 2))
+            let number = ns.substring(with: match.range(at: 3))
+            guard seen.insert(name + number).inserted else { return nil }
+            return NoteMentions.Person(name: name, dept: "", plant: "", numberLabel: label, number: number)
+        }
+    }
+
+    private static let personPattern = try! NSRegularExpression(pattern: #"@(\p{L}[\p{L}\p{N}_]*) (MVPN|分機) ([0-9#*\-]+)"#)
+}

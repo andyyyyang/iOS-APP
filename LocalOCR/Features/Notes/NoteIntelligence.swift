@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import PencilKit
 import UIKit
@@ -31,13 +32,27 @@ enum NoteIntelligence {
         for (index, band) in bands.enumerated() where drawing.hasStrokes(in: band) {
             progress(index + 1, bands.count)
             let image = PaperRenderer.canvasImage(drawing: drawing, rect: band, paper: .blank, scale: 2)
-            let page = try await service.recognize(image)
-            if !page.text.isEmpty {
-                pages.append(page.text)
+            // 停筆後重新辨識：沒改過的段落沿用上次的結果
+            let key = image.pngData().map { data in SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+            let text: String
+            if let key, let cached = bandCache[key] {
+                text = cached
+            } else {
+                text = try await service.recognize(image).text
+                if let key {
+                    if bandCache.count > 200 { bandCache.removeAll() }
+                    bandCache[key] = text
+                }
+            }
+            if !text.isEmpty {
+                pages.append(text)
             }
         }
         return pages.joined(separator: "\n\n")
     }
+
+    /// 辨識過的畫布段落（圖片內容 → 文字）。
+    @MainActor private static var bandCache: [String: String] = [:]
 
     /// 整理文字：標題、摘要、重點、待辦、標籤。
     static func insights(for text: String) async throws -> NoteInsights {
