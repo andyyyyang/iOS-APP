@@ -76,6 +76,8 @@ struct NoteView: View {
                 if !focused { rename(to: title) }
             }
             .onChange(of: sync.revision) { _, _ in reloadIfChangedElsewhere() }
+            // 通訊錄讀好了：輸入中的「@人名」列出建議
+            .onChange(of: JentechStore.shared.contacts.count) { _, _ in controller.refreshSuggestions() }
             // 同步前先存檔：剛打的字（還在 0.6 秒的延遲存檔中）也會被這次同步帶上
             .onReceive(NotificationCenter.default.publisher(for: .vaultWillSync)) { _ in flushSave() }
             .toast($toast)
@@ -102,6 +104,8 @@ struct NoteView: View {
                     loadImage: { await Self.loadImage(named: $0) },
                     resolvesLink: { NoteLinks.resolve($0, in: store.linkIndex) != nil },
                     linkSuggestions: { store.linkSuggestions(for: $0) },
+                    mentionSuggestions: { mentionSuggestions(for: $0) },
+                    onInsertReminder: { NoteReminderCenter.shared.requestPermissionIfNeeded() },
                     headerHeights: (header.barHeight + header.titleHeight, header.barHeight),
                     notePath: path,
                     onScroll: { [header] in header.scroll = $0 }
@@ -307,6 +311,27 @@ struct NoteView: View {
         if let line = NoteLinks.line(forAnchor: request.anchor, in: text) {
             controller.reveal(line: line)
         }
+    }
+
+    // MARK: - @人名、@時間
+
+    /// 「@」後面的文字：看得懂的時間列成提醒（只打 @ 時是一小時後、今晚、明早），名字符合的人列出 MVPN（沒有時分機）。
+    private func mentionSuggestions(for query: String) -> [MarkdownEditor.MentionSuggestion] {
+        let now = Date()
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let dates = trimmed.isEmpty ? ReminderTime.presets(now: now) : [ReminderTime.parse(trimmed, now: now)].compactMap { $0 }
+        var result = dates.map { date in
+            MarkdownEditor.MentionSuggestion(title: "⏰ " + ReminderTime.label(date, now: now), detail: "提醒", insertText: ReminderTime.token(for: date))
+        }
+        let jentech = JentechStore.shared
+        if jentech.contacts.isEmpty, !trimmed.isEmpty, !jentech.isLoadingContacts, jentech.contactsError == nil {
+            Task { await jentech.loadContacts() }
+        }
+        for person in NoteMentions.people(matching: trimmed, in: jentech.contacts) {
+            let detail = person.number.isEmpty ? person.dept : "\(person.numberLabel) \(person.number)"
+            result.append(MarkdownEditor.MentionSuggestion(title: person.name, detail: detail, insertText: person.insertText))
+        }
+        return result
     }
 
     // MARK: - 載入與儲存

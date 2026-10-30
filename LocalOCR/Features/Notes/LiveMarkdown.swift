@@ -457,6 +457,9 @@ enum LiveMarkdown {
         /// 游標與勾選完成的方框（黑色；深色模式為白色）。
         static let ink = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xF2F2F4) : UIColor(hex: 0x111113) }
         static let highlight = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x5A4A12) : UIColor(hex: 0xFCF0C8) }
+        /// 提醒時間「(@2026-10-31 15:00)」。
+        static let reminder = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xFFB35C) : UIColor(hex: 0xB45309) }
+        static let reminderBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x3D2A12) : UIColor(hex: 0xFDEFD9) }
         static let codeBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x2C2C30) : UIColor(hex: 0xF0F0F3) }
         static let tableHeader = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x26262A) : UIColor(hex: 0xF4F4F6) }
         static let tableBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x1F1F22) : UIColor(hex: 0xFFFFFF) }
@@ -1232,6 +1235,13 @@ enum LiveMarkdown {
             for match in Patterns.tag.matches(in: source, range: local) where !isProtected(match.range) {
                 storage.addAttribute(.foregroundColor, value: Theme.accent, range: absolute(match.range))
             }
+            // @人名（與號碼）、(@提醒時間)
+            for match in Patterns.mention.matches(in: source, range: local) where !isProtected(match.range) {
+                storage.addAttribute(.foregroundColor, value: Theme.accent, range: absolute(match.range))
+            }
+            for match in Patterns.reminder.matches(in: source, range: local) where !isProtected(match.range) {
+                storage.addAttributes([.foregroundColor: Theme.reminder, .backgroundColor: Theme.reminderBackground], range: absolute(match.range))
+            }
             // [^註腳]
             for match in Patterns.footnote.matches(in: source, range: local) where !isProtected(match.range) {
                 storage.addAttributes([
@@ -1291,6 +1301,8 @@ enum LiveMarkdown {
         static let strike = regex(#"~~(?=\S)(.+?)(?<=\S)~~"#)
         static let highlight = regex(#"==(?=\S)(.+?)(?<=\S)=="#)
         static let tag = regex(#"(?<![^\s(])#[\p{L}\p{N}_/-]*[\p{L}_/-][\p{L}\p{N}_/-]*"#)
+        static let mention = regex(#"(?<![A-Za-z0-9])@\p{L}[\p{L}\p{N}_]*(?: (?:MVPN|分機) [0-9#*-]+)?"#)
+        static let reminder = regex(#"\(@\d{4}-\d{1,2}-\d{1,2}(?:[ T]\d{1,2}:\d{2})?\)"#)
         static let footnote = regex(#"\[\^[^\]\n]+\]"#)
         static let math = regex(#"(?<!\$)\$(?=\S)([^$\n]+?)(?<=\S)\$(?!\$)"#)
         static let comment = regex(#"%%.+?%%"#)

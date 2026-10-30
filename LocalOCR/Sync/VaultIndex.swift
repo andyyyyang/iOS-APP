@@ -284,5 +284,7 @@ final class VaultIndexStore {
         notes = Dictionary(index.notes.map { (LocalVault.normalize($0.path), $0) }, uniquingKeysWith: { first, _ in first })
         files = index.files
         updatedAt = Date()
+        // 還沒下載的筆記中的提醒（例如在電腦寫的）
+        NoteReminderCenter.shared.updateFromIndex(notes)
     }
 }

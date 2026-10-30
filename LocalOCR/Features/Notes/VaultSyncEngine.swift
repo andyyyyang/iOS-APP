@@ -975,6 +975,9 @@ final class VaultSyncCenter {
             if policy == .onDemand, await engine.evictUnused(keeping: openPaths) > 0 { changed = true }
             if changed { revision += 1 }
             for path in report.downloadedPaths { downloadedAt[path] = revision }
+            // 其他裝置寫的提醒（搬移的筆記提醒跟著走）
+            for move in report.moves { NoteReminderCenter.shared.move(from: move.from, to: move.to, vault: vault) }
+            if !report.downloadedPaths.isEmpty { NoteReminderCenter.shared.refresh(paths: report.downloadedPaths, vault: vault) }
             if report.uploaded + report.deleted > 0 { reportToServer([]) }
         } catch VaultSyncError.tooManyDeletions(let local, let remote) {
             lastError = VaultSyncError.tooManyDeletions(local: local, remote: remote).localizedDescription
@@ -1114,6 +1117,7 @@ final class VaultSyncCenter {
                 revision += 1
                 for path in result.downloaded { downloadedAt[path] = revision }
             }
+            if !result.downloaded.isEmpty { NoteReminderCenter.shared.refresh(paths: result.downloaded, vault: vault) }
             if !result.listed.isEmpty { pendingFiles = await engine.pendingRemoteFiles() }
             if result.needsFullSync { scheduleSync(after: 2) }
             return result.unchanged

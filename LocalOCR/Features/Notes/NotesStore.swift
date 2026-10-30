@@ -440,6 +440,7 @@ final class NotesStore {
         guard vault.readText(path) != text else { return }
         try vault.writeText(text, to: path)
         VaultSyncCenter.shared.fileDidChange(path)
+        NoteReminderCenter.shared.update(path: path, text: text)
         Task { await reload() }
     }
 
@@ -451,6 +452,7 @@ final class NotesStore {
         let target = uniquePath(folder: folder, title: title)
         try vault.move(path, to: target)
         InkMemo.follow(from: path, to: target, vault: vault)
+        NoteReminderCenter.shared.move(from: path, to: target, vault: vault)
         changed()
         return target
     }
@@ -475,6 +477,7 @@ final class NotesStore {
         }
         try vault.move(path, to: target)
         InkMemo.follow(from: path, to: target, vault: vault)
+        NoteReminderCenter.shared.move(from: path, to: target, vault: vault)
         changed()
         return target
     }
@@ -489,6 +492,7 @@ final class NotesStore {
             return
         }
         try vault.delete(path)
+        NoteReminderCenter.shared.remove(path: path)
         changed()
     }
 

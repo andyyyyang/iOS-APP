@@ -10,6 +10,8 @@ struct LocalOCRApp: App {
         OCRSettings.registerDefaults()
         ServerSettings.registerDefaults()
         NotesSettings.registerDefaults()
+        // 點了筆記提醒的通知：打開那則筆記
+        NoteReminderCenter.shared.activate()
         // 全新安裝時 Application Support 資料夾不存在，SwiftData 會先輸出大量 CoreData 錯誤再自行修復；預先建立以避免干擾
         try? FileManager.default.createDirectory(at: .applicationSupportDirectory, withIntermediateDirectories: true)
     }

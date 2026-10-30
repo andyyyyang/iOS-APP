@@ -7,6 +7,7 @@ struct ContentView: View {
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.light.rawValue
     @State private var workspace = Workspace()
     @State private var pairingLink: PairingLinkItem?
+    private let reminders = NoteReminderCenter.shared
 
     var body: some View {
         // 像 Obsidian 的工作區：筆記是主角，掃描、相機、紀錄是附加的工具
@@ -35,6 +36,12 @@ struct ContentView: View {
             }
             .sheet(item: $pairingLink) { item in
                 NavigationStack { PairingView(link: item.link) }
+            }
+            // 點了提醒的通知：打開那則筆記
+            .onChange(of: reminders.openRequest, initial: true) { _, path in
+                guard let path else { return }
+                reminders.openRequest = nil
+                workspace.openNote(path)
             }
     }
 

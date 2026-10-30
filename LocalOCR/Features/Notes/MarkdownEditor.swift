@@ -15,6 +15,12 @@ final class MarkdownEditorController {
     fileprivate weak var textView: NoteTextView?
     fileprivate var onTextChange: ((String) -> Void)?
     fileprivate var restyle: (() -> Void)?
+    fileprivate var updateSuggestions: (() -> Void)?
+
+    /// 建議的資料到了（例如通訊錄讀好了）：重新列出鍵盤上方的建議。
+    func refreshSuggestions() {
+        updateSuggestions?()
+    }
 
     /// 版面設定改了（例如全寬／易讀寬度）：重新計算邊距並重排。
     func relayout() {
@@ -459,7 +465,14 @@ final class NoteTextView: UITextView {
     }
 }
 
-/// 輸入「[[」時鍵盤上方的筆記建議（取代格式工具列）。
+/// 鍵盤上方的一個建議：標題、說明與選了之後插入的文字。
+private struct SuggestionItem {
+    let title: String
+    let detail: String
+    let value: String
+}
+
+/// 輸入「[[」或「@」時鍵盤上方的建議（取代格式工具列）。
 private final class LinkSuggestionBar: UIInputView {
     private let stack = UIStackView()
     var onSelect: ((String) -> Void)?
@@ -491,7 +504,7 @@ private final class LinkSuggestionBar: UIInputView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(_ suggestions: [MarkdownEditor.LinkSuggestion]) {
+    func update(_ suggestions: [SuggestionItem]) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for suggestion in suggestions {
             var configuration = UIButton.Configuration.gray()
@@ -500,7 +513,7 @@ private final class LinkSuggestionBar: UIInputView {
             configuration.cornerStyle = .medium
             configuration.baseForegroundColor = .label
             configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
-            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onSelect?(suggestion.linkText) })
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onSelect?(suggestion.value) })
             button.titleLabel?.lineBreakMode = .byTruncatingTail
             stack.addArrangedSubview(button)
         }
@@ -518,6 +531,14 @@ struct MarkdownEditor: UIViewRepresentable {
         let linkText: String
     }
 
+    /// 「@」的建議：通訊錄上的人或提醒時間。
+    struct MentionSuggestion: Equatable {
+        let title: String
+        let detail: String
+        /// 取代「@…」的文字（「@王小明 MVPN 61234」或「(@2026-10-31 15:00)」）。
+        let insertText: String
+    }
+
     @Binding var text: String
     let controller: MarkdownEditorController
     var onInsertInk: () -> Void
@@ -527,6 +548,9 @@ struct MarkdownEditor: UIViewRepresentable {
     var loadImage: (String) async -> UIImage?
     var resolvesLink: (String) -> Bool
     var linkSuggestions: (String) -> [LinkSuggestion]
+    var mentionSuggestions: (String) -> [MentionSuggestion] = { _ in [] }
+    /// 插入了提醒（還沒問過時請使用者允許通知）。
+    var onInsertReminder: () -> Void = {}
     /// 浮在上方的標題列高度（見 NoteTextView.headerHeights）。
     var headerHeights: (expanded: CGFloat, collapsed: CGFloat) = (0, 0)
     /// 這則筆記的路徑（DataviewJS 用）。
@@ -569,6 +593,10 @@ struct MarkdownEditor: UIViewRepresentable {
             guard let textView else { return }
             coordinator?.restyle(textView)
         }
+        controller.updateSuggestions = { [weak coordinator, weak textView] in
+            guard let textView else { return }
+            coordinator?.updateLinkSuggestions(textView)
+        }
         coordinator.restyle(textView)
         return textView
     }
@@ -598,6 +626,7 @@ struct MarkdownEditor: UIViewRepresentable {
         private var styledSelectionKey: String?
         private var suggestionBar: LinkSuggestionBar?
         private var linkQuery: (range: NSRange, text: String)?
+        private var mentionQuery: (range: NSRange, text: String)?
 
         init(parent: MarkdownEditor) {
             self.parent = parent
@@ -722,25 +751,43 @@ struct MarkdownEditor: UIViewRepresentable {
             }
         }
 
-        // MARK: [[ 連結建議
+        // MARK: [[ 連結與 @ 的建議
 
-        private func updateLinkSuggestions(_ textView: NoteTextView) {
-            guard textView.isFirstResponder, textView.markedTextRange == nil, let query = MarkdownEditing.openLinkQuery(in: textView.text, cursor: textView.selectedRange) else {
+        func updateLinkSuggestions(_ textView: NoteTextView) {
+            guard textView.isFirstResponder, textView.markedTextRange == nil else {
                 linkQuery = nil
+                mentionQuery = nil
                 showSuggestions(nil, in: textView)
                 return
             }
-            linkQuery = query
-            showSuggestions(parent.linkSuggestions(query.text), in: textView)
+            if let query = MarkdownEditing.openLinkQuery(in: textView.text, cursor: textView.selectedRange) {
+                linkQuery = query
+                mentionQuery = nil
+                let items = parent.linkSuggestions(query.text).map { SuggestionItem(title: $0.title, detail: $0.detail, value: $0.linkText) }
+                showSuggestions(items, in: textView) { [weak self, weak textView] value in
+                    guard let self, let textView else { return }
+                    self.insertLink(value, in: textView)
+                }
+                return
+            }
+            linkQuery = nil
+            if let query = NoteMentions.openQuery(in: textView.text, cursor: textView.selectedRange) {
+                mentionQuery = query
+                let items = parent.mentionSuggestions(query.text).map { SuggestionItem(title: $0.title, detail: $0.detail, value: $0.insertText) }
+                showSuggestions(items, in: textView) { [weak self, weak textView] value in
+                    guard let self, let textView else { return }
+                    self.insertMention(value, in: textView)
+                }
+                return
+            }
+            mentionQuery = nil
+            showSuggestions(nil, in: textView)
         }
 
-        private func showSuggestions(_ suggestions: [LinkSuggestion]?, in textView: NoteTextView) {
+        private func showSuggestions(_ suggestions: [SuggestionItem]?, in textView: NoteTextView, onSelect: ((String) -> Void)? = nil) {
             if let suggestions, !suggestions.isEmpty {
                 let bar = suggestionBar ?? LinkSuggestionBar()
-                bar.onSelect = { [weak self, weak textView] linkText in
-                    guard let self, let textView else { return }
-                    self.insertLink(linkText, in: textView)
-                }
+                bar.onSelect = onSelect
                 bar.update(suggestions)
                 suggestionBar = bar
                 if textView.inputAccessoryView !== bar {
@@ -762,6 +809,17 @@ struct MarkdownEditor: UIViewRepresentable {
             textView.selectedRange = NSRange(location: query.range.location + (linkText as NSString).length + 2, length: 0)
             linkQuery = nil
             showSuggestions(nil, in: textView)
+        }
+
+        /// 「@…」換成人名與號碼，或換成提醒時間。
+        private func insertMention(_ value: String, in textView: NoteTextView) {
+            guard let query = mentionQuery else { return }
+            let inserted = value + " "
+            parent.controller.replace(range: query.range, with: inserted)
+            textView.selectedRange = NSRange(location: query.range.location + (inserted as NSString).length, length: 0)
+            mentionQuery = nil
+            showSuggestions(nil, in: textView)
+            if value.hasPrefix("(@") { parent.onInsertReminder() }
         }
 
         // MARK: 工具列

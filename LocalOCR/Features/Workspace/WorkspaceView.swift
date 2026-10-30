@@ -136,6 +136,8 @@ struct WorkspaceView: View {
                 Task { if await VaultIndexStore.shared.refresh() { await store.reload() } }
             }
             if sync.isConfigured { await sync.syncNow() }
+            // 筆記中的提醒（之前在別處寫好的也排上通知）
+            await NoteReminderCenter.shared.rescanLocalNotes()
             // 背景整理其他日誌與統整（一件一件做，寫字時暫停）
             JournalOrganizer.shared.sweep()
         }
